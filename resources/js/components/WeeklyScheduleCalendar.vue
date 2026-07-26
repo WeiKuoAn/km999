@@ -20,6 +20,7 @@ export type WeeklyScheduleClassroom = {
         weekday: number;
         start_time: string;
         end_time: string;
+        level?: string | null;
         course?: Course;
     }>;
     extra_sessions?: Array<{ date: string; start_time: string; end_time: string }> | null;
@@ -60,7 +61,7 @@ const props = withDefaults(
     {
         showTeacherInBlock: true,
         emptyMessage:
-            '尚無「上課中」的班級，請先到班級管理新增或啟用班級並填寫星期與上課時間；臨時加課可於加課選單建立。',
+            '尚無啟用中的課程時段，請到「設定管理 → 課程管理」新增或啟用課程並填寫上課時段。',
         teacherId: '',
     },
 );
@@ -71,24 +72,29 @@ const emit = defineEmits<{
 
 const scheduleBlocks = computed<CalendarBlock[]>(() =>
     props.scheduleClassrooms.flatMap((c, index) => {
-        const fromSchedules = (c.schedules ?? []).map((s, sIndex) => ({
-            key: `${c.id}-${index}-r${sIndex}`,
-            classroom_id: c.id,
-            name: c.name,
-            color: c.color ?? null,
-            weekday: s.weekday,
-            start_time: s.start_time,
-            end_time: s.end_time,
-            start_date: c.start_date,
-            end_date: c.end_date,
-            date_range_unrestricted: c.date_range_unrestricted,
-            dateRangeUnrestricted: (c as { dateRangeUnrestricted?: boolean }).dateRangeUnrestricted,
-            teaching_periods: c.teaching_periods,
-            teachingPeriods: (c as { teachingPeriods?: PeriodRow[] }).teachingPeriods,
-            specific_date: null as string | null,
-            course: s.course ?? c.course,
-            teacher: c.teacher,
-        }));
+        const fromSchedules = (c.schedules ?? []).map((s, sIndex) => {
+            const level = typeof s.level === 'string' ? s.level.trim() : '';
+            const blockName = level ? `${c.name}（${level}）` : c.name;
+
+            return {
+                key: `${c.id}-${index}-r${sIndex}`,
+                classroom_id: c.id,
+                name: blockName,
+                color: c.color ?? null,
+                weekday: s.weekday,
+                start_time: s.start_time,
+                end_time: s.end_time,
+                start_date: c.start_date,
+                end_date: c.end_date,
+                date_range_unrestricted: c.date_range_unrestricted,
+                dateRangeUnrestricted: (c as { dateRangeUnrestricted?: boolean }).dateRangeUnrestricted,
+                teaching_periods: c.teaching_periods,
+                teachingPeriods: (c as { teachingPeriods?: PeriodRow[] }).teachingPeriods,
+                specific_date: null as string | null,
+                course: s.course ?? c.course,
+                teacher: c.teacher,
+            };
+        });
         const fromExtras = (c.extra_sessions ?? []).map((ex, exIndex) => {
             const dateStr = typeof ex.date === 'string' ? ex.date.slice(0, 10) : '';
             let wd = 1;

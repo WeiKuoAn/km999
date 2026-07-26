@@ -12,8 +12,6 @@ import {
     LayoutDashboard,
     Layers,
     Route,
-    School,
-    ShoppingBag,
     Settings,
     Tags,
     Users,
@@ -76,11 +74,6 @@ const navGroups = computed<NavGroup[]>(() => {
                         href: '/student-payments',
                         icon: Wallet,
                     },
-                    {
-                        title: '學費袋統計',
-                        href: '/tuition-bag-statistics',
-                        icon: ShoppingBag,
-                    },
                 ],
             },
         ];
@@ -93,19 +86,9 @@ const navGroups = computed<NavGroup[]>(() => {
             icon: GraduationCap,
         },
         {
-            title: '班級管理',
-            href: '/classrooms',
-            icon: School,
-        },
-        {
             title: '學生收款',
             href: '/student-payments',
             icon: Wallet,
-        },
-        {
-            title: '學費袋統計',
-            href: '/tuition-bag-statistics',
-            icon: ShoppingBag,
         },
     ];
 

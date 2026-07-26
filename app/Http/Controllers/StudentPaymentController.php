@@ -6,12 +6,12 @@ use App\Models\Holiday;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\User;
+use App\Support\BillingRenewal;
 use App\Support\EnrollmentPricing;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -20,12 +20,129 @@ class StudentPaymentController extends Controller
     public function index(Request $request): Response
     {
         $validated = $request->validate([
+            'q' => ['nullable', 'string', 'max:255'],
+            'status' => ['nullable', 'in:all,unpaid,paid,cancelled'],
+        ]);
+
+        $q = trim((string) ($validated['q'] ?? ''));
+        $status = (string) ($validated['status'] ?? 'all');
+
+        $query = Reconciliation::query()
+            ->join('students', 'students.id', '=', 'reconciliations.student_id')
+            ->leftJoin('grade_levels', 'grade_levels.id', '=', 'students.grade_level_id')
+            ->leftJoin('users as settled_users', 'settled_users.id', '=', 'reconciliations.settled_by_user_id')
+            ->selectRaw('
+                MAX(reconciliations.id) as id,
+                reconciliations.student_id,
+                students.student_code,
+                students.name as student_name,
+                grade_levels.name as grade_name,
+                reconciliations.billing_year,
+                reconciliations.billing_month,
+                SUM(reconciliations.expected_amount) as expected_total,
+                SUM(reconciliations.paid_amount) as paid_total,
+                COUNT(*) as course_count,
+                MAX(reconciliations.paid_date) as paid_date,
+                MAX(settled_users.name) as settled_by_name,
+                CASE
+                    WHEN SUM(CASE WHEN reconciliations.status = "paid" THEN 1 ELSE 0 END) = COUNT(*) THEN "paid"
+                    WHEN SUM(CASE WHEN reconciliations.status = "cancelled" THEN 1 ELSE 0 END) = COUNT(*) THEN "cancelled"
+                    WHEN SUM(CASE WHEN reconciliations.status = "unpaid" THEN 1 ELSE 0 END) = COUNT(*) THEN "unpaid"
+                    ELSE "partial"
+                END as group_status
+            ')
+            ->groupBy([
+                'reconciliations.student_id',
+                'students.student_code',
+                'students.name',
+                'grade_levels.name',
+                'reconciliations.billing_year',
+                'reconciliations.billing_month',
+            ]);
+
+        $this->restrictReconciliationsForTeacher($query);
+
+        if ($q !== '') {
+            $query->where(function ($builder) use ($q): void {
+                $builder->where('students.name', 'like', '%'.$q.'%')
+                    ->orWhere('students.student_code', 'like', '%'.$q.'%');
+            });
+        }
+
+        if ($status === 'paid') {
+            $query->havingRaw(
+                'SUM(CASE WHEN reconciliations.status = "paid" THEN 1 ELSE 0 END) = COUNT(*)'
+            );
+        } elseif ($status === 'cancelled') {
+            $query->havingRaw(
+                'SUM(CASE WHEN reconciliations.status = "cancelled" THEN 1 ELSE 0 END) = COUNT(*)'
+            );
+        } elseif ($status === 'unpaid') {
+            $query->havingRaw(
+                'SUM(CASE WHEN reconciliations.status = "paid" THEN 1 ELSE 0 END) < COUNT(*)
+                AND SUM(CASE WHEN reconciliations.status = "cancelled" THEN 1 ELSE 0 END) < COUNT(*)'
+            );
+        }
+
+        $summaryQuery = Reconciliation::query();
+        $this->restrictReconciliationsForTeacher($summaryQuery);
+        if ($q !== '') {
+            $summaryQuery->whereHas('student', function ($builder) use ($q): void {
+                $builder->where('name', 'like', '%'.$q.'%')
+                    ->orWhere('student_code', 'like', '%'.$q.'%');
+            });
+        }
+
+        $unpaidTotal = (int) (clone $summaryQuery)->where('status', 'unpaid')->sum('expected_amount');
+        $paidTotal = (int) (clone $summaryQuery)->where('status', 'paid')->sum('paid_amount');
+
+        $rows = $query
+            ->orderByDesc('reconciliations.billing_year')
+            ->orderByDesc('reconciliations.billing_month')
+            ->orderByRaw('MAX(reconciliations.id) DESC')
+            ->paginate(50)
+            ->withQueryString()
+            ->through(fn (Reconciliation $row): array => [
+                'id' => (int) $row->id,
+                'student_id' => (int) $row->student_id,
+                'student_code' => $row->student_code,
+                'student_name' => $row->student_name ?? '—',
+                'grade_name' => $row->grade_name,
+                'billing_year' => (int) $row->billing_year,
+                'billing_month' => (int) $row->billing_month,
+                'expected_total' => (int) $row->expected_total,
+                'paid_total' => (int) $row->paid_total,
+                'course_count' => (int) $row->course_count,
+                'paid_date' => $row->paid_date?->toDateString(),
+                'status' => $row->group_status,
+                'settled_by_name' => $row->settled_by_name ?? '—',
+            ]);
+
+        return Inertia::render('StudentPayments/Index', [
+            'rows' => $rows,
+            'summary' => [
+                'unpaid_total' => $unpaidTotal,
+                'paid_total' => $paidTotal,
+            ],
+            'filters' => [
+                'q' => $q,
+                'status' => $status,
+            ],
+        ]);
+    }
+
+    /** 新增收款／報名計價 */
+    public function create(Request $request): Response
+    {
+        $validated = $request->validate([
             'student_id' => ['nullable', 'integer', 'exists:students,id'],
         ]);
 
         $studentPayload = null;
         $subjects = [];
         $warnings = [];
+        $hasPriorPayments = false;
+        $suggestedStartDate = null;
 
         if (! empty($validated['student_id'])) {
             $student = Student::query()->findOrFail((int) $validated['student_id']);
@@ -40,6 +157,8 @@ class StudentPaymentController extends Controller
                 'grade_name' => $student->gradeLevel?->name,
                 'academic_year_name' => $student->academicYear?->name,
             ];
+            $hasPriorPayments = BillingRenewal::hasPriorPayments($student);
+            $suggestedStartDate = BillingRenewal::suggestedStartDate($student);
         }
 
         $from = Carbon::today()->subMonths(1)->startOfDay();
@@ -55,11 +174,13 @@ class StudentPaymentController extends Controller
             ->values()
             ->all();
 
-        return Inertia::render('StudentPayments/Index', [
+        return Inertia::render('StudentPayments/Create', [
             'student' => $studentPayload,
             'subjects' => $subjects,
             'warnings' => $warnings,
             'holidays' => $holidays,
+            'has_prior_payments' => $hasPriorPayments,
+            'suggested_start_date' => $suggestedStartDate,
         ]);
     }
 
@@ -106,13 +227,29 @@ class StudentPaymentController extends Controller
     }
 
     /** 收款明細 */
-    public function show(Student $student): Response
+    public function show(Request $request, Student $student): Response
     {
+        $validated = $request->validate([
+            'year' => ['nullable', 'integer', 'min:2000', 'max:2100', 'required_with:month'],
+            'month' => ['nullable', 'integer', 'min:1', 'max:12', 'required_with:year'],
+        ]);
+
         $this->authorizeTeacherCanViewStudent($student);
         $student->load(['gradeLevel:id,name', 'academicYear:id,year_code,name']);
 
-        $rows = Reconciliation::query()
-            ->where('student_id', $student->id)
+        $year = isset($validated['year']) ? (int) $validated['year'] : null;
+        $month = isset($validated['month']) ? (int) $validated['month'] : null;
+
+        $baseQuery = Reconciliation::query()
+            ->where('student_id', $student->id);
+
+        if ($year !== null && $month !== null) {
+            $baseQuery
+                ->where('billing_year', $year)
+                ->where('billing_month', $month);
+        }
+
+        $rows = (clone $baseQuery)
             ->with([
                 'classroom.course.courseCategory',
                 'course.courseCategory',
@@ -140,14 +277,40 @@ class StudentPaymentController extends Controller
                 'pay_cycle' => $row->pay_cycle,
             ]);
 
-        $unpaidTotal = (int) Reconciliation::query()
-            ->where('student_id', $student->id)
+        $unpaidTotal = (int) (clone $baseQuery)
             ->where('status', 'unpaid')
             ->sum('expected_amount');
-        $paidTotal = (int) Reconciliation::query()
-            ->where('student_id', $student->id)
+        $paidTotal = (int) (clone $baseQuery)
             ->where('status', 'paid')
             ->sum('paid_amount');
+
+        $period = null;
+        if ($year !== null && $month !== null) {
+            $periodRows = (clone $baseQuery)->get([
+                'expected_amount',
+                'paid_amount',
+                'paid_date',
+                'status',
+                'settled_by_user_id',
+            ]);
+            $latestPaid = (clone $baseQuery)
+                ->whereNotNull('paid_date')
+                ->with('settledByUser:id,name')
+                ->orderByDesc('paid_date')
+                ->orderByDesc('id')
+                ->first();
+
+            $period = [
+                'billing_year' => $year,
+                'billing_month' => $month,
+                'expected_total' => (int) $periodRows->sum('expected_amount'),
+                'paid_total' => (int) $periodRows->sum('paid_amount'),
+                'course_count' => $periodRows->count(),
+                'status' => $this->groupStatus($periodRows->pluck('status')->all()),
+                'paid_date' => $latestPaid?->paid_date?->toDateString(),
+                'settled_by_name' => $latestPaid?->settledByUser?->name ?? '—',
+            ];
+        }
 
         return Inertia::render('StudentPayments/Detail', [
             'student' => [
@@ -162,6 +325,8 @@ class StudentPaymentController extends Controller
                 'unpaid_total' => $unpaidTotal,
                 'paid_total' => $paidTotal,
             ],
+            'period' => $period,
+            'renewal' => BillingRenewal::renewalSummary($student),
         ]);
     }
 
@@ -170,7 +335,7 @@ class StudentPaymentController extends Controller
     {
         $this->authorizeTeacherCanViewStudent($student);
 
-        return redirect()->route('student-payments.index', ['student_id' => $student->id]);
+        return redirect()->route('student-payments.create', ['student_id' => $student->id]);
     }
 
     public function store(Request $request, Student $student): RedirectResponse
@@ -188,6 +353,14 @@ class StudentPaymentController extends Controller
             'start_date' => ['nullable', 'date'],
         ]);
 
+        $suggested = BillingRenewal::suggestedStartDate($student);
+        $startDate = $validated['start_date'] ?? null;
+        if ($suggested !== null) {
+            if ($startDate === null || Carbon::parse($startDate)->lt(Carbon::parse($suggested))) {
+                $startDate = $suggested;
+            }
+        }
+
         $allowance = (int) ($validated['allowance'] ?? 0);
         $quote = EnrollmentPricing::quote(
             $student,
@@ -195,7 +368,7 @@ class StudentPaymentController extends Controller
             $validated['pay_cycle'],
             $validated['sessions'],
             $allowance,
-            $validated['start_date'] ?? null,
+            $startDate,
         );
 
         if ($quote['lines'] === []) {
@@ -210,80 +383,62 @@ class StudentPaymentController extends Controller
             return back()->withErrors(['sessions' => '請至少選擇一個上課日。']);
         }
 
-        DB::transaction(function () use ($student, $validated, $quote, $allowance, $months): void {
-            $monthCount = count($months);
-            $allowanceLeft = $allowance;
+        BillingRenewal::persistQuote($student, $validated['pay_cycle'], $quote, $allowance);
 
-            foreach ($quote['lines'] as $line) {
-                $tuition = (int) $line['tuition'];
-                $material = (int) $line['material'];
-                $courseTotal = $tuition + $material;
-
-                $share = $quote['grand_total'] + $allowance > 0
-                    ? (int) round($allowance * ($courseTotal / max(1, $quote['tuition_total'] + $quote['material_total'])))
-                    : 0;
-                $share = min($share, $allowanceLeft);
-                $allowanceLeft -= $share;
-
-                $tuitionPerMonth = $monthCount > 0 ? intdiv($tuition, $monthCount) : 0;
-                $tuitionRemainder = $monthCount > 0 ? $tuition % $monthCount : 0;
-                $allowancePerMonth = $monthCount > 0 ? intdiv($share, $monthCount) : 0;
-                $allowanceRemainder = $monthCount > 0 ? $share % $monthCount : 0;
-
-                /** @var array<string, array{amount:int, days:int}> $materialMonths */
-                $materialMonths = $line['material_months'] ?? [];
-                $materialNote = $line['material_note'] ?? null;
-
-                foreach ($months as $index => $month) {
-                    $y = (int) $month['y'];
-                    $m = (int) $month['m'];
-                    $key = $y.'-'.$m;
-                    $monthMaterial = (int) ($materialMonths[$key]['amount'] ?? 0);
-                    $monthTuition = $tuitionPerMonth + ($index === 0 ? $tuitionRemainder : 0);
-                    $monthAllowance = $allowancePerMonth + ($index === 0 ? $allowanceRemainder : 0);
-                    $amount = max(0, $monthTuition + $monthMaterial - $monthAllowance);
-
-                    $noteParts = [
-                        sprintf('報名計價｜%s｜單價 %s', $line['course_name'], number_format($line['unit_price'])),
-                    ];
-                    if ($monthMaterial > 0) {
-                        $days = (int) ($materialMonths[$key]['days'] ?? 0);
-                        if (($line['material_unit'] ?? '') === 'class_day' && $days > 0) {
-                            $noteParts[] = sprintf('耗材 %d天 %s', $days, number_format($monthMaterial));
-                        } else {
-                            $noteParts[] = sprintf('教材／耗材 %s', number_format($monthMaterial));
-                        }
-                    }
-                    if ($monthAllowance > 0) {
-                        $noteParts[] = sprintf('折讓 %s', number_format($monthAllowance));
-                    }
-                    if ($index === 0 && is_string($materialNote) && $materialNote !== '') {
-                        $noteParts[] = $materialNote;
-                    }
-
-                    Reconciliation::query()->updateOrCreate(
-                        [
-                            'student_id' => $student->id,
-                            'course_id' => $line['course_id'],
-                            'billing_year' => $y,
-                            'billing_month' => $m,
-                        ],
-                        [
-                            'classroom_id' => null,
-                            'expected_amount' => $amount,
-                            'paid_amount' => 0,
-                            'paid_date' => null,
-                            'status' => 'unpaid',
-                            'pay_cycle' => $validated['pay_cycle'],
-                            'note' => implode('｜', $noteParts),
-                        ]
-                    );
-                }
-            }
-        });
-
-        return to_route('student-payments.index', ['student_id' => $student->id])
+        return to_route('student-payments.show', $student)
             ->with('success', '已產生帳期，可至收款明細查看。');
+    }
+
+    /** 一鍵依最近一次科目＋繳別產生下一期帳 */
+    public function renewNext(Student $student): RedirectResponse
+    {
+        $this->authorizeTeacherCanViewStudent($student);
+
+        $snapshot = BillingRenewal::lastBillingSnapshot($student);
+        if ($snapshot === null) {
+            return back()->withErrors(['renewal' => '尚無可用的收款紀錄，請先用「新增收款」產生第一期帳。']);
+        }
+
+        $startDate = BillingRenewal::nextStartDate($snapshot['end_year'], $snapshot['end_month']);
+        $sessions = BillingRenewal::defaultSessions(
+            $student,
+            $snapshot['course_ids'],
+            $startDate,
+            $snapshot['pay_cycle'],
+        );
+
+        if ($sessions === []) {
+            return back()->withErrors(['renewal' => '無法依科目上課日預選堂次，請確認課程已設定上課時段後再試，或改用「新增收款」。']);
+        }
+
+        $quote = EnrollmentPricing::quote(
+            $student,
+            $snapshot['course_ids'],
+            $snapshot['pay_cycle'],
+            $sessions,
+            0,
+            $startDate,
+        );
+
+        if ($quote['lines'] === []) {
+            return back()->withErrors(['renewal' => '所選課目沒有適用的收費標準，請先完成收費標準設定。']);
+        }
+
+        $months = $quote['months'] ?? [];
+        if ($months === []) {
+            return back()->withErrors(['renewal' => '無法推導下一期帳期月份。']);
+        }
+
+        if (BillingRenewal::hasPaidConflicts($student, $snapshot['course_ids'], $months)) {
+            return back()->withErrors(['renewal' => '下一期帳期中已有已繳紀錄，請勿重複產生。']);
+        }
+
+        BillingRenewal::persistQuote($student, $snapshot['pay_cycle'], $quote, 0);
+
+        $label = BillingRenewal::renewButtonLabel($snapshot['pay_cycle']);
+
+        return to_route('student-payments.show', $student)
+            ->with('success', "已{$label}（自 {$startDate} 起算）。");
     }
 
     /**
@@ -334,5 +489,40 @@ class StudentPaymentController extends Controller
         if (! $ok) {
             abort(403);
         }
+    }
+
+    private function restrictReconciliationsForTeacher($query): void
+    {
+        $user = auth()->user();
+        if ($user?->role !== User::ROLE_TEACHER) {
+            return;
+        }
+
+        $teacherId = $user->teacher?->id;
+        if ($teacherId === null) {
+            $query->whereRaw('1 = 0');
+
+            return;
+        }
+
+        $query->whereHas('student.enrollments.classroom', fn ($builder) => $builder->where('teacher_id', $teacherId));
+    }
+
+    /**
+     * @param  list<string>  $statuses
+     */
+    private function groupStatus(array $statuses): string
+    {
+        if ($statuses !== [] && collect($statuses)->every(fn (string $status): bool => $status === 'paid')) {
+            return 'paid';
+        }
+        if ($statuses !== [] && collect($statuses)->every(fn (string $status): bool => $status === 'cancelled')) {
+            return 'cancelled';
+        }
+        if ($statuses !== [] && collect($statuses)->every(fn (string $status): bool => $status === 'unpaid')) {
+            return 'unpaid';
+        }
+
+        return 'partial';
     }
 }

@@ -1,23 +1,23 @@
 <?php
 
-use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\AcademicYearController;
+use App\Http\Controllers\AttendanceController;
+use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\ClassroomController;
 use App\Http\Controllers\CourseCategoryController;
 use App\Http\Controllers\CourseController;
-use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FeePlanController;
 use App\Http\Controllers\FlowPreviewController;
 use App\Http\Controllers\GradeLevelController;
 use App\Http\Controllers\HolidayController;
-use App\Http\Controllers\UserTodoController;
 use App\Http\Controllers\ReportController;
-use App\Http\Controllers\StudentPaymentController;
 use App\Http\Controllers\StudentController;
+use App\Http\Controllers\StudentPaymentController;
 use App\Http\Controllers\TeacherController;
 use App\Http\Controllers\TuitionBagStatisticsController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\UserTodoController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -81,9 +81,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('tuition-bag-statistics/cancel-payment', [TuitionBagStatisticsController::class, 'cancelPayment'])->name('tuition-bag-statistics.cancel-payment');
 
         Route::get('student-payments', [StudentPaymentController::class, 'index'])->name('student-payments.index');
+        Route::get('student-payments/create', [StudentPaymentController::class, 'create'])->name('student-payments.create');
         Route::get('student-payments/search', [StudentPaymentController::class, 'search'])->name('student-payments.search');
         Route::get('student-payments/{student}/quote', [StudentPaymentController::class, 'quote'])->name('student-payments.quote');
         Route::post('student-payments/{student}/quote', [StudentPaymentController::class, 'store'])->name('student-payments.store');
+        Route::post('student-payments/{student}/renew-next', [StudentPaymentController::class, 'renewNext'])->name('student-payments.renew-next');
         Route::get('student-payments/{student}', [StudentPaymentController::class, 'show'])->name('student-payments.show');
     });
 

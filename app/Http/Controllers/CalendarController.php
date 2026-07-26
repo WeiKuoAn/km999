@@ -2,12 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Classroom;
-use App\Models\Teacher;
-use App\Models\User;
-use Carbon\Carbon;
+use App\Models\Course;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -15,74 +11,77 @@ class CalendarController extends Controller
 {
     public function __invoke(Request $request): Response
     {
-        $validated = $request->validate([
-            'teacher_id' => ['nullable', 'integer', 'exists:teachers,id'],
-        ]);
-
-        $user = auth()->user();
-        $teacherId = null;
-        if ($user?->role === User::ROLE_TEACHER) {
-            $teacherId = $user->teacher?->id;
-        } elseif (isset($validated['teacher_id'])) {
-            $teacherId = (int) $validated['teacher_id'];
-        }
-
-        $hasSchedulesTable = Schema::hasTable('classroom_schedules');
-
-        $query = Classroom::query()
+        $courses = Course::query()
             ->where('status', 'active')
-            ->with([
-                'course.courseCategory',
-                'teacher:id,name',
-                'extraSessionModels',
-            ])
-            ->orderBy('name');
-
-        if ($teacherId !== null) {
-            $query->where('teacher_id', $teacherId);
-        }
-
-        if ($hasSchedulesTable) {
-            $query->with([
-                'schedules:id,classroom_id,course_id,weekday,start_time,end_time',
-                'schedules.course:id,course_category_id,name',
-                'schedules.course.courseCategory:id,name',
-            ]);
-        }
-
-        $canFilterByTeacher = $user?->role !== User::ROLE_TEACHER;
+            ->with('courseCategory:id,name')
+            ->orderBy('name')
+            ->get();
 
         return Inertia::render('Calendar', [
-            'scheduleClassrooms' => $query->get()->map(function (Classroom $classroom) use ($hasSchedulesTable) {
-                $arr = $classroom->toArray();
-                if (! $hasSchedulesTable) {
-                    $arr['schedules'] = ($classroom->weekday !== null && $classroom->start_time !== null && $classroom->end_time !== null)
-                        ? [[
-                            'weekday' => (int) $classroom->weekday,
-                            'start_time' => (string) $classroom->start_time,
-                            'end_time' => (string) $classroom->end_time,
-                        ]]
-                        : [];
-                }
-                $fromDb = $classroom->extraSessionModels->map(fn ($x) => [
-                    'date' => $x->session_date->toDateString(),
-                    'start_time' => Carbon::parse($x->start_time)->format('H:i:s'),
-                    'end_time' => Carbon::parse($x->end_time)->format('H:i:s'),
-                ])->values()->all();
-                $fromJson = is_array($classroom->extra_sessions) ? $classroom->extra_sessions : [];
-                $arr['extra_sessions'] = array_values(array_merge($fromJson, $fromDb));
-                $arr['date_range_unrestricted'] = $classroom->dateRangeUnrestricted();
-                $arr['teaching_periods'] = $classroom->teachingPeriodsForFrontend();
+            'scheduleClassrooms' => $courses->map(function (Course $course) {
+                $category = $course->courseCategory
+                    ? ['name' => $course->courseCategory->name]
+                    : null;
 
-                return $arr;
-            }),
-            'teacherOptions' => $canFilterByTeacher
-                ? Teacher::query()->where('status', 'active')->orderBy('name')->get(['id', 'name'])->all()
-                : [],
-            'canFilterByTeacher' => $canFilterByTeacher,
+                $schedules = collect(is_array($course->schedules) ? $course->schedules : [])
+                    ->filter(function ($row) {
+                        return is_array($row)
+                            && isset($row['weekday'], $row['start_time'], $row['end_time'])
+                            && $row['weekday'] !== null
+                            && $row['start_time'] !== null
+                            && $row['end_time'] !== null
+                            && $row['start_time'] !== ''
+                            && $row['end_time'] !== '';
+                    })
+                    ->map(function (array $row) use ($course, $category) {
+                        $level = isset($row['level']) ? trim((string) $row['level']) : '';
+
+                        return [
+                            'weekday' => (int) $row['weekday'],
+                            'start_time' => $this->normalizeTime((string) $row['start_time']),
+                            'end_time' => $this->normalizeTime((string) $row['end_time']),
+                            'level' => $level !== '' ? $level : null,
+                            'course' => [
+                                'name' => $level !== '' ? $level : $course->name,
+                                'course_category' => $category,
+                            ],
+                        ];
+                    })
+                    ->values()
+                    ->all();
+
+                return [
+                    'id' => $course->id,
+                    'name' => $course->name,
+                    'color' => $course->color,
+                    'start_date' => null,
+                    'end_date' => null,
+                    'date_range_unrestricted' => true,
+                    'teaching_periods' => [],
+                    'schedules' => $schedules,
+                    'extra_sessions' => [],
+                    'course' => [
+                        'name' => $course->name,
+                        'course_category' => $category,
+                    ],
+                    'teacher' => null,
+                ];
+            })->values()->all(),
+            'teacherOptions' => [],
+            'canFilterByTeacher' => false,
             'filters' => [
-                'teacher_id' => $teacherId === null ? '' : (string) $teacherId,
+                'teacher_id' => '',
             ],
         ]);
+    }
+
+    private function normalizeTime(string $time): string
+    {
+        $time = trim($time);
+        if (preg_match('/^\d{1,2}:\d{2}$/', $time)) {
+            return $time.':00';
+        }
+
+        return $time;
     }
 }
