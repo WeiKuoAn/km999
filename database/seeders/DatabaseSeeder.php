@@ -14,8 +14,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->call(SuperAdminSeeder::class);
         $this->call(StudentCodeSettingsSeeder::class);
-        $this->call(FeePlanSeeder::class);
-        $this->call(CoursePricingGroupSeeder::class);
-        // 課程類別／課程改由後台自行建立，不再 seed 預設資料
+        // 學年、年級、課程類別、課程、收費標準（含適用課目）
+        $this->call(CurriculumCatalogSeeder::class);
     }
 }
