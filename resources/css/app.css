@@ -1,0 +1,759 @@
+@import 'tailwindcss';
+
+@import 'tw-animate-css';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-sans:
+        ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
+        'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+
+    --radius-lg: var(--radius);
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-sm: calc(var(--radius) - 4px);
+
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+
+    --color-sidebar: var(--sidebar-background);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/*
+  The default border color has changed to `currentColor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+    *,
+    ::after,
+    ::before,
+    ::backdrop,
+    ::file-selector-button {
+        border-color: var(--color-gray-200, currentColor);
+    }
+}
+
+@layer utilities {
+    body,
+    html {
+        --font-sans:
+            ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
+            'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+    }
+}
+
+:root {
+    --brand-green: #006d5f;
+    --brand-sidebar-active: #c4e7ff;
+
+    --background: hsl(0 0% 100%);
+    --foreground: hsl(217 40% 18%);
+    --card: hsl(0 0% 100%);
+    --card-foreground: hsl(217 40% 18%);
+    --popover: hsl(0 0% 100%);
+    --popover-foreground: hsl(217 40% 18%);
+    --primary: var(--brand-green);
+    --primary-foreground: hsl(0 0% 100%);
+    --secondary: hsl(205 45% 94%);
+    --secondary-foreground: hsl(217 40% 22%);
+    --muted: hsl(210 40% 96%);
+    --table-header: #f0f4f8;
+    --table-header-border: #e2e8f0;
+    --table-header-text: #5c6b7a;
+    --muted-foreground: hsl(215 16% 42%);
+    --accent: hsl(172 35% 92%);
+    --accent-foreground: var(--brand-green);
+    --destructive: hsl(0 84.2% 60.2%);
+    --destructive-foreground: hsl(0 0% 98%);
+    --border: hsl(214 28% 90%);
+    --input: hsl(214 28% 90%);
+    --ring: var(--brand-green);
+    --chart-1: hsl(172 58% 35%);
+    --chart-2: hsl(197 37% 40%);
+    --chart-3: hsl(43 74% 55%);
+    --chart-4: hsl(27 87% 60%);
+    --chart-5: hsl(12 76% 58%);
+    --radius: 0.625rem;
+    --sidebar-background: hsl(228 45% 98%);
+    --sidebar-foreground: hsl(217 40% 22%);
+    --sidebar-primary: var(--brand-green);
+    --sidebar-primary-foreground: hsl(0 0% 100%);
+    --sidebar-accent: var(--brand-sidebar-active);
+    --sidebar-accent-foreground: hsl(217 45% 28%);
+    --sidebar-border: hsl(214 28% 90%);
+    --sidebar-ring: var(--brand-green);
+    --sidebar: var(--sidebar-background);
+}
+
+.dark {
+    --background: hsl(217 25% 10%);
+    --foreground: hsl(0 0% 98%);
+    --card: hsl(217 22% 14%);
+    --card-foreground: hsl(0 0% 98%);
+    --popover: hsl(217 22% 14%);
+    --popover-foreground: hsl(0 0% 98%);
+    --primary: hsl(172 45% 42%);
+    --primary-foreground: hsl(0 0% 100%);
+    --secondary: hsl(217 20% 18%);
+    --secondary-foreground: hsl(0 0% 98%);
+    --muted: hsl(217 20% 18%);
+    --muted-foreground: hsl(0 0% 63.9%);
+    --accent: hsl(172 25% 20%);
+    --accent-foreground: hsl(172 55% 75%);
+    --destructive: hsl(0 84% 60%);
+    --destructive-foreground: hsl(0 0% 98%);
+    --border: hsl(217 18% 22%);
+    --input: hsl(217 18% 22%);
+    --ring: hsl(172 45% 42%);
+    --chart-1: hsl(172 55% 45%);
+    --chart-2: hsl(160 60% 45%);
+    --chart-3: hsl(30 80% 55%);
+    --chart-4: hsl(280 65% 60%);
+    --chart-5: hsl(340 75% 55%);
+    --sidebar-background: hsl(217 25% 12%);
+    --sidebar-foreground: hsl(0 0% 95.9%);
+    --sidebar-primary: hsl(172 45% 42%);
+    --sidebar-primary-foreground: hsl(0 0% 100%);
+    --sidebar-accent: hsl(205 40% 22%);
+    --sidebar-accent-foreground: hsl(205 90% 88%);
+    --sidebar-border: hsl(217 18% 22%);
+    --sidebar-ring: hsl(172 45% 42%);
+    --sidebar: var(--sidebar-background);
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+@layer components {
+    [data-sidebar='group-label'] {
+        @apply text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground;
+    }
+
+    [data-sidebar='menu-button'][data-active='true'],
+    [data-sidebar='menu-sub-button'][data-active='true'] {
+        border-left: 3px solid var(--brand-green);
+        padding-left: calc(0.5rem - 1px);
+        border-radius: 0.5rem;
+    }
+
+    [data-slot='breadcrumb-page'] {
+        color: var(--brand-green);
+        font-weight: 600;
+    }
+
+    [data-slot='sidebar-inset'] {
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    [data-slot='sidebar-inset'] > header {
+        @apply border-b border-border/80 bg-card/80 backdrop-blur-sm;
+    }
+
+    .page-shell {
+        @apply w-full space-y-4 p-3 sm:p-4;
+    }
+
+    /* iOS Safari：日期／時間輸入防止撐破 grid／flex（模擬器無法完全重現實機行為） */
+    input[type='date'],
+    input[type='time'],
+    input[type='month'],
+    input[type='datetime-local'],
+    [data-slot='input'][type='date'],
+    [data-slot='input'][type='time'],
+    [data-slot='input'][type='month'] {
+        box-sizing: border-box;
+        display: block;
+        min-width: 0;
+        max-width: 100%;
+        width: 100%;
+    }
+
+    @supports (-webkit-touch-callout: none) {
+        input[type='date'],
+        input[type='time'],
+        input[type='month'],
+        input[type='datetime-local'] {
+            -webkit-appearance: none;
+            appearance: none;
+        }
+    }
+
+    /* 表單：開課區間（起迄日 + 刪除） */
+    .form-period-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1rem;
+        align-items: end;
+    }
+
+    .form-period-row > * {
+        min-width: 0;
+    }
+
+    @media (min-width: 36rem) {
+        .form-period-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+        }
+    }
+
+    .form-period-row__delete {
+        align-self: end;
+        justify-self: start;
+    }
+
+    /* 表單：上課時段（科目 + 星期 + 起迄時間 + 刪除） */
+    .form-schedule-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1rem;
+        align-items: end;
+    }
+
+    .form-schedule-row > * {
+        min-width: 0;
+    }
+
+    @media (min-width: 36rem) {
+        .form-schedule-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .form-schedule-row__delete {
+            grid-column: 1 / -1;
+            justify-self: start;
+        }
+    }
+
+    @media (min-width: 64rem) {
+        .form-schedule-row {
+            grid-template-columns: minmax(10rem, 1.4fr) minmax(5.5rem, 0.7fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+        }
+
+        .form-schedule-row__delete {
+            grid-column: auto;
+            justify-self: auto;
+        }
+    }
+
+    .form-schedule-row__delete {
+        align-self: end;
+    }
+
+    /* 報表／統計：年月等簡易篩選列 */
+    .form-filter-inline {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.75rem;
+        align-items: end;
+    }
+
+    .form-filter-inline > * {
+        min-width: 0;
+    }
+
+    @media (min-width: 36rem) {
+        .form-filter-inline {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .form-filter-inline > .form-filter-inline__submit {
+            grid-column: 1 / -1;
+            justify-self: start;
+        }
+    }
+
+    @media (min-width: 48rem) {
+        .form-filter-inline {
+            grid-template-columns: minmax(0, 8rem) minmax(0, 8rem) minmax(0, 1fr) auto;
+        }
+
+        .form-filter-inline--no-teacher {
+            grid-template-columns: minmax(0, 8rem) minmax(0, 8rem) auto;
+        }
+
+        .form-filter-inline > .form-filter-inline__submit {
+            grid-column: auto;
+            justify-self: auto;
+        }
+    }
+
+    .page-header {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    @media (min-width: 1024px) {
+        .page-header {
+            flex-direction: row;
+            align-items: flex-start;
+            justify-content: space-between;
+        }
+    }
+
+    .page-header__actions {
+        display: flex;
+        width: 100%;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    @media (min-width: 1024px) {
+        .page-header__actions {
+            width: auto;
+            flex-direction: row;
+            flex-shrink: 0;
+        }
+    }
+
+    .page-header__actions > .inline-flex,
+    .page-header__actions > a,
+    .page-header__actions > button,
+    .page-header__actions [data-slot='button'] {
+        width: 100%;
+    }
+
+    @media (min-width: 1024px) {
+        .page-header__actions > .inline-flex,
+        .page-header__actions > a,
+        .page-header__actions > button,
+        .page-header__actions [data-slot='button'] {
+            width: auto;
+        }
+    }
+
+    .desktop-table-wrap {
+        display: none;
+        overflow-x: auto;
+        border-radius: calc(var(--radius) + 2px);
+        border: 1px solid var(--table-header-border);
+        background-color: #ffffff;
+    }
+
+    @media (min-width: 1536px) {
+        .desktop-table-wrap {
+            display: block;
+        }
+    }
+
+    .mobile-card-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    @media (min-width: 1536px) {
+        .mobile-card-list {
+            display: none;
+        }
+    }
+
+    .desktop-table-wrap th {
+        padding: 0.5rem 1rem;
+        text-align: left;
+    }
+
+    .desktop-table-wrap td {
+        padding: 0.625rem 1rem;
+        vertical-align: top;
+    }
+
+    .mobile-card-actions {
+        display: flex;
+        width: 100%;
+        flex-flow: row wrap;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    /* 文字按鈕（非 icon）單獨占滿一行；編輯／刪除等圖示並排 */
+    .mobile-card-actions > [data-slot='button']:not(.size-9) {
+        flex: 1 1 100%;
+        justify-content: center;
+    }
+
+    @media (min-width: 640px) {
+        .mobile-card-actions > [data-slot='button']:not(.size-9) {
+            flex: 0 1 auto;
+            width: auto;
+        }
+    }
+
+    .list-pagination {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.5rem;
+    }
+
+    @media (min-width: 640px) {
+        .list-pagination {
+            justify-content: flex-start;
+        }
+    }
+
+    .list-pagination__link {
+        display: inline-flex;
+        min-height: 2.5rem;
+        min-width: 2.5rem;
+        align-items: center;
+        justify-content: center;
+        border-radius: 0.375rem;
+        border: 1px solid hsl(var(--border));
+        padding-inline: 0.75rem;
+        font-size: 0.875rem;
+        line-height: 1.25rem;
+    }
+
+    .list-pagination__link--active {
+        background-color: var(--primary);
+        color: var(--primary-foreground);
+        border-color: var(--primary);
+    }
+
+    /*
+     * 列表篩選 viewport 斷點
+     * iPad Pro 12.9（第 4／6 代）直向 1024px、橫向 1366px；11 吋橫向 1194px。
+     * 四欄僅在 > 1366px（85.5rem）啟用，避免 12.9 橫向誤用桌面排版。
+     */
+    .list-filter-panel {
+        overflow-x: clip;
+    }
+
+    .list-filter-panel .filter-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        column-gap: 1.5rem;
+        row-gap: 1rem;
+    }
+
+    @media (min-width: 40rem) {
+        .list-filter-panel .filter-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (min-width: 85.5rem) {
+        .list-filter-panel .filter-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+    }
+
+    .list-filter-panel .filter-grid > * {
+        min-width: 0;
+    }
+
+    /*
+     * 平板／iPad：日期獨立子 grid，避免 WebKit 日期輸入撐破欄位。
+     * 寬螢幕桌面：display:contents 讓日期回到主 grid 第四欄對齊。
+     */
+    .list-filter-panel .filter-grid__date-row {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1rem;
+    }
+
+    @media (min-width: 40rem) {
+        .list-filter-panel .filter-grid__date-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        /* 月份＋起迄日：月份獨占一列，起迄並排（學生出勤） */
+        .list-filter-panel .filter-grid__date-row--triple > :first-child {
+            grid-column: 1 / -1;
+        }
+    }
+
+    @media (min-width: 85.5rem) {
+        .list-filter-panel .filter-grid__date-row {
+            display: contents;
+        }
+
+        .list-filter-panel .filter-grid__date-row--triple > :first-child {
+            grid-column: auto;
+        }
+    }
+
+    .list-filter-panel .filter-grid__date-row > * {
+        min-width: 0;
+    }
+
+    .list-filter-panel .filter-grid__date-row input[type='date'],
+    .list-filter-panel .filter-grid__date-row input[type='month'] {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .list-filter-panel .filter-grid__actions {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        grid-column: 1 / -1;
+        justify-content: flex-end;
+    }
+
+    @media (min-width: 40rem) {
+        .list-filter-panel .filter-grid__actions {
+            flex-direction: row;
+        }
+    }
+
+    /* iPad Pro 等平板：列表改顯示表格 */
+    .desktop-table-wrap--from-lg {
+        display: none;
+        overflow-x: auto;
+    }
+
+    @media (min-width: 1024px) {
+        .desktop-table-wrap--from-lg {
+            display: block;
+        }
+    }
+
+    .mobile-card-list--until-lg {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    @media (min-width: 1024px) {
+        .mobile-card-list--until-lg {
+            display: none;
+        }
+    }
+
+    .list-filter-panel .filter-grid > button {
+        width: 100%;
+        min-height: 2.5rem;
+    }
+
+    @media (min-width: 640px) {
+        .list-filter-panel .filter-grid > button {
+            width: auto;
+        }
+    }
+
+    .form-actions {
+        display: flex;
+        flex-direction: column-reverse;
+        gap: 0.5rem;
+    }
+
+    @media (min-width: 640px) {
+        .form-actions {
+            flex-direction: row;
+            justify-content: flex-end;
+        }
+
+        .form-actions > * {
+            width: auto;
+        }
+    }
+
+    @media (max-width: 639px) {
+        .form-actions > * {
+            width: 100%;
+        }
+    }
+
+    [data-slot='sidebar-inset'] .rounded-xl.border,
+    [data-slot='sidebar-inset'] form.rounded-xl.border,
+    [data-slot='sidebar-inset'] section.rounded-xl.border {
+        @apply border-border/80 bg-card shadow-sm;
+    }
+
+    [data-slot='sidebar-inset'] .desktop-table-wrap:has(table),
+    [data-slot='sidebar-inset'] .rounded-xl.border:has(> table),
+    [data-slot='sidebar-inset'] .rounded-xl.border.overflow-x-auto:has(table),
+    [data-slot='sidebar-inset'] .overflow-x-auto.rounded-xl.border:has(> table) {
+        padding: 0;
+        overflow: hidden;
+        background-color: #ffffff;
+    }
+
+    [data-slot='sidebar-inset'] .desktop-table-wrap table tbody tr,
+    [data-slot='sidebar-inset'] .rounded-xl.border table tbody tr {
+        background-color: #ffffff;
+    }
+
+    [data-slot='sidebar-inset'] .rounded-xl.border input:not([type='checkbox']):not([type='radio']),
+    [data-slot='sidebar-inset'] .rounded-xl.border select,
+    [data-slot='sidebar-inset'] .rounded-xl.border textarea {
+        @apply bg-white;
+    }
+
+    /* 列表表頭：圖2 淺藍灰底、字重、內距、上圓角 */
+    [data-slot='sidebar-inset'] .desktop-table-wrap table thead tr,
+    [data-slot='sidebar-inset'] table thead tr {
+        background-color: var(--table-header) !important;
+        border-bottom: 1px solid var(--table-header-border) !important;
+    }
+
+    [data-slot='sidebar-inset'] .desktop-table-wrap table thead th,
+    [data-slot='sidebar-inset'] table thead th {
+        padding: 0.875rem 1rem !important;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        color: var(--table-header-text);
+        text-align: left;
+        vertical-align: middle;
+        white-space: nowrap;
+        background-color: var(--table-header) !important;
+    }
+
+    [data-slot='sidebar-inset'] .desktop-table-wrap table thead th:first-child,
+    [data-slot='sidebar-inset'] .rounded-xl.border table thead th:first-child {
+        border-top-left-radius: calc(var(--radius) + 2px);
+    }
+
+    [data-slot='sidebar-inset'] .desktop-table-wrap table thead th:last-child,
+    [data-slot='sidebar-inset'] .rounded-xl.border table thead th:last-child {
+        border-top-right-radius: calc(var(--radius) + 2px);
+    }
+
+    [data-slot='sidebar-inset'] table tbody td {
+        padding: 0.875rem 1rem;
+        vertical-align: middle;
+    }
+
+    [data-slot='sidebar-inset'] table tbody tr {
+        border-bottom: 1px solid hsl(214 28% 92%);
+        transition: background-color 0.15s ease;
+    }
+
+    [data-slot='sidebar-inset'] table tbody tr:hover {
+        background-color: #ffffff;
+    }
+
+    [data-slot='sidebar-inset'] .rounded-md.border table thead tr,
+    [data-slot='sidebar-inset'] .rounded-md.border table thead th {
+        background-color: var(--table-header);
+    }
+
+    [data-slot='sidebar-inset'] .rounded-md.border table thead th:first-child {
+        border-top-left-radius: 0.375rem;
+    }
+
+    [data-slot='sidebar-inset'] .rounded-md.border table thead th:last-child {
+        border-top-right-radius: 0.375rem;
+    }
+
+    main h1.text-xl.font-semibold,
+    main h1.text-lg.font-semibold {
+        color: var(--brand-green);
+    }
+
+    @media (max-width: 1023px) {
+        [data-sidebar='menu-button'] {
+            min-height: 2.75rem;
+            font-size: 0.9375rem;
+        }
+
+        [data-sidebar='menu-sub-button'] {
+            min-height: 2.5rem;
+        }
+
+        [data-slot='sheet-content'] [data-sidebar='sidebar'] {
+            padding-bottom: env(safe-area-inset-bottom, 0);
+        }
+    }
+
+    @media (max-width: 639px) {
+        [data-slot='sidebar-inset'] .p-4 {
+            padding: 0.75rem;
+        }
+
+        [data-slot='sidebar-inset'] .flex.items-center.justify-between:has(h1) {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.75rem;
+        }
+
+        [data-slot='sidebar-inset'] .flex.items-center.justify-between:has(h1) > :last-child {
+            width: 100%;
+        }
+
+        [data-slot='sidebar-inset'] .flex.items-center.justify-between:has(h1) > :last-child .inline-flex,
+        [data-slot='sidebar-inset'] .flex.items-center.justify-between:has(h1) > :last-child > a,
+        [data-slot='sidebar-inset'] .flex.items-center.justify-between:has(h1) > :last-child > button {
+            width: 100%;
+            justify-content: center;
+        }
+
+        [data-slot='sidebar-inset'] form.rounded-xl.border .grid[class*='grid-cols'] {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        [data-slot='sidebar-inset'] form.rounded-xl.border .grid > button {
+            width: 100%;
+        }
+
+        [data-slot='sidebar-inset'] .flex.flex-wrap.gap-2 > a.rounded.border {
+            display: inline-flex;
+            min-height: 2.5rem;
+            min-width: 2.5rem;
+            align-items: center;
+            justify-content: center;
+            padding-inline: 0.75rem;
+        }
+
+        [data-slot='sidebar-inset'] td .flex.flex-wrap.gap-2 {
+            flex-wrap: nowrap;
+            gap: 0.25rem;
+        }
+    }
+}
