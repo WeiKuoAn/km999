@@ -16,14 +16,18 @@ type Row = {
     student_code: string | null;
     student_name: string;
     grade_name: string | null;
-    billing_year: number;
-    billing_month: number;
+    start_year: number;
+    start_month: number;
+    end_year: number;
+    end_month: number;
+    period_label: string;
     expected_total: number;
     paid_total: number;
     course_count: number;
     paid_date: string | null;
     status: string;
     settled_by_name: string;
+    pay_cycle?: string | null;
 };
 
 type Paginated<T> = {
@@ -60,13 +64,9 @@ watch(
 );
 
 const formatMoney = (n: number) => n.toLocaleString('zh-TW');
-const statusLabel = (value: string) =>
-    ({ paid: '已繳', unpaid: '未繳', partial: '部分繳', cancelled: '已取消' })[
-        value
-    ] ?? value;
 
 const detailHref = (row: Row) =>
-    `/student-payments/${row.student_id}?year=${row.billing_year}&month=${row.billing_month}`;
+    `/student-payments/${row.student_id}?from_year=${row.start_year}&from_month=${row.start_month}&to_year=${row.end_year}&to_month=${row.end_month}`;
 
 const applyFilters = () => {
     router.get(
@@ -91,7 +91,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="學生收款"
-            description="查看帳期明細紀錄；右上角可新增收款／報名計價。"
+            description="依整段帳期（例如季繳 8–10 月）彙總；點明細可看各月各科。"
         >
             <template #actions>
                 <Button as-child>
@@ -160,32 +160,24 @@ defineOptions({
                 v-for="row in rows.data"
                 :key="row.id"
                 :title="`${row.student_code ?? '—'} ${row.student_name}`"
-                :subtitle="`${row.billing_year}/${row.billing_month}｜${row.course_count} 門課程`"
+                :subtitle="`${row.period_label}｜${row.course_count} 門課程`"
             >
-                <template #badge>
-                    <span class="text-xs font-medium text-muted-foreground">{{
-                        statusLabel(row.status)
-                    }}</span>
-                </template>
                 <MobileRecordField label="年級">{{
                     row.grade_name ?? '—'
                 }}</MobileRecordField>
-                <MobileRecordField label="應收">{{
+                <MobileRecordField label="總金額">{{
                     formatMoney(row.expected_total)
-                }}</MobileRecordField>
-                <MobileRecordField label="已收">{{
-                    formatMoney(row.paid_total)
                 }}</MobileRecordField>
                 <MobileRecordField label="收款日">{{
                     row.paid_date ?? '—'
                 }}</MobileRecordField>
-                <MobileRecordField label="確認人">{{
+                <MobileRecordField label="收款人">{{
                     row.settled_by_name
                 }}</MobileRecordField>
                 <template #actions>
                     <div class="mobile-card-actions">
                         <Button variant="outline" size="sm" as-child>
-                            <Link :href="detailHref(row)">看明細</Link>
+                            <Link :href="detailHref(row)">明細</Link>
                         </Button>
                     </div>
                 </template>
@@ -207,12 +199,10 @@ defineOptions({
                         <th class="px-3 py-2 text-left">學生</th>
                         <th class="px-3 py-2 text-left">帳期</th>
                         <th class="px-3 py-2 text-right">總金額</th>
-                        <th class="px-3 py-2 text-right">已收</th>
-                        <th class="px-3 py-2 text-left">狀態</th>
                         <th class="px-3 py-2 text-left">收款日</th>
-                        <th class="px-3 py-2 text-left">確認人</th>
+                        <th class="px-3 py-2 text-left">收款人</th>
                         <th class="px-3 py-2 text-right">課程數</th>
-                        <th class="px-3 py-2 text-left">操作</th>
+                        <th class="px-3 py-2 text-left">明細</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -227,16 +217,10 @@ defineOptions({
                             </div>
                         </td>
                         <td class="px-3 py-2.5 whitespace-nowrap">
-                            {{ row.billing_year }}/{{ row.billing_month }}
+                            {{ row.period_label }}
                         </td>
                         <td class="px-3 py-2.5 text-right tabular-nums">
                             {{ formatMoney(row.expected_total) }}
-                        </td>
-                        <td class="px-3 py-2.5 text-right tabular-nums">
-                            {{ formatMoney(row.paid_total) }}
-                        </td>
-                        <td class="px-3 py-2.5">
-                            {{ statusLabel(row.status) }}
                         </td>
                         <td class="px-3 py-2.5 whitespace-nowrap">
                             {{ row.paid_date ?? '—' }}
@@ -256,7 +240,7 @@ defineOptions({
                     </tr>
                     <tr v-if="rows.data.length === 0">
                         <td
-                            colspan="9"
+                            colspan="7"
                             class="px-3 py-10 text-center text-muted-foreground"
                         >
                             尚無收款明細。可按右上角「新增收款」產生帳期。

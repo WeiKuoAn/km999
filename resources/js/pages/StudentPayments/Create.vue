@@ -8,10 +8,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+    billingBaselineSessions,
     buildDefaultSessionEntries,
     countSessionsForCourse,
     formatWeekdays,
     monthsFromDates,
+    proratedMonthTuitionExact,
     uniqueDatesFromSessions,
     type SessionEntry,
 } from '@/lib/weekdayDates';
@@ -243,6 +245,26 @@ const billingMonths = computed(() => monthsFromDates(sessionDates.value));
 const monthCount = computed(() => billingMonths.value.length);
 const sessionCount = computed(() => sessions.value.length);
 
+const countSessionsInMonth = (courseId: number, y: number, m: number) =>
+    sessions.value.filter((entry) => {
+        if (entry.course_id !== courseId) return false;
+        const [ey, em] = entry.date.slice(0, 10).split('-').map(Number);
+        return ey === y && em === m;
+    }).length;
+
+const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
+    const price = unitPrice(s);
+    const attended = countSessionsInMonth(s.id, y, m);
+    if (s.unit === 'session_block') {
+        return 0;
+    }
+    return proratedMonthTuitionExact(
+        price,
+        attended,
+        billingBaselineSessions(s.weekdays),
+    );
+};
+
 const lineTuition = (s: Subject) => {
     const price = unitPrice(s);
     if (s.unit === 'session_block') {
@@ -250,13 +272,31 @@ const lineTuition = (s: Subject) => {
             price * Math.max(1, Math.ceil(Math.max(1, monthCount.value) / 3))
         );
     }
-    return price * monthCount.value;
+    // 各月：該科精確值加總後再進位會與「多科合計再進位」不一致；
+    // 單科小計仍用各月 round(精確值)，月合計另以多科加總後 round。
+    return billingMonths.value.reduce((sum, month) => {
+        return sum + Math.round(lineTuitionForMonthExact(s, month.y, month.m));
+    }, 0);
 };
+
+const monthlyMaterialFee = (annualOrTermFee: number) =>
+    annualOrTermFee > 0 ? Math.round(annualOrTermFee / 12) : 0;
 
 const lineMaterial = (s: Subject) => {
     if (!s.material) return 0;
-    if (s.material_unit !== 'class_day') return s.material;
-    return countSessionsForCourse(sessions.value, s.id) * s.material;
+    if (s.material_unit === 'class_day') {
+        return countSessionsForCourse(sessions.value, s.id) * s.material;
+    }
+    return monthlyMaterialFee(s.material) * Math.max(0, monthCount.value);
+};
+
+const lineMaterialForMonth = (s: Subject, _y: number, _m: number, _isFirst: boolean) => {
+    if (!s.material) return 0;
+    if (s.material_unit === 'class_day') {
+        return countSessionsInMonth(s.id, _y, _m) * s.material;
+    }
+    // 教材年費 ÷ 12 = 每月費用；帳期內每個月都收（不因中旬入班打折）
+    return monthlyMaterialFee(s.material);
 };
 
 const materialHint = (s: Subject): string => {
@@ -264,14 +304,13 @@ const materialHint = (s: Subject): string => {
         const days = countSessionsForCourse(sessions.value, s.id);
         return `耗材 ${s.material.toLocaleString()}/日 × ${days}天＝${lineMaterial(s).toLocaleString()}｜${formatWeekdays(s.weekdays)}`;
     }
-    return `教材 ${s.material.toLocaleString()}`;
+    const monthly = monthlyMaterialFee(s.material);
+    return `教材 ${s.material.toLocaleString()}（月 ${monthly.toLocaleString()}）`;
 };
 
 const tuitionTotal = computed(() =>
-    selected.value.reduce((sum, id) => {
-        const s = props.subjects.find((x) => x.id === id);
-        return s ? sum + lineTuition(s) : sum;
-    }, 0),
+    // 與試算「各月金額」一致：每月先加總各科精確學費，再四捨五入後加總
+    monthBreakdown.value.reduce((sum, row) => sum + row.tuition, 0),
 );
 
 const materialTotal = computed(() =>
@@ -280,6 +319,62 @@ const materialTotal = computed(() =>
         return s ? sum + lineMaterial(s) : sum;
     }, 0),
 );
+
+const monthBreakdown = computed(() => {
+    const selectedSubjects = selected.value
+        .map((id) => props.subjects.find((x) => x.id === id))
+        .filter((s): s is Subject => !!s);
+
+    const blockSubjects = selectedSubjects.filter((s) => s.unit === 'session_block');
+    const blockTuitionTotal = blockSubjects.reduce((sum, s) => {
+        const price = unitPrice(s);
+        return (
+            sum +
+            price * Math.max(1, Math.ceil(Math.max(1, monthCount.value) / 3))
+        );
+    }, 0);
+    const blockMonths = Math.max(1, monthCount.value);
+    const blockPerMonth = Math.floor(blockTuitionTotal / blockMonths);
+    const blockRem = blockTuitionTotal % blockMonths;
+
+    return billingMonths.value.map((month, index) => {
+        const exactTuition = selectedSubjects
+            .filter((s) => s.unit !== 'session_block')
+            .reduce(
+                (sum, s) => sum + lineTuitionForMonthExact(s, month.y, month.m),
+                0,
+            );
+        let tuition = Math.round(exactTuition);
+        tuition += blockPerMonth + (index === 0 ? blockRem : 0);
+
+        const material = selectedSubjects.reduce(
+            (sum, s) => sum + lineMaterialForMonth(s, month.y, month.m, index === 0),
+            0,
+        );
+
+        const prorateHints = selectedSubjects
+            .filter((s) => s.unit !== 'session_block')
+            .map((s) => {
+                const attended = countSessionsInMonth(s.id, month.y, month.m);
+                const baseline = billingBaselineSessions(s.weekdays);
+                if (attended <= 0 || attended >= baseline) {
+                    return null;
+                }
+                return `${s.name} ${attended}/${baseline}`;
+            })
+            .filter((hint): hint is string => hint !== null);
+
+        return {
+            y: month.y,
+            m: month.m,
+            label: `${month.y}/${month.m}`,
+            tuition,
+            material,
+            subtotal: tuition + material,
+            prorateHints,
+        };
+    });
+});
 
 const grandTotal = computed(() =>
     Math.max(
@@ -411,11 +506,11 @@ defineOptions({
 <template>
     <Head title="新增收款" />
 
-    <div class="page-shell mx-auto w-full max-w-5xl">
+    <div class="page-shell w-full text-base [&_.text-xs]:text-sm [&_.text-sm]:text-base">
         <div class="mb-2">
             <Link
                 href="/student-payments"
-                class="text-sm text-primary underline-offset-4 hover:underline"
+                class="text-base text-primary underline-offset-4 hover:underline"
             >
                 ← 返回明細紀錄
             </Link>
@@ -423,7 +518,7 @@ defineOptions({
 
         <PageHeader
             title="新增收款／報名計價"
-            description="先輸入學生，系統依年級自動帶入可報名科目與價目；以行事曆選上課日後產生帳期。"
+            description="先輸入學生，系統依年級自動帶入可報名科目與價目；以行事曆選上課日後確認收款並產生帳期。"
         />
 
         <div
@@ -531,17 +626,20 @@ defineOptions({
                 {{ w }}
             </div>
 
-            <div class="grid items-start gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-                <div class="space-y-4">
+            <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+                <div class="min-w-0 space-y-4">
                     <div class="rounded-xl border border-sidebar-border/70 p-4">
-                        <h2 class="text-base font-semibold">科目</h2>
+                        <h2 class="text-lg font-semibold">科目</h2>
                         <p
                             v-if="subjects.length === 0"
-                            class="mt-3 text-sm text-muted-foreground"
+                            class="mt-3 text-base text-muted-foreground"
                         >
                             尚無可報名課目。請確認學生年級與收費標準的適用課目。
                         </p>
-                        <div v-else class="mt-3 grid gap-2 sm:grid-cols-2">
+                        <div
+                            v-else
+                            class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+                        >
                             <button
                                 v-for="s in subjects"
                                 :key="s.id"
@@ -667,6 +765,10 @@ defineOptions({
                         </div>
                         <div class="mt-3 rounded-lg border bg-muted/20 p-3">
                             <h3 class="text-sm font-medium">各科已選堂數</h3>
+                            <p class="mt-1 text-xs text-muted-foreground">
+                                起算日前的上課日不計費。基準堂數＝每週上課日數×4（雙天為
+                                8）；故中旬入班常會顯示 7/8，並非日曆少算。
+                            </p>
                             <ul class="mt-2 flex flex-col gap-1.5 text-sm">
                                 <li
                                     v-for="course in sessionCourseSummary"
@@ -704,14 +806,14 @@ defineOptions({
                     </div>
                 </div>
 
-                <aside class="lg:sticky lg:top-20 lg:self-start">
+                <aside class="xl:sticky xl:top-20 xl:self-start">
                     <div
-                        class="rounded-xl border border-primary/25 bg-accent/40 p-4 shadow-sm lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto"
+                        class="rounded-xl border border-primary/25 bg-accent/40 p-5 shadow-sm xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
                     >
-                        <h2 class="text-base font-semibold text-primary">
+                        <h2 class="text-lg font-semibold text-primary">
                             試算
                         </h2>
-                        <dl class="mt-3 space-y-2 text-sm">
+                        <dl class="mt-3 space-y-2.5 text-base">
                             <div class="flex justify-between gap-2">
                                 <dt class="text-muted-foreground">
                                     同組核心科數
@@ -726,15 +828,73 @@ defineOptions({
                                 <dt class="text-muted-foreground">帳期月數</dt>
                                 <dd>{{ monthCount }}</dd>
                             </div>
-                            <div class="flex justify-between gap-2">
+                            <div
+                                v-if="monthBreakdown.length"
+                                class="space-y-2 border-t pt-2"
+                            >
+                                <dt class="font-medium text-foreground">
+                                    各月金額
+                                </dt>
+                                <dd>
+                                    <ul class="space-y-2">
+                                        <li
+                                            v-for="row in monthBreakdown"
+                                            :key="`${row.y}-${row.m}`"
+                                            class="rounded-lg border border-sidebar-border/60 bg-background/70 px-3 py-2"
+                                        >
+                                            <div
+                                                class="flex items-center justify-between gap-2 font-medium"
+                                            >
+                                                <span>{{ row.label }}</span>
+                                                <span
+                                                    class="tabular-nums text-primary"
+                                                >
+                                                    {{
+                                                        row.subtotal.toLocaleString()
+                                                    }}
+                                                </span>
+                                            </div>
+                                            <div
+                                                class="mt-1 flex justify-between gap-2 text-sm text-muted-foreground"
+                                            >
+                                                <span
+                                                    >學費
+                                                    {{
+                                                        row.tuition.toLocaleString()
+                                                    }}</span
+                                                >
+                                                <span
+                                                    >教材／耗材
+                                                    {{
+                                                        row.material.toLocaleString()
+                                                    }}</span
+                                                >
+                                            </div>
+                                            <p
+                                                v-if="row.prorateHints.length"
+                                                class="mt-1 text-sm text-muted-foreground"
+                                            >
+                                                學費比例計價（教材不打折）：{{
+                                                    row.prorateHints.join('、')
+                                                }}
+                                            </p>
+                                        </li>
+                                    </ul>
+                                </dd>
+                            </div>
+                            <div class="flex justify-between gap-2 border-t pt-2">
                                 <dt class="text-muted-foreground">學費小計</dt>
-                                <dd>{{ tuitionTotal.toLocaleString() }}</dd>
+                                <dd class="tabular-nums">
+                                    {{ tuitionTotal.toLocaleString() }}
+                                </dd>
                             </div>
                             <div class="flex justify-between gap-2">
                                 <dt class="text-muted-foreground">
                                     教材／耗材
                                 </dt>
-                                <dd>{{ materialTotal.toLocaleString() }}</dd>
+                                <dd class="tabular-nums">
+                                    {{ materialTotal.toLocaleString() }}
+                                </dd>
                             </div>
                             <div class="grid gap-1 border-t pt-2">
                                 <Label>折讓金額</Label>
@@ -742,19 +902,24 @@ defineOptions({
                                     v-model.number="allowance"
                                     type="number"
                                     min="0"
+                                    class="h-11 text-base"
                                 />
                             </div>
                             <div
-                                class="flex justify-between gap-2 border-t pt-2 text-base font-semibold"
+                                class="flex justify-between gap-2 border-t pt-2 text-lg font-semibold"
                             >
                                 <dt>應收合計</dt>
-                                <dd class="text-primary">
+                                <dd class="tabular-nums text-primary">
                                     {{ grandTotal.toLocaleString() }}
                                 </dd>
                             </div>
                         </dl>
+                        <p class="mt-3 text-sm text-muted-foreground">
+                            僅學費按比例：基準堂數＝每週上課日數 × 4（例：雙天 8
+                            堂，上 3 堂則學費 × 3/8）。教材為年費 ÷ 12，帳期內每月收取，不打折。
+                        </p>
                         <Button
-                            class="mt-4 w-full"
+                            class="mt-4 h-11 w-full text-base"
                             type="button"
                             :disabled="
                                 form.processing ||
@@ -763,10 +928,10 @@ defineOptions({
                             "
                             @click="submit"
                         >
-                            產生帳期
+                            確認收款並產生帳期
                         </Button>
-                        <p class="mt-2 text-xs text-muted-foreground">
-                            產生後可至
+                        <p class="mt-2 text-sm text-muted-foreground">
+                            產生後即視為已收款，可至
                             <Link
                                 :href="`/student-payments/${student.id}`"
                                 class="underline"

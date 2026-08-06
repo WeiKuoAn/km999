@@ -44,6 +44,40 @@ export function formatCourseSchedules(schedules: CourseScheduleRow[] | null | un
     return [...byLevel.entries()].map(([level, slots]) => `${level}：${slots.join('、')}`).join('；');
 }
 
+/**
+ * 月費基準堂數：每週上課日數 × 4。
+ * 例：週三＋週六＝8；當月實際有 9 堂仍以 8 堂收全月費；只上 3 堂則 × 3/8。
+ */
+export function billingBaselineSessions(weekdays: number[] | null | undefined): number {
+    const count = (weekdays ?? []).filter((d) => d >= 1 && d <= 7).length;
+    return Math.max(1, count * 4);
+}
+
+/** 單月學費精確值（未四捨五入）：min(1, 實際堂次 / 基準堂數) × 月費 */
+export function proratedMonthTuitionExact(
+    unitPrice: number,
+    attended: number,
+    baseline: number,
+): number {
+    if (unitPrice <= 0 || attended <= 0) {
+        return 0;
+    }
+    const base = Math.max(1, baseline);
+    return Math.min(unitPrice, (unitPrice * attended) / base);
+}
+
+/**
+ * 單月學費整數：先算精確值再四捨五入。
+ * 多科同月請改用各科精確值加總後再 Math.round，避免 1162.5+1162.5 被各別進位成 2326。
+ */
+export function proratedMonthTuition(
+    unitPrice: number,
+    attended: number,
+    baseline: number,
+): number {
+    return Math.round(proratedMonthTuitionExact(unitPrice, attended, baseline));
+}
+
 /** 計算某月符合上課星期的日期數；fromDate(Y-m-d) 有值時只算該日（含）之後 */
 export function countClassDaysInMonth(
     year: number,

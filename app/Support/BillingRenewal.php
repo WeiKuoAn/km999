@@ -274,8 +274,9 @@ final class BillingRenewal
         }
 
         DB::transaction(function () use ($student, $payCycle, $quote, $allowance, $months): void {
-            $monthCount = count($months);
             $allowanceLeft = $allowance;
+            $paidDate = now()->toDateString();
+            $settledByUserId = auth()->id();
 
             foreach ($quote['lines'] as $line) {
                 $tuition = (int) $line['tuition'];
@@ -288,27 +289,51 @@ final class BillingRenewal
                 $share = min($share, $allowanceLeft);
                 $allowanceLeft -= $share;
 
-                $tuitionPerMonth = $monthCount > 0 ? intdiv($tuition, $monthCount) : 0;
-                $tuitionRemainder = $monthCount > 0 ? $tuition % $monthCount : 0;
-                $allowancePerMonth = $monthCount > 0 ? intdiv($share, $monthCount) : 0;
-                $allowanceRemainder = $monthCount > 0 ? $share % $monthCount : 0;
-
+                /** @var array<string, array{amount:int, attended?:int, baseline?:int}> $tuitionMonths */
+                $tuitionMonths = $line['tuition_months'] ?? [];
                 /** @var array<string, array{amount:int, days:int}> $materialMonths */
                 $materialMonths = $line['material_months'] ?? [];
                 $materialNote = $line['material_note'] ?? null;
+
+                $monthWeights = [];
+                foreach ($months as $month) {
+                    $key = ((int) $month['y']).'-'.((int) $month['m']);
+                    $monthWeights[$key] = (int) ($tuitionMonths[$key]['amount'] ?? 0)
+                        + (int) ($materialMonths[$key]['amount'] ?? 0);
+                }
+                $weightSum = array_sum($monthWeights);
+                $allowanceByMonth = [];
+                $assignedAllowance = 0;
+                $keys = array_keys($monthWeights);
+                foreach ($keys as $index => $key) {
+                    if ($index === count($keys) - 1) {
+                        $allowanceByMonth[$key] = max(0, $share - $assignedAllowance);
+                    } else {
+                        $part = $weightSum > 0
+                            ? (int) round($share * ($monthWeights[$key] / $weightSum))
+                            : 0;
+                        $allowanceByMonth[$key] = $part;
+                        $assignedAllowance += $part;
+                    }
+                }
 
                 foreach ($months as $index => $month) {
                     $y = (int) $month['y'];
                     $m = (int) $month['m'];
                     $key = $y.'-'.$m;
                     $monthMaterial = (int) ($materialMonths[$key]['amount'] ?? 0);
-                    $monthTuition = $tuitionPerMonth + ($index === 0 ? $tuitionRemainder : 0);
-                    $monthAllowance = $allowancePerMonth + ($index === 0 ? $allowanceRemainder : 0);
+                    $monthTuition = (int) ($tuitionMonths[$key]['amount'] ?? 0);
+                    $monthAllowance = (int) ($allowanceByMonth[$key] ?? 0);
                     $amount = max(0, $monthTuition + $monthMaterial - $monthAllowance);
 
                     $noteParts = [
                         sprintf('報名計價｜%s｜單價 %s', $line['course_name'], number_format($line['unit_price'])),
                     ];
+                    $attended = (int) ($tuitionMonths[$key]['attended'] ?? 0);
+                    $baseline = (int) ($tuitionMonths[$key]['baseline'] ?? 0);
+                    if ($baseline > 0 && $attended > 0 && $attended < $baseline) {
+                        $noteParts[] = sprintf('比例 %d/%d', $attended, $baseline);
+                    }
                     if ($monthMaterial > 0) {
                         $days = (int) ($materialMonths[$key]['days'] ?? 0);
                         if (($line['material_unit'] ?? '') === 'class_day' && $days > 0) {
@@ -334,9 +359,10 @@ final class BillingRenewal
                         [
                             'classroom_id' => null,
                             'expected_amount' => $amount,
-                            'paid_amount' => 0,
-                            'paid_date' => null,
-                            'status' => 'unpaid',
+                            'paid_amount' => $amount,
+                            'paid_date' => $paidDate,
+                            'status' => 'paid',
+                            'settled_by_user_id' => $settledByUserId,
                             'pay_cycle' => $payCycle,
                             'note' => implode('｜', $noteParts),
                         ]

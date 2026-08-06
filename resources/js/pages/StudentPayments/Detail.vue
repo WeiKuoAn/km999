@@ -4,6 +4,13 @@ import { computed, ref } from 'vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 
 type Row = {
     id: number;
@@ -52,6 +59,11 @@ const props = defineProps<{
     period: {
         billing_year: number;
         billing_month: number;
+        start_year?: number;
+        start_month?: number;
+        end_year?: number;
+        end_month?: number;
+        period_label?: string;
         expected_total: number;
         paid_total: number;
         course_count: number;
@@ -72,6 +84,8 @@ const renewalError = computed(
 );
 
 const renewSubmitting = ref(false);
+const noteDialogOpen = ref(false);
+const activeNoteRow = ref<Row | null>(null);
 
 const formatMoney = (n: number) => n.toLocaleString('zh-TW');
 const statusLabel = (status: string) =>
@@ -79,11 +93,16 @@ const statusLabel = (status: string) =>
         status
     ] ?? status;
 
-const pageTitle = computed(() =>
-    props.period
-        ? `收款明細｜${props.student.student_code ?? '—'} ${props.student.name}｜${props.period.billing_year}/${props.period.billing_month}`
-        : `收款明細｜${props.student.student_code ?? '—'} ${props.student.name}`,
-);
+const pageTitle = computed(() => {
+    if (!props.period) {
+        return `收款明細｜${props.student.student_code ?? '—'} ${props.student.name}`;
+    }
+    const label =
+        props.period.period_label ??
+        `${props.period.billing_year}/${props.period.billing_month}`;
+
+    return `收款明細｜${props.student.student_code ?? '—'} ${props.student.name}｜${label}`;
+});
 
 const pageDescription = computed(() => {
     const studentInfo = `${props.student.grade_name ?? '未設定年級'}${props.student.academic_year_name ? `｜${props.student.academic_year_name}` : ''}`;
@@ -95,13 +114,30 @@ const pageDescription = computed(() => {
     return `${studentInfo}｜${props.period.course_count} 門課程｜${statusLabel(props.period.status)}`;
 });
 
+const noteDialogTitle = computed(() => {
+    const row = activeNoteRow.value;
+    if (!row) {
+        return '備註';
+    }
+
+    return `${row.billing_year}/${row.billing_month}｜${row.course_category_name}／${row.course_name}`;
+});
+
+const openNote = (row: Row) => {
+    if (!row.note) {
+        return;
+    }
+    activeNoteRow.value = row;
+    noteDialogOpen.value = true;
+};
+
 const confirmRenew = () => {
     const r = props.renewal;
     if (!r?.available || renewSubmitting.value) {
         return;
     }
     const ok = window.confirm(
-        `${r.button_label}？\n\n將依上次設定：${r.pay_cycle_label}、${r.course_count} 門課，自 ${r.start_date} 起算產生 ${r.span_months} 個月帳期。`,
+        `${r.button_label}？\n\n將依上次設定：${r.pay_cycle_label}、${r.course_count} 門課，自 ${r.start_date} 起算產生 ${r.span_months} 個月帳期，並視為已收款。`,
     );
     if (!ok) {
         return;
@@ -264,11 +300,21 @@ defineOptions({
                             {{ row.paid_date ?? '—' }}
                         </td>
                         <td class="px-3 py-2.5">{{ row.settled_by_name }}</td>
-                        <td
-                            class="max-w-[14rem] truncate px-3 py-2.5 text-xs text-muted-foreground"
-                            :title="row.note ?? ''"
-                        >
-                            {{ row.note ?? '—' }}
+                        <td class="max-w-[14rem] px-3 py-2.5">
+                            <button
+                                v-if="row.note"
+                                type="button"
+                                class="block w-full truncate text-left text-xs text-primary underline-offset-2 hover:underline"
+                                title="點擊查看完整備註"
+                                @click="openNote(row)"
+                            >
+                                {{ row.note }}
+                            </button>
+                            <span
+                                v-else
+                                class="text-xs text-muted-foreground"
+                                >—</span
+                            >
                         </td>
                     </tr>
                     <tr v-if="rows.data.length === 0">
@@ -284,5 +330,19 @@ defineOptions({
         </div>
 
         <ListPagination :links="rows.links" class="mt-4" />
+
+        <Dialog v-model:open="noteDialogOpen">
+            <DialogContent class="sm:max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>{{ noteDialogTitle }}</DialogTitle>
+                    <DialogDescription>完整備註內容</DialogDescription>
+                </DialogHeader>
+                <p
+                    class="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground"
+                >
+                    {{ activeNoteRow?.note }}
+                </p>
+            </DialogContent>
+        </Dialog>
     </div>
 </template>

@@ -146,6 +146,8 @@ type Cell = {
     holidayName: string | null;
     dayNum: number;
     courseLabels: CourseLabel[];
+    /** 起算日前、符合科目上課日但未計入的科目 */
+    skippedLabels: CourseLabel[];
     selectedStyle: Record<string, string> | undefined;
 };
 
@@ -156,6 +158,11 @@ const cells = computed<Cell[]>(() => {
     const startPad = (first.getDay() + 6) % 7; // Monday-first
     const daysInMonth = new Date(y, m, 0).getDate();
     const out: Cell[] = [];
+    const startBound = new Date(
+        minDate.value.getFullYear(),
+        minDate.value.getMonth(),
+        minDate.value.getDate(),
+    );
 
     for (let i = 0; i < startPad; i++) {
         out.push({
@@ -168,6 +175,7 @@ const cells = computed<Cell[]>(() => {
             holidayName: null,
             dayNum: 0,
             courseLabels: [],
+            skippedLabels: [],
             selectedStyle: undefined,
         });
     }
@@ -175,12 +183,24 @@ const cells = computed<Cell[]>(() => {
     for (let day = 1; day <= daysInMonth; day++) {
         const date = new Date(y, m - 1, day);
         const ymd = toYmd(date);
-        const beforeStart =
-            date < new Date(minDate.value.getFullYear(), minDate.value.getMonth(), minDate.value.getDate());
+        const beforeStart = date < startBound;
         const afterEnd = date > maxDate.value;
         const labels = labelsForDate(ymd);
         const selected = labels.length > 0;
         const holidayName = holidayMap.value.get(ymd) ?? null;
+        const wd = isoWeekday(date);
+        const skippedLabels: CourseLabel[] = [];
+        if (beforeStart && !selected) {
+            for (const course of props.courses ?? []) {
+                if ((course.weekdays ?? []).includes(wd)) {
+                    skippedLabels.push({
+                        id: course.id,
+                        name: course.name,
+                        color: normalizeClassroomHex(course.color),
+                    });
+                }
+            }
+        }
         out.push({
             key: ymd,
             date: ymd,
@@ -191,6 +211,7 @@ const cells = computed<Cell[]>(() => {
             holidayName,
             dayNum: day,
             courseLabels: labels,
+            skippedLabels,
             selectedStyle: selected ? classroomCalendarSurface(labels[0]?.color ?? null) : undefined,
         });
     }
@@ -206,6 +227,7 @@ const cells = computed<Cell[]>(() => {
             holidayName: null,
             dayNum: 0,
             courseLabels: [],
+            skippedLabels: [],
             selectedStyle: undefined,
         });
     }
@@ -321,7 +343,7 @@ const sessionCount = computed(() => props.modelValue.length);
             >
                 <span v-if="cell.inMonth" class="leading-none tabular-nums">{{ cell.dayNum }}</span>
                 <span
-                    v-if="cell.inMonth && cell.courseLabels.length"
+                    v-if="cell.inMonth && cell.courseLabels.length && !cell.disabled"
                     class="line-clamp-2 w-full text-center text-[9px] leading-tight sm:text-[10px]"
                 >
                     <span
@@ -334,6 +356,13 @@ const sessionCount = computed(() => props.modelValue.length);
                     </span>
                 </span>
                 <span
+                    v-else-if="cell.inMonth && cell.skippedLabels.length"
+                    class="line-clamp-2 w-full text-center text-[9px] leading-tight text-muted-foreground/70 sm:text-[10px]"
+                    :title="`起算前未計入：${cell.skippedLabels.map((c) => c.name).join('、')}`"
+                >
+                    未入班
+                </span>
+                <span
                     v-else-if="cell.inMonth && cell.holidayName"
                     class="line-clamp-2 w-full text-center text-[9px] leading-tight text-rose-700 sm:text-[10px]"
                 >
@@ -343,7 +372,7 @@ const sessionCount = computed(() => props.modelValue.length);
         </div>
 
         <p class="text-xs text-muted-foreground">
-            已選 {{ sessionCount }} 堂。淡紅為假日（預選會略過，仍可手動加課）；點空白日可加課（多科時會問是哪一科）。
+            已選 {{ sessionCount }} 堂。起算日前的上課日標「未入班」不計費；淡紅為假日（預選會略過，仍可手動加課）。
         </p>
 
         <Dialog v-model:open="pickerOpen">

@@ -120,6 +120,73 @@ final class EnrollmentPricing
     }
 
     /**
+     * 月費基準堂數：每週上課日數 × 4（例：週三＋週六＝8；當月實際有 9 堂仍以 8 堂收全月費）。
+     *
+     * @param  list<int>  $weekdays
+     */
+    public static function billingBaselineSessions(array $weekdays): int
+    {
+        $count = count(WeekdayDates::normalize($weekdays));
+
+        return max(1, $count * 4);
+    }
+
+    /**
+     * 單月學費精確值（未四捨五入）。
+     */
+    public static function proratedMonthTuitionExact(int $unitPrice, int $attended, int $baseline): float
+    {
+        if ($unitPrice <= 0 || $attended <= 0) {
+            return 0.0;
+        }
+        $baseline = max(1, $baseline);
+
+        return min((float) $unitPrice, $unitPrice * ($attended / $baseline));
+    }
+
+    /**
+     * 單月學費整數（單科四捨五入）。多科同月請先加總精確值再 round。
+     */
+    public static function proratedMonthTuition(int $unitPrice, int $attended, int $baseline): int
+    {
+        return (int) round(self::proratedMonthTuitionExact($unitPrice, $attended, $baseline));
+    }
+
+    /**
+     * 將精確金額分配成整數，使合計等於 round(sum(exacts))（最大餘數法）。
+     *
+     * @param  list<float>  $exacts
+     * @return list<int>
+     */
+    public static function allocateRoundedAmounts(array $exacts): array
+    {
+        if ($exacts === []) {
+            return [];
+        }
+
+        $target = (int) round(array_sum($exacts));
+        $floors = [];
+        $fracs = [];
+        foreach ($exacts as $i => $exact) {
+            $floor = (int) floor($exact + 1e-9);
+            $floors[$i] = $floor;
+            $fracs[$i] = $exact - $floor;
+        }
+
+        $need = $target - array_sum($floors);
+        $order = array_keys($exacts);
+        usort($order, function (int|string $a, int|string $b) use ($fracs): int {
+            return $fracs[$b] <=> $fracs[$a] ?: $a <=> $b;
+        });
+
+        for ($i = 0; $i < $need; $i++) {
+            $floors[$order[$i]]++;
+        }
+
+        return array_map(fn ($i) => (int) $floors[$i], array_keys($exacts));
+    }
+
+    /**
      * @param  list<array{date?:string,course_id?:int}|string>  $sessions  堂次（日期＋科目）；相容舊版純日期字串
      * @param  list<int>  $courseIds
      * @return array{
@@ -128,6 +195,7 @@ final class EnrollmentPricing
      *   grand_total:int,
      *   core_count:int,
      *   months:list<array{y:int,m:int}>,
+     *   month_breakdown:list<array{y:int,m:int,tuition:int,material:int,subtotal:int}>,
      *   lines:list<array{
      *     course_id:int,
      *     course_name:string,
@@ -137,6 +205,7 @@ final class EnrollmentPricing
      *     material:int,
      *     material_unit:string,
      *     material_months:array<string, array{amount:int, days:int}>,
+     *     tuition_months:array<string, array{amount:int, attended:int, baseline:int}>,
      *     material_note:string|null
      *   }>
      * }
@@ -170,8 +239,23 @@ final class EnrollmentPricing
         }
 
         $lines = [];
-        $tuitionTotal = 0;
         $materialTotal = 0;
+        /** @var array<string, array{y:int,m:int,tuition:int,material:int}> $monthAgg */
+        $monthAgg = [];
+        foreach ($months as $month) {
+            $key = ((int) $month['y']).'-'.((int) $month['m']);
+            $monthAgg[$key] = [
+                'y' => (int) $month['y'],
+                'm' => (int) $month['m'],
+                'tuition' => 0,
+                'material' => 0,
+            ];
+        }
+
+        /** @var list<array<string, mixed>> $draftLines */
+        $draftLines = [];
+        /** @var array<string, list<array{line:int, exact:float, attended:int, baseline:int}>> $exactByMonth */
+        $exactByMonth = [];
 
         foreach ($selected as $subject) {
             $unitPrice = match ($payCycle) {
@@ -182,39 +266,120 @@ final class EnrollmentPricing
                     : (int) $subject['q_single'],
             };
 
-            if (($subject['unit'] ?? 'month') === 'session_block') {
+            $subjectDates = $datesByCourse[(int) $subject['id']] ?? [];
+            $baseline = self::billingBaselineSessions($subject['weekdays'] ?? []);
+            /** @var array<string, array{amount:int, attended:int, baseline:int}> $tuitionMonths */
+            $tuitionMonths = [];
+            $isBlock = ($subject['unit'] ?? 'month') === 'session_block';
+
+            if ($isBlock) {
                 $blocks = max(1, (int) ceil(max(1, $monthCount) / 3));
                 $tuition = $unitPrice * $blocks;
                 $monthsUsed = $blocks;
+                if ($months !== []) {
+                    $per = intdiv($tuition, $monthCount);
+                    $rem = $tuition % $monthCount;
+                    foreach ($months as $index => $month) {
+                        $key = ((int) $month['y']).'-'.((int) $month['m']);
+                        $attended = self::countDatesInMonth($subjectDates, (int) $month['y'], (int) $month['m']);
+                        $amount = $per + ($index === 0 ? $rem : 0);
+                        $tuitionMonths[$key] = [
+                            'amount' => $amount,
+                            'attended' => $attended,
+                            'baseline' => $baseline,
+                        ];
+                    }
+                }
             } else {
-                $tuition = $unitPrice * max(0, $monthCount);
                 $monthsUsed = $monthCount;
+                foreach ($months as $month) {
+                    $y = (int) $month['y'];
+                    $m = (int) $month['m'];
+                    $key = $y.'-'.$m;
+                    $attended = self::countDatesInMonth($subjectDates, $y, $m);
+                    $exact = self::proratedMonthTuitionExact($unitPrice, $attended, $baseline);
+                    $tuitionMonths[$key] = [
+                        'amount' => 0,
+                        'attended' => $attended,
+                        'baseline' => $baseline,
+                    ];
+                    $exactByMonth[$key][] = [
+                        'line' => count($draftLines),
+                        'exact' => $exact,
+                        'attended' => $attended,
+                        'baseline' => $baseline,
+                    ];
+                }
             }
 
-            $subjectDates = $datesByCourse[(int) $subject['id']] ?? [];
             [$material, $materialMonths, $materialNote] = self::materialForSubject(
                 $subject,
                 $subjectDates,
                 $months,
             );
 
-            $tuitionTotal += $tuition;
             $materialTotal += $material;
 
-            $lines[] = [
+            foreach ($materialMonths as $key => $row) {
+                if (isset($monthAgg[$key])) {
+                    $monthAgg[$key]['material'] += (int) ($row['amount'] ?? 0);
+                }
+            }
+
+            $draftLines[] = [
                 'course_id' => (int) $subject['id'],
                 'course_name' => (string) $subject['name'],
                 'unit_price' => $unitPrice,
                 'months' => $monthsUsed,
-                'tuition' => $tuition,
+                'tuition' => $isBlock ? ($unitPrice * max(1, (int) ceil(max(1, $monthCount) / 3))) : 0,
                 'material' => $material,
                 'material_unit' => (string) ($subject['material_unit'] ?? 'term'),
                 'material_months' => $materialMonths,
+                'tuition_months' => $tuitionMonths,
                 'material_note' => $materialNote,
+                'is_block' => $isBlock,
             ];
         }
 
+        foreach ($exactByMonth as $key => $rows) {
+            $exacts = array_map(fn (array $row): float => (float) $row['exact'], $rows);
+            $amounts = self::allocateRoundedAmounts($exacts);
+            foreach ($rows as $index => $row) {
+                $lineIndex = (int) $row['line'];
+                $amount = (int) $amounts[$index];
+                $draftLines[$lineIndex]['tuition_months'][$key]['amount'] = $amount;
+                $draftLines[$lineIndex]['tuition'] = (int) $draftLines[$lineIndex]['tuition'] + $amount;
+                if (isset($monthAgg[$key])) {
+                    $monthAgg[$key]['tuition'] += $amount;
+                }
+            }
+        }
+
+        foreach ($draftLines as $line) {
+            if (! empty($line['is_block'])) {
+                foreach ($line['tuition_months'] as $key => $row) {
+                    if (isset($monthAgg[$key])) {
+                        $monthAgg[$key]['tuition'] += (int) $row['amount'];
+                    }
+                }
+            }
+            unset($line['is_block']);
+            $lines[] = $line;
+        }
+
+        $tuitionTotal = (int) array_sum(array_column($lines, 'tuition'));
         $grandTotal = max(0, $tuitionTotal + $materialTotal - max(0, $allowance));
+
+        $monthBreakdown = array_values(array_map(
+            fn (array $row): array => [
+                'y' => $row['y'],
+                'm' => $row['m'],
+                'tuition' => $row['tuition'],
+                'material' => $row['material'],
+                'subtotal' => $row['tuition'] + $row['material'],
+            ],
+            $monthAgg
+        ));
 
         return [
             'tuition_total' => $tuitionTotal,
@@ -222,8 +387,25 @@ final class EnrollmentPricing
             'grand_total' => $grandTotal,
             'core_count' => $coreCount,
             'months' => $months,
+            'month_breakdown' => $monthBreakdown,
             'lines' => $lines,
         ];
+    }
+
+    /**
+     * @param  list<string>  $dates
+     */
+    private static function countDatesInMonth(array $dates, int $year, int $month): int
+    {
+        $count = 0;
+        foreach ($dates as $date) {
+            $d = Carbon::parse($date);
+            if ((int) $d->year === $year && (int) $d->month === $month) {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 
     /**
@@ -288,6 +470,18 @@ final class EnrollmentPricing
     }
 
     /**
+     * 教材年費換算每月金額（÷12）。
+     */
+    public static function monthlyMaterialFee(int $annualOrTermFee): int
+    {
+        if ($annualOrTermFee <= 0) {
+            return 0;
+        }
+
+        return (int) round($annualOrTermFee / 12);
+    }
+
+    /**
      * @param  array{
      *   material:int,
      *   material_unit:string,
@@ -311,14 +505,22 @@ final class EnrollmentPricing
             if ($months === []) {
                 return [0, [], null];
             }
-            $first = $months[0];
-            $key = ((int) $first['y']).'-'.((int) $first['m']);
+            $monthly = self::monthlyMaterialFee($fee);
+            if ($monthly <= 0) {
+                return [0, [], null];
+            }
 
-            return [
-                $fee,
-                [$key => ['amount' => $fee, 'days' => 0]],
-                null,
-            ];
+            $materialMonths = [];
+            $total = 0;
+            foreach ($months as $month) {
+                $key = ((int) $month['y']).'-'.((int) $month['m']);
+                $materialMonths[$key] = ['amount' => $monthly, 'days' => 0];
+                $total += $monthly;
+            }
+
+            $note = sprintf('教材月費 %s（年 %s ÷ 12）', number_format($monthly), number_format($fee));
+
+            return [$total, $materialMonths, $note];
         }
 
         if ($dates === []) {

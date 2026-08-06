@@ -12,6 +12,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -27,37 +28,42 @@ class StudentPaymentController extends Controller
         $q = trim((string) ($validated['q'] ?? ''));
         $status = (string) ($validated['status'] ?? 'all');
 
+        $batchDateSql = 'COALESCE(DATE(reconciliations.paid_date), DATE(reconciliations.created_at))';
+        $payCycleSql = "COALESCE(reconciliations.pay_cycle, 'quarterly')";
+
         $query = Reconciliation::query()
             ->join('students', 'students.id', '=', 'reconciliations.student_id')
             ->leftJoin('grade_levels', 'grade_levels.id', '=', 'students.grade_level_id')
             ->leftJoin('users as settled_users', 'settled_users.id', '=', 'reconciliations.settled_by_user_id')
-            ->selectRaw('
+            ->selectRaw("
                 MAX(reconciliations.id) as id,
                 reconciliations.student_id,
                 students.student_code,
                 students.name as student_name,
                 grade_levels.name as grade_name,
-                reconciliations.billing_year,
-                reconciliations.billing_month,
+                {$payCycleSql} as pay_cycle,
+                {$batchDateSql} as batch_date,
+                MIN(reconciliations.billing_year * 12 + reconciliations.billing_month) as start_key,
+                MAX(reconciliations.billing_year * 12 + reconciliations.billing_month) as end_key,
                 SUM(reconciliations.expected_amount) as expected_total,
                 SUM(reconciliations.paid_amount) as paid_total,
-                COUNT(*) as course_count,
+                COUNT(DISTINCT reconciliations.course_id) as course_count,
                 MAX(reconciliations.paid_date) as paid_date,
                 MAX(settled_users.name) as settled_by_name,
                 CASE
-                    WHEN SUM(CASE WHEN reconciliations.status = "paid" THEN 1 ELSE 0 END) = COUNT(*) THEN "paid"
-                    WHEN SUM(CASE WHEN reconciliations.status = "cancelled" THEN 1 ELSE 0 END) = COUNT(*) THEN "cancelled"
-                    WHEN SUM(CASE WHEN reconciliations.status = "unpaid" THEN 1 ELSE 0 END) = COUNT(*) THEN "unpaid"
-                    ELSE "partial"
+                    WHEN SUM(CASE WHEN reconciliations.status = 'paid' THEN 1 ELSE 0 END) = COUNT(*) THEN 'paid'
+                    WHEN SUM(CASE WHEN reconciliations.status = 'cancelled' THEN 1 ELSE 0 END) = COUNT(*) THEN 'cancelled'
+                    WHEN SUM(CASE WHEN reconciliations.status = 'unpaid' THEN 1 ELSE 0 END) = COUNT(*) THEN 'unpaid'
+                    ELSE 'partial'
                 END as group_status
-            ')
+            ")
             ->groupBy([
                 'reconciliations.student_id',
                 'students.student_code',
                 'students.name',
                 'grade_levels.name',
-                'reconciliations.billing_year',
-                'reconciliations.billing_month',
+                DB::raw($payCycleSql),
+                DB::raw($batchDateSql),
             ]);
 
         $this->restrictReconciliationsForTeacher($query);
@@ -71,16 +77,16 @@ class StudentPaymentController extends Controller
 
         if ($status === 'paid') {
             $query->havingRaw(
-                'SUM(CASE WHEN reconciliations.status = "paid" THEN 1 ELSE 0 END) = COUNT(*)'
+                "SUM(CASE WHEN reconciliations.status = 'paid' THEN 1 ELSE 0 END) = COUNT(*)"
             );
         } elseif ($status === 'cancelled') {
             $query->havingRaw(
-                'SUM(CASE WHEN reconciliations.status = "cancelled" THEN 1 ELSE 0 END) = COUNT(*)'
+                "SUM(CASE WHEN reconciliations.status = 'cancelled' THEN 1 ELSE 0 END) = COUNT(*)"
             );
         } elseif ($status === 'unpaid') {
             $query->havingRaw(
-                'SUM(CASE WHEN reconciliations.status = "paid" THEN 1 ELSE 0 END) < COUNT(*)
-                AND SUM(CASE WHEN reconciliations.status = "cancelled" THEN 1 ELSE 0 END) < COUNT(*)'
+                "SUM(CASE WHEN reconciliations.status = 'paid' THEN 1 ELSE 0 END) < COUNT(*)
+                AND SUM(CASE WHEN reconciliations.status = 'cancelled' THEN 1 ELSE 0 END) < COUNT(*)"
             );
         }
 
@@ -97,26 +103,40 @@ class StudentPaymentController extends Controller
         $paidTotal = (int) (clone $summaryQuery)->where('status', 'paid')->sum('paid_amount');
 
         $rows = $query
-            ->orderByDesc('reconciliations.billing_year')
-            ->orderByDesc('reconciliations.billing_month')
+            ->orderByDesc('end_key')
             ->orderByRaw('MAX(reconciliations.id) DESC')
             ->paginate(50)
             ->withQueryString()
-            ->through(fn (Reconciliation $row): array => [
-                'id' => (int) $row->id,
-                'student_id' => (int) $row->student_id,
-                'student_code' => $row->student_code,
-                'student_name' => $row->student_name ?? '—',
-                'grade_name' => $row->grade_name,
-                'billing_year' => (int) $row->billing_year,
-                'billing_month' => (int) $row->billing_month,
-                'expected_total' => (int) $row->expected_total,
-                'paid_total' => (int) $row->paid_total,
-                'course_count' => (int) $row->course_count,
-                'paid_date' => $row->paid_date?->toDateString(),
-                'status' => $row->group_status,
-                'settled_by_name' => $row->settled_by_name ?? '—',
-            ]);
+            ->through(function (Reconciliation $row): array {
+                $startKey = (int) $row->start_key;
+                $endKey = (int) $row->end_key;
+                $startYear = intdiv($startKey - 1, 12);
+                $startMonth = (($startKey - 1) % 12) + 1;
+                $endYear = intdiv($endKey - 1, 12);
+                $endMonth = (($endKey - 1) % 12) + 1;
+
+                return [
+                    'id' => (int) $row->id,
+                    'student_id' => (int) $row->student_id,
+                    'student_code' => $row->student_code,
+                    'student_name' => $row->student_name ?? '—',
+                    'grade_name' => $row->grade_name,
+                    'start_year' => $startYear,
+                    'start_month' => $startMonth,
+                    'end_year' => $endYear,
+                    'end_month' => $endMonth,
+                    'period_label' => $startKey === $endKey
+                        ? sprintf('%d/%d', $startYear, $startMonth)
+                        : sprintf('%d/%d — %d/%d', $startYear, $startMonth, $endYear, $endMonth),
+                    'expected_total' => (int) $row->expected_total,
+                    'paid_total' => (int) $row->paid_total,
+                    'course_count' => (int) $row->course_count,
+                    'paid_date' => $row->paid_date?->toDateString(),
+                    'status' => $row->group_status,
+                    'settled_by_name' => $row->settled_by_name ?? '—',
+                    'pay_cycle' => $row->pay_cycle,
+                ];
+            });
 
         return Inertia::render('StudentPayments/Index', [
             'rows' => $rows,
@@ -232,6 +252,10 @@ class StudentPaymentController extends Controller
         $validated = $request->validate([
             'year' => ['nullable', 'integer', 'min:2000', 'max:2100', 'required_with:month'],
             'month' => ['nullable', 'integer', 'min:1', 'max:12', 'required_with:year'],
+            'from_year' => ['nullable', 'integer', 'min:2000', 'max:2100', 'required_with:from_month'],
+            'from_month' => ['nullable', 'integer', 'min:1', 'max:12', 'required_with:from_year'],
+            'to_year' => ['nullable', 'integer', 'min:2000', 'max:2100', 'required_with:to_month'],
+            'to_month' => ['nullable', 'integer', 'min:1', 'max:12', 'required_with:to_year'],
         ]);
 
         $this->authorizeTeacherCanViewStudent($student);
@@ -239,14 +263,25 @@ class StudentPaymentController extends Controller
 
         $year = isset($validated['year']) ? (int) $validated['year'] : null;
         $month = isset($validated['month']) ? (int) $validated['month'] : null;
+        $fromYear = isset($validated['from_year']) ? (int) $validated['from_year'] : null;
+        $fromMonth = isset($validated['from_month']) ? (int) $validated['from_month'] : null;
+        $toYear = isset($validated['to_year']) ? (int) $validated['to_year'] : null;
+        $toMonth = isset($validated['to_month']) ? (int) $validated['to_month'] : null;
+
+        if ($fromYear === null && $year !== null && $month !== null) {
+            $fromYear = $year;
+            $fromMonth = $month;
+            $toYear = $year;
+            $toMonth = $month;
+        }
 
         $baseQuery = Reconciliation::query()
             ->where('student_id', $student->id);
 
-        if ($year !== null && $month !== null) {
-            $baseQuery
-                ->where('billing_year', $year)
-                ->where('billing_month', $month);
+        if ($fromYear !== null && $fromMonth !== null && $toYear !== null && $toMonth !== null) {
+            $startKey = $fromYear * 12 + $fromMonth;
+            $endKey = $toYear * 12 + $toMonth;
+            $baseQuery->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey]);
         }
 
         $rows = (clone $baseQuery)
@@ -285,8 +320,9 @@ class StudentPaymentController extends Controller
             ->sum('paid_amount');
 
         $period = null;
-        if ($year !== null && $month !== null) {
+        if ($fromYear !== null && $fromMonth !== null && $toYear !== null && $toMonth !== null) {
             $periodRows = (clone $baseQuery)->get([
+                'course_id',
                 'expected_amount',
                 'paid_amount',
                 'paid_date',
@@ -300,12 +336,21 @@ class StudentPaymentController extends Controller
                 ->orderByDesc('id')
                 ->first();
 
+            $periodLabel = ($fromYear === $toYear && $fromMonth === $toMonth)
+                ? sprintf('%d/%d', $fromYear, $fromMonth)
+                : sprintf('%d/%d — %d/%d', $fromYear, $fromMonth, $toYear, $toMonth);
+
             $period = [
-                'billing_year' => $year,
-                'billing_month' => $month,
+                'start_year' => $fromYear,
+                'start_month' => $fromMonth,
+                'end_year' => $toYear,
+                'end_month' => $toMonth,
+                'billing_year' => $toYear,
+                'billing_month' => $toMonth,
+                'period_label' => $periodLabel,
                 'expected_total' => (int) $periodRows->sum('expected_amount'),
                 'paid_total' => (int) $periodRows->sum('paid_amount'),
-                'course_count' => $periodRows->count(),
+                'course_count' => $periodRows->pluck('course_id')->filter()->unique()->count(),
                 'status' => $this->groupStatus($periodRows->pluck('status')->all()),
                 'paid_date' => $latestPaid?->paid_date?->toDateString(),
                 'settled_by_name' => $latestPaid?->settledByUser?->name ?? '—',
@@ -386,7 +431,7 @@ class StudentPaymentController extends Controller
         BillingRenewal::persistQuote($student, $validated['pay_cycle'], $quote, $allowance);
 
         return to_route('student-payments.show', $student)
-            ->with('success', '已產生帳期，可至收款明細查看。');
+            ->with('success', '已確認收款並產生帳期。');
     }
 
     /** 一鍵依最近一次科目＋繳別產生下一期帳 */
@@ -438,7 +483,7 @@ class StudentPaymentController extends Controller
         $label = BillingRenewal::renewButtonLabel($snapshot['pay_cycle']);
 
         return to_route('student-payments.show', $student)
-            ->with('success', "已{$label}（自 {$startDate} 起算）。");
+            ->with('success', "已確認收款並{$label}（自 {$startDate} 起算）。");
     }
 
     /**
