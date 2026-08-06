@@ -10,6 +10,7 @@ use App\Models\Enrollment;
 use App\Models\GradeLevel;
 use App\Models\Reconciliation;
 use App\Models\Student;
+use App\Models\StudentCourseDrop;
 use App\Models\User;
 use App\Support\ClassroomRecurringScheduleLabel;
 use App\Support\CourseTuition;
@@ -17,6 +18,7 @@ use App\Support\EnrollmentTuitionSync;
 use App\Support\MakeupAttendanceNote;
 use App\Support\StudentCodeGenerator;
 use App\Support\StudentEnrollmentSync;
+use App\Support\WeekdayDates;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -473,98 +475,69 @@ class StudentController extends Controller
     {
         $this->authorizeTeacherCanViewStudent($student);
 
-        $hasSchedulesTable = Schema::hasTable('classroom_schedules');
+        $student->loadMissing('gradeLevel:id,name');
+        $gradeName = $student->gradeLevel?->name;
 
-        $enrollmentQuery = Enrollment::query()
+        $today = Carbon::today();
+        $currentKey = ((int) $today->year) * 12 + (int) $today->month;
+
+        // 進行中課程：有未繳，或帳期含本月（含已繳當期）；已停修者不列入
+        $droppedCourseIds = [];
+        if (Schema::hasTable('student_course_drops')) {
+            $droppedCourseIds = StudentCourseDrop::query()
+                ->where('student_id', $student->id)
+                ->pluck('course_id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+        }
+
+        $activeCourseIds = Reconciliation::query()
             ->where('student_id', $student->id)
-            ->where('status', 'active')
-            ->whereHas('student', fn ($q) => $q->where('status', 'active'));
+            ->where('status', '!=', 'cancelled')
+            ->whereNotNull('course_id')
+            ->when($droppedCourseIds !== [], fn ($q) => $q->whereNotIn('course_id', $droppedCourseIds))
+            ->where(function ($query) use ($currentKey): void {
+                $query->where('status', 'unpaid')
+                    ->orWhereRaw('(billing_year * 12 + billing_month) >= ?', [$currentKey]);
+            })
+            ->distinct()
+            ->pluck('course_id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
 
-        $user = auth()->user();
-        if ($user?->role === User::ROLE_TEACHER) {
-            $teacherId = $user->teacher?->id;
-            $classroomIds = $teacherId === null
-                ? []
-                : (clone $enrollmentQuery)
-                    ->whereHas('classroom', fn ($q) => $q->where('teacher_id', $teacherId))
-                    ->pluck('classroom_id')
-                    ->unique()
-                    ->values()
-                    ->all();
-        } else {
-            $classroomIds = $enrollmentQuery->pluck('classroom_id')->unique()->values()->all();
-        }
+        $courses = $activeCourseIds === []
+            ? collect()
+            : Course::query()
+                ->whereIn('id', $activeCourseIds)
+                ->with('courseCategory:id,name')
+                ->orderBy('name')
+                ->get()
+                ->keyBy('id');
 
-        $query = Classroom::query()
-            ->whereIn('id', $classroomIds)
-            ->where('status', 'active')
-            ->with([
-                'course.courseCategory',
-                'teacher',
-                'extraSessionModels.students:id',
-            ])
-            ->orderBy('name');
-
-        if ($hasSchedulesTable) {
-            $query->with('schedules:id,classroom_id,weekday,start_time,end_time');
-        }
-
-        $classroomModels = $query->get();
-
-        $scheduleClassrooms = $classroomModels->map(function (Classroom $classroom) use ($hasSchedulesTable, $student) {
-            $arr = $classroom->toArray();
-            if (! $hasSchedulesTable) {
-                $arr['schedules'] = ($classroom->weekday !== null && $classroom->start_time !== null && $classroom->end_time !== null)
-                    ? [[
-                        'weekday' => (int) $classroom->weekday,
-                        'start_time' => (string) $classroom->start_time,
-                        'end_time' => (string) $classroom->end_time,
-                    ]]
-                    : [];
-            }
-            $fromDb = $classroom->extraSessionModels
-                ->filter(fn ($x) => $x->students->isEmpty() || $x->students->contains('id', $student->id))
-                ->map(fn ($x) => [
-                    'date' => $x->session_date->toDateString(),
-                    'start_time' => Carbon::parse($x->start_time)->format('H:i:s'),
-                    'end_time' => Carbon::parse($x->end_time)->format('H:i:s'),
-                ])->values()->all();
-            $fromJson = is_array($classroom->extra_sessions) ? $classroom->extra_sessions : [];
-            $arr['extra_sessions'] = array_values(array_merge($fromJson, $fromDb));
-            $arr['date_range_unrestricted'] = $classroom->dateRangeUnrestricted();
-            $arr['teaching_periods'] = $classroom->teachingPeriodsForFrontend();
-
-            return $arr;
-        });
-
-        $courseRows = $classroomModels
-            ->groupBy('course_id')
-            ->map(function ($group) use ($hasSchedulesTable) {
-                /** @var Collection<int, Classroom> $group */
-                $first = $group->first();
-                $names = $group->pluck('name')->unique()->sort()->values()->implode('、');
-                $scheduleLabel = ClassroomRecurringScheduleLabel::summarizeCollection($group, $hasSchedulesTable);
-
-                if ($first->course) {
-                    return [
-                        'course_category_name' => $first->course->courseCategory?->name ?? '—',
-                        'course_name' => $first->course->name,
-                        'classroom_count' => $group->count(),
-                        'classrooms_label' => $names !== '' ? $names : '—',
-                        'schedule_label' => $scheduleLabel,
-                    ];
+        $courseRows = collect($activeCourseIds)
+            ->map(function (int $courseId) use ($courses, $gradeName): ?array {
+                /** @var Course|null $course */
+                $course = $courses->get($courseId);
+                if ($course === null) {
+                    return null;
                 }
 
                 return [
-                    'course_category_name' => '—',
-                    'course_name' => '（未指定課程）',
-                    'classroom_count' => $group->count(),
-                    'classrooms_label' => $names !== '' ? $names : '—',
-                    'schedule_label' => $scheduleLabel,
+                    'course_id' => $course->id,
+                    'course_category_name' => $course->courseCategory?->name ?? '—',
+                    'course_name' => $course->name,
+                    'schedule_label' => $this->courseScheduleLabel($course, $gradeName),
+                    'can_delete' => true,
                 ];
             })
-            ->values()
+            ->filter()
             ->sortBy(fn (array $row) => [$row['course_category_name'], $row['course_name']])
+            ->values()
+            ->all();
+
+        $scheduleClassrooms = $courses
+            ->map(fn (Course $course) => $this->courseAsScheduleClassroom($course, $gradeName))
             ->values()
             ->all();
 
@@ -572,10 +545,152 @@ class StudentController extends Controller
             'student' => [
                 'id' => $student->id,
                 'name' => $student->name,
+                'student_code' => $student->student_code,
             ],
             'courseRows' => $courseRows,
             'scheduleClassrooms' => $scheduleClassrooms,
+            'canManageCourses' => true,
         ]);
+    }
+
+    public function destroyCourse(Student $student, Course $course): RedirectResponse
+    {
+        $this->authorizeTeacherCanViewStudent($student);
+
+        // 只取消未繳；已繳紀錄永久保留於繳費明細（即使之後停修）
+        $cancelled = Reconciliation::query()
+            ->where('student_id', $student->id)
+            ->where('course_id', $course->id)
+            ->where('status', 'unpaid')
+            ->update(['status' => 'cancelled']);
+
+        if (Schema::hasTable('student_course_drops')) {
+            StudentCourseDrop::query()->updateOrCreate(
+                [
+                    'student_id' => $student->id,
+                    'course_id' => $course->id,
+                ],
+                [
+                    'dropped_at' => now(),
+                ]
+            );
+        }
+
+        $message = $cancelled > 0
+            ? "已停修「{$course->name}」，並取消 {$cancelled} 筆未繳帳期；已繳紀錄仍保留於繳費明細。"
+            : "已停修「{$course->name}」；已繳紀錄仍保留於繳費明細。";
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function courseAsScheduleClassroom(Course $course, ?string $gradeName = null): array
+    {
+        $category = $course->courseCategory
+            ? ['name' => $course->courseCategory->name]
+            : null;
+
+        $normalized = WeekdayDates::normalizeSchedules(
+            is_array($course->schedules) ? $course->schedules : []
+        );
+        $filtered = WeekdayDates::schedulesForLevel($normalized, $gradeName);
+
+        $schedules = collect($filtered)
+            ->filter(function (array $row) {
+                return isset($row['weekday'], $row['start_time'], $row['end_time'])
+                    && $row['start_time'] !== null
+                    && $row['end_time'] !== null
+                    && $row['start_time'] !== ''
+                    && $row['end_time'] !== '';
+            })
+            ->map(function (array $row) use ($course, $category) {
+                $level = isset($row['level']) ? trim((string) $row['level']) : '';
+
+                return [
+                    'weekday' => (int) $row['weekday'],
+                    'start_time' => $this->normalizeScheduleTime((string) $row['start_time']),
+                    'end_time' => $this->normalizeScheduleTime((string) $row['end_time']),
+                    'level' => $level !== '' ? $level : null,
+                    'course' => [
+                        'name' => $level !== '' ? $level : $course->name,
+                        'course_category' => $category,
+                    ],
+                ];
+            })
+            ->values()
+            ->all();
+
+        return [
+            'id' => $course->id,
+            'name' => $course->name,
+            'color' => $course->color,
+            'start_date' => null,
+            'end_date' => null,
+            'date_range_unrestricted' => true,
+            'teaching_periods' => [],
+            'schedules' => $schedules,
+            'extra_sessions' => [],
+            'course' => [
+                'name' => $course->name,
+                'course_category' => $category,
+            ],
+            'teacher' => null,
+        ];
+    }
+
+    private function courseScheduleLabel(Course $course, ?string $gradeName = null): string
+    {
+        $normalized = WeekdayDates::normalizeSchedules(
+            is_array($course->schedules) ? $course->schedules : []
+        );
+        $filtered = WeekdayDates::schedulesForLevel($normalized, $gradeName);
+
+        $rows = collect($filtered)
+            ->filter(fn (array $row) => isset($row['weekday']))
+            ->map(function (array $row): string {
+                $day = $this->weekdayLabel((int) $row['weekday']);
+                $start = isset($row['start_time']) && $row['start_time'] !== null
+                    ? substr((string) $row['start_time'], 0, 5)
+                    : '';
+                $end = isset($row['end_time']) && $row['end_time'] !== null
+                    ? substr((string) $row['end_time'], 0, 5)
+                    : '';
+
+                return ($start !== '' && $end !== '') ? "週{$day} {$start}-{$end}" : "週{$day}";
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($rows !== []) {
+            return implode('｜', $rows);
+        }
+
+        $weekdays = is_array($course->weekdays) ? $course->weekdays : [];
+        if ($weekdays === []) {
+            return '—';
+        }
+
+        $labels = collect($weekdays)
+            ->map(fn ($d) => $this->weekdayLabel((int) $d))
+            ->filter()
+            ->values()
+            ->all();
+
+        return $labels === [] ? '—' : '週'.implode('、', $labels);
+    }
+
+    private function normalizeScheduleTime(string $time): string
+    {
+        $time = trim($time);
+        if (preg_match('/^\d{1,2}:\d{2}$/', $time)) {
+            return $time.':00';
+        }
+
+        return $time;
     }
 
     /**

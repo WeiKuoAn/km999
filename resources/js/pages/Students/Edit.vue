@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Head, Link, useForm } from '@inertiajs/vue3';
-import { Plus, Trash2 } from 'lucide-vue-next';
+import { CalendarDays, Plus, Receipt, Trash2 } from 'lucide-vue-next';
 import InputError from '@/components/InputError.vue';
+import PageHeader from '@/components/layout/PageHeader.vue';
 import TaiwanAddressPicker from '@/components/TaiwanAddressPicker.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -114,7 +115,22 @@ const submit = () =>
                 已更新成功！
             </div>
         </Transition>
-        <h1 class="text-xl font-semibold">編輯學生</h1>
+        <PageHeader title="編輯學生" :description="student.name">
+            <template #actions>
+                <Button variant="outline" as-child>
+                    <Link :href="`/students/${student.id}/courses-schedule`">
+                        <CalendarDays class="size-4" />
+                        課程與行事曆
+                    </Link>
+                </Button>
+                <Button variant="outline" as-child>
+                    <Link :href="`/students/${student.id}/payments`">
+                        <Receipt class="size-4" />
+                        繳費明細
+                    </Link>
+                </Button>
+            </template>
+        </PageHeader>
         <form class="space-y-5 rounded-xl border p-4 sm:p-5" @submit.prevent="submit">
             <div class="grid gap-2 rounded-lg border border-primary/20 bg-accent/40 p-3 sm:grid-cols-2">
                 <div class="grid gap-1 sm:col-span-2">

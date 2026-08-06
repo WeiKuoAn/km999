@@ -5,8 +5,10 @@ namespace App\Support;
 use App\Models\Holiday;
 use App\Models\Reconciliation;
 use App\Models\Student;
+use App\Models\StudentCourseDrop;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 final class BillingRenewal
 {
@@ -277,6 +279,21 @@ final class BillingRenewal
             $allowanceLeft = $allowance;
             $paidDate = now()->toDateString();
             $settledByUserId = auth()->id();
+
+            $courseIds = collect($quote['lines'] ?? [])
+                ->pluck('course_id')
+                ->map(fn ($id) => (int) $id)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($courseIds !== [] && Schema::hasTable('student_course_drops')) {
+                StudentCourseDrop::query()
+                    ->where('student_id', $student->id)
+                    ->whereIn('course_id', $courseIds)
+                    ->delete();
+            }
 
             foreach ($quote['lines'] as $line) {
                 $tuition = (int) $line['tuition'];

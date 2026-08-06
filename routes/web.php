@@ -14,6 +14,7 @@ use App\Http\Controllers\HolidayController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\StudentController;
 use App\Http\Controllers\StudentPaymentController;
+use App\Http\Controllers\StudentPromotionController;
 use App\Http\Controllers\TeacherController;
 use App\Http\Controllers\TuitionBagStatisticsController;
 use App\Http\Controllers\UserController;
@@ -58,6 +59,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('students/{student}/payments', [StudentController::class, 'payments'])->name('students.payments');
         Route::get('students/{student}/attendance-rate', [StudentController::class, 'attendanceRate'])->name('students.attendance-rate');
         Route::get('students/{student}/courses-schedule', [StudentController::class, 'coursesSchedule'])->name('students.courses-schedule');
+        Route::delete('students/{student}/courses/{course}', [StudentController::class, 'destroyCourse'])->name('students.courses.destroy');
         Route::get('teachers', [TeacherController::class, 'index'])->name('teachers.index');
         Route::get('teachers/{teacher}/courses-schedule', [TeacherController::class, 'coursesSchedule'])->name('teachers.courses-schedule');
         Route::get('courses', [CourseController::class, 'index'])->name('courses.index');
@@ -81,6 +83,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('tuition-bag-statistics/cancel-payment', [TuitionBagStatisticsController::class, 'cancelPayment'])->name('tuition-bag-statistics.cancel-payment');
 
         Route::get('student-payments', [StudentPaymentController::class, 'index'])->name('student-payments.index');
+        Route::get('payment-lists', [StudentPaymentController::class, 'roster'])->name('payment-lists.index');
+        Route::get('payment-lists/pdf', [StudentPaymentController::class, 'rosterPdf'])->name('payment-lists.pdf');
         Route::get('student-payments/create', [StudentPaymentController::class, 'create'])->name('student-payments.create');
         Route::get('student-payments/search', [StudentPaymentController::class, 'search'])->name('student-payments.search');
         Route::get('student-payments/{student}/quote', [StudentPaymentController::class, 'quote'])->name('student-payments.quote');
@@ -101,6 +105,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::resource('courses', CourseController::class)->except(['show', 'index']);
         Route::resource('academic-years', AcademicYearController::class)->except('show');
         Route::resource('grade-levels', GradeLevelController::class)->except('show');
+        Route::get('student-promotions', [StudentPromotionController::class, 'index'])->name('student-promotions.index');
+        Route::post('student-promotions', [StudentPromotionController::class, 'store'])->name('student-promotions.store');
         Route::resource('fee-plans', FeePlanController::class)->except('show');
         Route::get('holidays', [HolidayController::class, 'index'])->name('holidays.index');
         Route::post('holidays', [HolidayController::class, 'store'])->name('holidays.store');

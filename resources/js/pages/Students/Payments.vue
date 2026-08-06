@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { Head, Link } from '@inertiajs/vue3';
+import { CalendarDays } from 'lucide-vue-next';
+import ListPagination from '@/components/layout/ListPagination.vue';
+import PageHeader from '@/components/layout/PageHeader.vue';
+import { Button } from '@/components/ui/button';
 
 type Row = {
     id: number;
@@ -25,74 +29,87 @@ defineProps<{
     rows: Paginated<Row>;
 }>();
 
+const formatMoney = (n: number) => n.toLocaleString('zh-TW');
+
+const statusLabel = (status: string) => {
+    if (status === 'paid') return '已繳';
+    if (status === 'cancelled') return '已取消';
+    return '未繳';
+};
+
 defineOptions({
     layout: {
         breadcrumbs: [
             { title: '學生管理', href: '/students' },
-            { title: '繳費紀錄', href: '#' },
+            { title: '繳費明細', href: '#' },
         ],
     },
 });
 </script>
 
 <template>
-    <Head :title="`繳費紀錄 - ${student.name}`" />
+    <Head :title="`繳費明細 - ${student.name}`" />
     <div class="page-shell">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-            <h1 class="text-xl font-semibold">繳費紀錄（{{ student.name }}）</h1>
-            <div class="flex flex-wrap gap-3 text-sm">
-                <Link
-                    :href="`/student-payments/${student.id}`"
-                    class="text-primary underline-offset-4 hover:underline"
-                >
-                    學生收款明細
-                </Link>
-                <Link href="/students" class="text-primary underline-offset-4 hover:underline">返回學生管理</Link>
-            </div>
-        </div>
+        <PageHeader
+            :title="`繳費明細（${student.name}）`"
+            description="依帳期列出各科應收／已收。已繳紀錄會永久保留，即使之後停修該課程也不會消失。"
+        >
+            <template #actions>
+                <Button variant="outline" as-child>
+                    <Link :href="`/students/${student.id}/courses-schedule`">
+                        <CalendarDays class="size-4" />
+                        課程與行事曆
+                    </Link>
+                </Button>
+                <Button variant="outline" as-child>
+                    <Link :href="`/student-payments/${student.id}`">學生收款明細</Link>
+                </Button>
+                <Button variant="outline" as-child>
+                    <Link :href="`/students/${student.id}/edit`">返回編輯</Link>
+                </Button>
+            </template>
+        </PageHeader>
 
-        <div class="rounded-xl border border-sidebar-border/70 p-4 overflow-x-auto">
+        <div class="overflow-x-auto rounded-xl border border-sidebar-border/70 p-4">
             <table class="w-full text-sm">
                 <thead>
                     <tr class="border-b">
                         <th class="py-2 text-left">帳期</th>
-                        <th class="py-2 text-left">班級</th>
                         <th class="py-2 text-left">課程</th>
                         <th class="py-2 text-right">應收</th>
                         <th class="py-2 text-right">已收</th>
                         <th class="py-2 text-left">狀態</th>
                         <th class="py-2 text-left">收款日</th>
-                        <th class="py-2 text-left">繳費確認人</th>
+                        <th class="py-2 text-left">收款人</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr v-for="row in rows.data" :key="row.id" class="border-b">
-                        <td class="py-2">{{ row.billing_year }}/{{ row.billing_month }}</td>
-                        <td class="py-2">{{ row.classroom_name }}</td>
-                        <td class="py-2">{{ row.course_category_name }} / {{ row.course_name }}</td>
-                        <td class="py-2 text-right">{{ row.expected_amount }}</td>
-                        <td class="py-2 text-right">{{ row.paid_amount }}</td>
-                        <td class="py-2">{{ row.status === 'paid' ? '已繳' : '未繳' }}</td>
-                        <td class="py-2">{{ row.paid_date ?? '-' }}</td>
+                        <td class="py-2 whitespace-nowrap">
+                            {{ row.billing_year }}/{{ row.billing_month }}
+                        </td>
+                        <td class="py-2">
+                            {{ row.course_category_name }} / {{ row.course_name }}
+                        </td>
+                        <td class="py-2 text-right tabular-nums">
+                            {{ formatMoney(row.expected_amount) }}
+                        </td>
+                        <td class="py-2 text-right tabular-nums">
+                            {{ formatMoney(row.paid_amount) }}
+                        </td>
+                        <td class="py-2">{{ statusLabel(row.status) }}</td>
+                        <td class="py-2 whitespace-nowrap">{{ row.paid_date ?? '—' }}</td>
                         <td class="py-2">{{ row.settled_by_name }}</td>
                     </tr>
                     <tr v-if="rows.data.length === 0">
-                        <td colspan="8" class="py-8 text-center text-muted-foreground">目前沒有繳費紀錄。</td>
+                        <td colspan="7" class="py-8 text-center text-muted-foreground">
+                            目前沒有繳費紀錄。
+                        </td>
                     </tr>
                 </tbody>
             </table>
         </div>
 
-        <div class="flex flex-wrap gap-2">
-            <Link
-                v-for="link in rows.links"
-                :key="link.label"
-                :href="link.url || '#'"
-                class="rounded border px-3 py-1 text-sm"
-                :class="{ 'bg-primary text-primary-foreground': link.active, 'pointer-events-none opacity-50': !link.url }"
-                v-html="link.label"
-            />
-        </div>
+        <ListPagination :links="rows.links" class="mt-4" />
     </div>
 </template>
-

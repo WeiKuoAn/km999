@@ -123,6 +123,18 @@ const noteDialogTitle = computed(() => {
     return `${row.billing_year}/${row.billing_month}｜${row.course_category_name}／${row.course_name}`;
 });
 
+const noteDialogItems = computed(() => {
+    const note = activeNoteRow.value?.note?.trim();
+    if (!note) {
+        return [];
+    }
+
+    return note
+        .split('｜')
+        .map((part) => part.trim())
+        .filter((part) => part !== '');
+});
+
 const openNote = (row: Row) => {
     if (!row.note) {
         return;
@@ -337,11 +349,22 @@ defineOptions({
                     <DialogTitle>{{ noteDialogTitle }}</DialogTitle>
                     <DialogDescription>完整備註內容</DialogDescription>
                 </DialogHeader>
-                <p
-                    class="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground"
+                <ul
+                    v-if="noteDialogItems.length"
+                    class="space-y-2 text-sm leading-relaxed text-foreground"
                 >
-                    {{ activeNoteRow?.note }}
-                </p>
+                    <li
+                        v-for="(item, index) in noteDialogItems"
+                        :key="`${index}-${item}`"
+                        class="flex gap-2 rounded-md border border-sidebar-border/60 bg-muted/20 px-3 py-2"
+                    >
+                        <span class="mt-0.5 text-muted-foreground">•</span>
+                        <span class="min-w-0 flex-1 break-words">{{
+                            item
+                        }}</span>
+                    </li>
+                </ul>
+                <p v-else class="text-sm text-muted-foreground">無備註</p>
             </DialogContent>
         </Dialog>
     </div>

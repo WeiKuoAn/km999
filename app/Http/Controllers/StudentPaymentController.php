@@ -8,6 +8,7 @@ use App\Models\Student;
 use App\Models\User;
 use App\Support\BillingRenewal;
 use App\Support\EnrollmentPricing;
+use App\Support\PaymentRosterBuilder;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -148,6 +149,71 @@ class StudentPaymentController extends Controller
                 'q' => $q,
                 'status' => $status,
             ],
+        ]);
+    }
+
+    /**
+     * 繳費名單：已繳過費、但下一期尚未繳的學生（例：已繳 7–9 → 列出 10–12）。
+     */
+    public function roster(Request $request): Response
+    {
+        $validated = $request->validate([
+            'q' => ['nullable', 'string', 'max:255'],
+            'year' => ['nullable', 'integer', 'between:2000,2100'],
+        ]);
+
+        $q = trim((string) ($validated['q'] ?? ''));
+        $year = isset($validated['year']) ? (int) $validated['year'] : null;
+
+        $allRows = PaymentRosterBuilder::build($q === '' ? null : $q, $year);
+        $allRows = $this->filterRosterRowsForTeacher($allRows);
+        $page = max(1, (int) $request->input('page', 1));
+        $perPage = 50;
+        $slice = array_slice($allRows, ($page - 1) * $perPage, $perPage);
+        $paginator = new \Illuminate\Pagination\LengthAwarePaginator(
+            $slice,
+            count($allRows),
+            $perPage,
+            $page,
+            [
+                'path' => $request->url(),
+                'query' => $request->query(),
+            ]
+        );
+
+        return Inertia::render('StudentPayments/Roster', [
+            'rows' => $paginator,
+            'total_count' => count($allRows),
+            'filters' => [
+                'q' => $q,
+                'year' => $year === null ? '' : (string) $year,
+            ],
+        ]);
+    }
+
+    /** 繳費名單紙本 PDF（瀏覽器列印／另存 PDF） */
+    public function rosterPdf(Request $request)
+    {
+        $validated = $request->validate([
+            'q' => ['nullable', 'string', 'max:255'],
+            'year' => ['nullable', 'integer', 'between:2000,2100'],
+        ]);
+
+        $q = trim((string) ($validated['q'] ?? ''));
+        $year = isset($validated['year']) ? (int) $validated['year'] : null;
+        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year);
+        $rows = $this->filterRosterRowsForTeacher($rows);
+
+        $mid = (int) ceil(count($rows) / 2);
+        $left = array_slice($rows, 0, $mid);
+        $right = array_slice($rows, $mid);
+
+        return response()->view('payment-lists.print', [
+            'left' => $left,
+            'right' => $right,
+            'generatedAt' => now()->format('Y-m-d H:i'),
+            'yearLabel' => $year === null ? '全部' : (string) $year,
+            'q' => $q,
         ]);
     }
 
@@ -534,6 +600,36 @@ class StudentPaymentController extends Controller
         if (! $ok) {
             abort(403);
         }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    private function filterRosterRowsForTeacher(array $rows): array
+    {
+        $user = auth()->user();
+        if ($user?->role !== User::ROLE_TEACHER) {
+            return $rows;
+        }
+
+        $teacherId = $user->teacher?->id;
+        if ($teacherId === null) {
+            return [];
+        }
+
+        $allowedIds = Student::query()
+            ->whereHas('enrollments.classroom', fn ($q) => $q->where('teacher_id', $teacherId))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $allowed = array_fill_keys($allowedIds, true);
+
+        return array_values(array_filter(
+            $rows,
+            fn (array $row): bool => isset($allowed[(int) ($row['student_id'] ?? 0)])
+        ));
     }
 
     private function restrictReconciliationsForTeacher($query): void

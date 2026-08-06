@@ -2,6 +2,7 @@
 import { Link } from '@inertiajs/vue3';
 import { usePage } from '@inertiajs/vue3';
 import {
+    ArrowRightLeft,
     BookOpenCheck,
     CalendarOff,
     CalendarRange,
@@ -74,6 +75,11 @@ const navGroups = computed<NavGroup[]>(() => {
                         href: '/student-payments',
                         icon: Wallet,
                     },
+                    {
+                        title: '繳費名單',
+                        href: '/payment-lists',
+                        icon: CircleDollarSign,
+                    },
                 ],
             },
         ];
@@ -89,6 +95,11 @@ const navGroups = computed<NavGroup[]>(() => {
             title: '學生收款',
             href: '/student-payments',
             icon: Wallet,
+        },
+        {
+            title: '繳費名單',
+            href: '/payment-lists',
+            icon: CircleDollarSign,
         },
     ];
 
@@ -126,6 +137,11 @@ const navGroups = computed<NavGroup[]>(() => {
                 title: '年級編號',
                 href: '/grade-levels',
                 icon: Layers,
+            },
+            {
+                title: '學生轉檔',
+                href: '/student-promotions',
+                icon: ArrowRightLeft,
             },
             {
                 title: '收費標準',

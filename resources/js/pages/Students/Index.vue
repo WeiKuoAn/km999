@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
+import { CalendarDays, Receipt } from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
@@ -8,6 +9,7 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import StudentStatusFilterSelect from '@/components/StudentStatusFilterSelect.vue';
 import TableDeleteIconButton from '@/components/table/TableDeleteIconButton.vue';
 import TableEditIconLink from '@/components/table/TableEditIconLink.vue';
+import TableIconLink from '@/components/table/TableIconLink.vue';
 import { studentStatusLabel, studentStatusPillClass } from '@/lib/studentStatus';
 
 type Student = {
@@ -135,6 +137,18 @@ const resetFilters = () => {
                 </MobileRecordField>
                 <template #actions>
                     <div class="mobile-card-actions">
+                        <TableIconLink
+                            v-if="canCreateEdit"
+                            :href="`/students/${student.id}/courses-schedule`"
+                            label="課程與行事曆"
+                            :icon="CalendarDays"
+                        />
+                        <TableIconLink
+                            v-if="canCreateEdit"
+                            :href="`/students/${student.id}/payments`"
+                            label="繳費明細"
+                            :icon="Receipt"
+                        />
                         <TableEditIconLink v-if="canCreateEdit" :href="`/students/${student.id}/edit`" />
                         <TableDeleteIconButton v-if="canDelete" @click="destroyStudent(student.id)" />
                     </div>
@@ -176,7 +190,19 @@ const resetFilters = () => {
                             </span>
                         </td>
                         <td class="py-2.5">
-                            <div class="flex flex-wrap gap-2">
+                            <div class="flex flex-wrap gap-1">
+                                <TableIconLink
+                                    v-if="canCreateEdit"
+                                    :href="`/students/${student.id}/courses-schedule`"
+                                    label="課程與行事曆"
+                                    :icon="CalendarDays"
+                                />
+                                <TableIconLink
+                                    v-if="canCreateEdit"
+                                    :href="`/students/${student.id}/payments`"
+                                    label="繳費明細"
+                                    :icon="Receipt"
+                                />
                                 <TableEditIconLink v-if="canCreateEdit" :href="`/students/${student.id}/edit`" />
                                 <TableDeleteIconButton v-if="canDelete" @click="destroyStudent(student.id)" />
                             </div>
