@@ -9,7 +9,7 @@ use App\Support\StudentCodeGenerator;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\Validator;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -167,15 +167,14 @@ class StudentPromotionController extends Controller
             'student_ids.*' => ['integer', 'exists:students,id'],
         ]);
 
-        $request->validateWithBag(function (Validator $validator) use ($validated): void {
-            $graduate = (bool) ($validated['graduate'] ?? false);
-            if (! $graduate && empty($validated['to_grade_level_id'])) {
-                $validator->errors()->add('to_grade_level_id', '請選擇新的年級，或改為畢業轉檔。');
-            }
-        });
+        $graduate = (bool) ($validated['graduate'] ?? false);
+        if (! $graduate && empty($validated['to_grade_level_id'])) {
+            throw ValidationException::withMessages([
+                'to_grade_level_id' => '請選擇新的年級，或改為畢業轉檔。',
+            ]);
+        }
 
         $fromGrade = GradeLevel::query()->findOrFail((int) $validated['from_grade_level_id']);
-        $graduate = (bool) ($validated['graduate'] ?? false);
         $status = (string) ($validated['status'] ?? 'active');
         $studentIds = array_map('intval', $validated['student_ids']);
 
