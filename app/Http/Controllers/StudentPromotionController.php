@@ -227,6 +227,7 @@ class StudentPromotionController extends Controller
                     $toGrade,
                     $student->id,
                     $reservedCodes,
+                    true,
                 );
                 $reservedCodes[] = $newCode;
 
