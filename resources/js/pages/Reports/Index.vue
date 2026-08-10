@@ -5,6 +5,7 @@ import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import RevenuePieChart from '@/components/reports/RevenuePieChart.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -28,6 +29,8 @@ type BatchRow = {
     pay_cycle?: string | null;
 };
 
+type PieSlice = { label: string; value: number };
+
 type Paginated<T> = {
     data: T[];
     links: Array<{ url: string | null; label: string; active: boolean }>;
@@ -37,6 +40,8 @@ const props = defineProps<{
     year: number;
     monthRows: Array<{ month: number; revenue: number }>;
     yearTotal: number;
+    pieByGrade: PieSlice[];
+    pieBySubject: PieSlice[];
     batches: Paginated<BatchRow>;
     teacherOptions?: Array<{ id: number; name: string }>;
     canFilterByTeacher?: boolean;
@@ -93,7 +98,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="每月營收報表"
-            description="已完成繳費確認且已收款；上方為月份合計，下方依帳期條列（同批收款合併）。"
+            description="已完成繳費確認且已收款；上方為月份合計與圓餅圖（年級／科目），下方依帳期條列。"
         >
             <template #actions>
                 <Button variant="outline" as-child>
@@ -194,6 +199,17 @@ defineOptions({
                     </tbody>
                 </table>
             </div>
+        </div>
+
+        <div class="mb-4 grid gap-4 lg:grid-cols-2">
+            <RevenuePieChart
+                :title="`${year} 年營收｜依年級`"
+                :items="pieByGrade"
+            />
+            <RevenuePieChart
+                :title="`${year} 年營收｜依科目`"
+                :items="pieBySubject"
+            />
         </div>
 
         <div class="mobile-card-list">

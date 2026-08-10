@@ -103,6 +103,14 @@ const navGroups = computed<NavGroup[]>(() => {
         },
     ];
 
+    if (user.value.role === 'super_admin' || user.value.role === 'admin') {
+        mainItems.push({
+            title: '學生轉檔',
+            href: '/student-promotions',
+            icon: ArrowRightLeft,
+        });
+    }
+
     if (user.value.role === 'super_admin') {
         mainItems.push({
             title: '每月營收報表',
@@ -137,11 +145,6 @@ const navGroups = computed<NavGroup[]>(() => {
                 title: '年級編號',
                 href: '/grade-levels',
                 icon: Layers,
-            },
-            {
-                title: '學生轉檔',
-                href: '/student-promotions',
-                icon: ArrowRightLeft,
             },
             {
                 title: '收費標準',

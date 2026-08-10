@@ -20,7 +20,7 @@ type Student = {
     phone: string | null;
     parent_name: string | null;
     parent_phone: string | null;
-    status: 'active' | 'paused';
+    status: 'active' | 'paused' | 'graduated';
 };
 
 type Paginated<T> = {

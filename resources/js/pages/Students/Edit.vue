@@ -29,7 +29,7 @@ const props = defineProps<{
         address_zip: string | null;
         address_detail: string | null;
         gender: string | null;
-        status: 'active' | 'paused';
+        status: 'active' | 'paused' | 'graduated';
         note: string | null;
         academic_year_id: number | null;
         grade_level_id: number | null;

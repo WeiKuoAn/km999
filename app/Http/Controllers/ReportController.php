@@ -62,6 +62,42 @@ class ReportController extends Controller
             $yearTotal += $revenue;
         }
 
+        $pieByGrade = (clone $base)
+            ->selectRaw("
+                COALESCE(grade_levels.name, '未分年級') as label,
+                COALESCE(MIN(grade_levels.sort_order), 9999) as sort_order,
+                SUM(reconciliations.paid_amount) as value
+            ")
+            ->groupBy('grade_levels.name')
+            ->orderBy('sort_order')
+            ->orderBy('label')
+            ->get()
+            ->map(fn ($row): array => [
+                'label' => (string) $row->label,
+                'value' => (int) $row->value,
+            ])
+            ->values()
+            ->all();
+
+        $pieBySubject = (clone $base)
+            ->leftJoin('courses', 'courses.id', '=', 'reconciliations.course_id')
+            ->leftJoin('course_categories', 'course_categories.id', '=', 'courses.course_category_id')
+            ->selectRaw("
+                COALESCE(course_categories.name, courses.name, '未分科目') as label,
+                COALESCE(MIN(course_categories.sort_order), 9999) as sort_order,
+                SUM(reconciliations.paid_amount) as value
+            ")
+            ->groupBy(DB::raw('COALESCE(course_categories.name, courses.name, \'未分科目\')'))
+            ->orderBy('sort_order')
+            ->orderBy('label')
+            ->get()
+            ->map(fn ($row): array => [
+                'label' => (string) $row->label,
+                'value' => (int) $row->value,
+            ])
+            ->values()
+            ->all();
+
         $batches = (clone $base)
             ->selectRaw("
                 MAX(reconciliations.id) as id,
@@ -134,6 +170,8 @@ class ReportController extends Controller
             'year' => $year,
             'monthRows' => $monthRows,
             'yearTotal' => $yearTotal,
+            'pieByGrade' => $pieByGrade,
+            'pieBySubject' => $pieBySubject,
             'batches' => $batches,
             'teacherOptions' => Teacher::query()->where('status', 'active')->orderBy('name')->get(['id', 'name'])->all(),
             'canFilterByTeacher' => true,

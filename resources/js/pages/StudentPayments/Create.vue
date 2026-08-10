@@ -63,6 +63,8 @@ const props = defineProps<{
     holidays?: Array<{ date: string; name: string }>;
     has_prior_payments?: boolean;
     suggested_start_date?: string | null;
+    suggested_course_ids?: number[];
+    suggested_pay_cycle?: 'monthly' | 'quarterly' | 'annual' | null;
 }>();
 
 const page = usePage();
@@ -77,6 +79,29 @@ const holidaySet = computed(
 const hasPriorPayments = computed(() => !!props.has_prior_payments);
 const suggestedStartDate = computed(() => props.suggested_start_date ?? null);
 
+const defaultCourseIds = (): number[] => {
+    const suggested = (props.suggested_course_ids ?? []).filter((id) =>
+        props.subjects.some((s) => s.id === id),
+    );
+    if (suggested.length > 0) {
+        return [...suggested];
+    }
+
+    // 全新報名：預選最多兩門已設定價目的核心科
+    return props.subjects
+        .filter((s) => s.fee_plan_id !== null && s.pricing_group === 'core')
+        .slice(0, 2)
+        .map((s) => s.id);
+};
+
+const defaultPayCycle = (): 'monthly' | 'quarterly' | 'annual' => {
+    const cycle = props.suggested_pay_cycle;
+    if (cycle === 'monthly' || cycle === 'quarterly' || cycle === 'annual') {
+        return cycle;
+    }
+    return 'quarterly';
+};
+
 const query = ref(
     props.student
         ? `${props.student.student_code ? `${props.student.student_code} ` : ''}${props.student.name}`.trim()
@@ -89,13 +114,8 @@ const searchError = ref('');
 let timer: ReturnType<typeof setTimeout> | null = null;
 let abortController: AbortController | null = null;
 
-const selected = ref<number[]>(
-    props.subjects
-        .filter((s) => s.fee_plan_id !== null && s.pricing_group === 'core')
-        .slice(0, 2)
-        .map((s) => s.id),
-);
-const payCycle = ref<'monthly' | 'quarterly' | 'annual'>('quarterly');
+const selected = ref<number[]>(defaultCourseIds());
+const payCycle = ref<'monthly' | 'quarterly' | 'annual'>(defaultPayCycle());
 const allowance = ref(0);
 const startDate = ref(
     hasPriorPayments.value && suggestedStartDate.value
@@ -184,10 +204,8 @@ const refillSessionDates = () => {
 watch(
     () => props.student?.id,
     () => {
-        selected.value = props.subjects
-            .filter((s) => s.fee_plan_id !== null && s.pricing_group === 'core')
-            .slice(0, 2)
-            .map((s) => s.id);
+        selected.value = defaultCourseIds();
+        payCycle.value = defaultPayCycle();
         if (props.student) {
             query.value =
                 `${props.student.student_code ? `${props.student.student_code} ` : ''}${props.student.name}`.trim();
@@ -195,6 +213,15 @@ watch(
         if (props.has_prior_payments && props.suggested_start_date) {
             startDate.value = props.suggested_start_date;
         }
+        refillSessionDates();
+    },
+);
+
+watch(
+    () => [props.suggested_course_ids, props.suggested_pay_cycle] as const,
+    () => {
+        selected.value = defaultCourseIds();
+        payCycle.value = defaultPayCycle();
         refillSessionDates();
     },
 );

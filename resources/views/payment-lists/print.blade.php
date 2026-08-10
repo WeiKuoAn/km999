@@ -7,10 +7,11 @@
         * { box-sizing: border-box; }
         body {
             margin: 0;
-            padding: 12mm 10mm;
+            padding: 10mm 8mm;
             font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif;
-            font-size: 11px;
+            font-size: 14px;
             color: #111;
+            line-height: 1.4;
         }
         .toolbar {
             display: flex;
@@ -26,7 +27,7 @@
             padding: 8px 14px;
             border-radius: 6px;
             text-decoration: none;
-            font-size: 13px;
+            font-size: 14px;
             cursor: pointer;
         }
         .toolbar a.secondary {
@@ -34,39 +35,22 @@
             color: #166534;
         }
         .meta {
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             color: #444;
-            font-size: 12px;
-        }
-        .sheet {
-            display: flex;
-            gap: 8px;
-            align-items: flex-start;
-        }
-        .col {
-            flex: 1 1 0;
-            min-width: 0;
-        }
-        .side {
-            width: 78px;
-            flex: 0 0 78px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding-top: 22px;
-        }
-        .side .box {
-            border: 1px solid #333;
-            padding: 8px 6px;
-            writing-mode: vertical-rl;
-            text-orientation: mixed;
-            font-size: 11px;
-            line-height: 1.35;
-            min-height: 110px;
+            font-size: 13px;
             text-align: center;
         }
-        .side .box.fee { background: #fef9c3; }
-        .side .box.cycle { background: #dcfce7; }
+        .sheet {
+            width: 100%;
+            max-width: 190mm;
+            margin: 0 auto;
+        }
+        .cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            width: 100%;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -74,49 +58,55 @@
         }
         th, td {
             border: 1px solid #222;
-            padding: 4px 5px;
-            vertical-align: top;
-            height: 28px;
+            padding: 7px 4px;
+            vertical-align: middle;
+            text-align: center;
+            word-break: break-word;
         }
         th {
             background: #f3f4f6;
             font-weight: 700;
-            text-align: center;
+            font-size: 14px;
+        }
+        td {
+            font-size: 13px;
+            height: 36px;
         }
         .name { width: 22%; }
         .subj { width: 34%; }
-        .fee { width: 16%; text-align: right; font-variant-numeric: tabular-nums; }
-        .note { width: 28%; }
-        .marks {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px 8px;
-            margin-bottom: 2px;
+        .fee { width: 18%; font-variant-numeric: tabular-nums; font-weight: 600; }
+        .note { width: 26%; }
+        .subj-main { font-weight: 600; font-size: 13px; }
+        .period {
+            margin-top: 2px;
+            color: #555;
+            font-size: 12px;
+            font-weight: 400;
         }
-        .mark {
-            display: inline-flex;
-            align-items: center;
-            gap: 2px;
-            white-space: nowrap;
-        }
-        .mark .box {
-            display: inline-block;
-            width: 11px;
-            height: 11px;
-            border: 1px solid #111;
-            text-align: center;
-            line-height: 10px;
-            font-size: 10px;
-        }
-        .period { color: #444; font-size: 10px; }
         .empty td {
-            height: 28px;
+            height: 36px;
             border: 1px solid #222;
         }
+        .legend {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .legend .box {
+            border: 1px solid #333;
+            padding: 8px 10px;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        .legend .fee { background: #fef9c3; }
+        .legend .cycle { background: #dcfce7; }
         @media print {
             .toolbar { display: none !important; }
             body { padding: 6mm; }
-            @page { size: A4 landscape; margin: 8mm; }
+            .sheet { max-width: none; }
+            @page { size: A4 portrait; margin: 8mm; }
         }
     </style>
 </head>
@@ -129,12 +119,20 @@
     <div class="meta">
         繳費名單（尚未繳下一期）｜產生時間 {{ $generatedAt }}｜年份 {{ $yearLabel }}
         @if($q !== '')｜搜尋：{{ $q }}@endif
-        ｜共 {{ count($left) + count($right) }} 人
+        ｜共 {{ count($rows) }} 人
     </div>
 
+    @php
+        $mid = (int) ceil(count($rows) / 2);
+        $left = array_slice($rows, 0, $mid);
+        $right = array_slice($rows, $mid);
+        $rowCount = max(count($left), count($right), 1);
+        $padTo = max($rowCount, 20);
+    @endphp
+
     <div class="sheet">
-        @foreach ([['rows' => $left], ['rows' => $right]] as $column)
-            <div class="col">
+        <div class="cols">
+            @foreach ([$left, $right] as $columnRows)
                 <table>
                     <thead>
                         <tr>
@@ -145,27 +143,25 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @forelse ($column['rows'] as $row)
+                        @forelse ($columnRows as $row)
                             <tr>
                                 <td class="name">{{ $row['student_name'] }}</td>
                                 <td class="subj">
-                                    <div class="marks">
-                                        @foreach ($row['subject_marks'] as $mark)
-                                            <span class="mark"><span class="box">✓</span>{{ mb_substr($mark, 0, 1) }}</span>
-                                        @endforeach
-                                    </div>
+                                    <div class="subj-main">{{ $row['subjects_label'] }}</div>
                                     <div class="period">{{ $row['period_label'] }}</div>
                                 </td>
                                 <td class="fee">{{ number_format($row['fee']) }}</td>
-                                <td class="note">{{ $row['note'] }}</td>
+                                <td class="note">{{ $row['note'] !== '' ? $row['note'] : '' }}</td>
                             </tr>
                         @empty
-                            <tr>
-                                <td colspan="4" style="text-align:center;color:#666;padding:24px;">無待繳名單</td>
-                            </tr>
+                            @if ($loop->first && count($rows) === 0)
+                                <tr>
+                                    <td colspan="4" style="color:#666;padding:24px;">無待繳名單</td>
+                                </tr>
+                            @endif
                         @endforelse
-                        @if (count($column['rows']) > 0)
-                            @for ($i = count($column['rows']); $i < max(count($left), count($right), 18); $i++)
+                        @if (count($rows) > 0)
+                            @for ($i = count($columnRows); $i < $padTo; $i++)
                                 <tr class="empty">
                                     <td></td><td></td><td></td><td></td>
                                 </tr>
@@ -173,19 +169,14 @@
                         @endif
                     </tbody>
                 </table>
-            </div>
-        @endforeach
+            @endforeach
+        </div>
 
-        <div class="side">
-            <div class="box fee">教材費／學期 依收費標準</div>
-            <div class="box fee">學費／依繳別與科目數計價</div>
-            <div class="box cycle">繳費週期 季繳／三個月（首期可不足）</div>
+        <div class="legend">
+            <div class="box fee">教材費／學期<br>依收費標準</div>
+            <div class="box fee">學費<br>依繳別與科目數計價</div>
+            <div class="box cycle">繳費週期<br>季繳／三個月（首期可不足）</div>
         </div>
     </div>
-
-    <script>
-        // 可選：開啟後自動跳出列印對話框（註解掉則手動按按鈕）
-        // window.addEventListener('load', () => setTimeout(() => window.print(), 300));
-    </script>
 </body>
 </html>

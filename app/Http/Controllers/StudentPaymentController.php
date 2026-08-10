@@ -204,13 +204,8 @@ class StudentPaymentController extends Controller
         $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year);
         $rows = $this->filterRosterRowsForTeacher($rows);
 
-        $mid = (int) ceil(count($rows) / 2);
-        $left = array_slice($rows, 0, $mid);
-        $right = array_slice($rows, $mid);
-
         return response()->view('payment-lists.print', [
-            'left' => $left,
-            'right' => $right,
+            'rows' => $rows,
             'generatedAt' => now()->format('Y-m-d H:i'),
             'yearLabel' => $year === null ? '全部' : (string) $year,
             'q' => $q,
@@ -222,6 +217,9 @@ class StudentPaymentController extends Controller
     {
         $validated = $request->validate([
             'student_id' => ['nullable', 'integer', 'exists:students,id'],
+            'course_ids' => ['nullable', 'array'],
+            'course_ids.*' => ['integer', 'exists:courses,id'],
+            'pay_cycle' => ['nullable', 'string', 'in:monthly,quarterly,annual'],
         ]);
 
         $studentPayload = null;
@@ -229,6 +227,8 @@ class StudentPaymentController extends Controller
         $warnings = [];
         $hasPriorPayments = false;
         $suggestedStartDate = null;
+        $suggestedCourseIds = [];
+        $suggestedPayCycle = 'quarterly';
 
         if (! empty($validated['student_id'])) {
             $student = Student::query()->findOrFail((int) $validated['student_id']);
@@ -245,6 +245,33 @@ class StudentPaymentController extends Controller
             ];
             $hasPriorPayments = BillingRenewal::hasPriorPayments($student);
             $suggestedStartDate = BillingRenewal::suggestedStartDate($student);
+
+            $subjectIdSet = collect($subjects)->pluck('id')->map(fn ($id) => (int) $id)->all();
+            $requestCourseIds = array_values(array_unique(array_map(
+                'intval',
+                $validated['course_ids'] ?? []
+            )));
+            $requestCourseIds = array_values(array_filter(
+                $requestCourseIds,
+                fn (int $id) => in_array($id, $subjectIdSet, true)
+            ));
+
+            if ($requestCourseIds !== []) {
+                $suggestedCourseIds = $requestCourseIds;
+            } else {
+                $snapshot = BillingRenewal::lastPaidRenewalSnapshot($student);
+                if ($snapshot !== null) {
+                    $suggestedCourseIds = array_values(array_filter(
+                        $snapshot['course_ids'],
+                        fn (int $id) => in_array($id, $subjectIdSet, true)
+                    ));
+                    $suggestedPayCycle = $snapshot['pay_cycle'];
+                }
+            }
+
+            if (! empty($validated['pay_cycle'])) {
+                $suggestedPayCycle = $validated['pay_cycle'];
+            }
         }
 
         $from = Carbon::today()->subMonths(1)->startOfDay();
@@ -267,6 +294,8 @@ class StudentPaymentController extends Controller
             'holidays' => $holidays,
             'has_prior_payments' => $hasPriorPayments,
             'suggested_start_date' => $suggestedStartDate,
+            'suggested_course_ids' => $suggestedCourseIds,
+            'suggested_pay_cycle' => $suggestedPayCycle,
         ]);
     }
 

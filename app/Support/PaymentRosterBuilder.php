@@ -4,11 +4,8 @@ namespace App\Support;
 
 use App\Models\Course;
 use App\Models\Student;
-use App\Models\StudentCourseDrop;
 use App\Models\Reconciliation;
 use Carbon\Carbon;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Schema;
 
 final class PaymentRosterBuilder
 {
@@ -32,7 +29,8 @@ final class PaymentRosterBuilder
      *   note:string,
      *   pay_cycle:string,
      *   pay_cycle_label:string,
-     *   fee_source:string
+     *   fee_source:string,
+     *   course_ids:list<int>
      * }>
      */
     public static function build(?string $q = null, ?int $year = null): array
@@ -64,29 +62,15 @@ final class PaymentRosterBuilder
             ->orderBy('name')
             ->get();
 
-        $droppedByStudent = [];
-        if (Schema::hasTable('student_course_drops')) {
-            $droppedByStudent = StudentCourseDrop::query()
-                ->whereIn('student_id', $students->pluck('id')->all())
-                ->get(['student_id', 'course_id'])
-                ->groupBy('student_id')
-                ->map(fn (Collection $rows) => $rows->pluck('course_id')->map(fn ($id) => (int) $id)->all())
-                ->all();
-        }
-
         $rows = [];
 
         foreach ($students as $student) {
-            $snapshot = self::lastPaidSnapshot($student);
+            $snapshot = BillingRenewal::lastPaidRenewalSnapshot($student);
             if ($snapshot === null) {
                 continue;
             }
 
-            $dropped = $droppedByStudent[$student->id] ?? [];
-            $courseIds = array_values(array_filter(
-                $snapshot['course_ids'],
-                fn (int $id) => ! in_array($id, $dropped, true)
-            ));
+            $courseIds = $snapshot['course_ids'];
             if ($courseIds === []) {
                 continue;
             }
@@ -168,6 +152,7 @@ final class PaymentRosterBuilder
                 'pay_cycle' => $payCycle,
                 'pay_cycle_label' => BillingRenewal::payCycleLabel($payCycle),
                 'fee_source' => $feeSource,
+                'course_ids' => $courseIds,
             ];
         }
 
@@ -177,84 +162,6 @@ final class PaymentRosterBuilder
         });
 
         return $rows;
-    }
-
-    /**
-     * @return array{end_year:int,end_month:int,pay_cycle:string,course_ids:list<int>}|null
-     */
-    private static function lastPaidSnapshot(Student $student): ?array
-    {
-        $latest = Reconciliation::query()
-            ->where('student_id', $student->id)
-            ->where('status', 'paid')
-            ->orderByDesc('billing_year')
-            ->orderByDesc('billing_month')
-            ->first(['billing_year', 'billing_month', 'pay_cycle']);
-
-        if ($latest === null) {
-            return null;
-        }
-
-        $endYear = (int) $latest->billing_year;
-        $endMonth = (int) $latest->billing_month;
-
-        $payCycle = Reconciliation::query()
-            ->where('student_id', $student->id)
-            ->where('billing_year', $endYear)
-            ->where('billing_month', $endMonth)
-            ->where('status', 'paid')
-            ->whereNotNull('pay_cycle')
-            ->where('pay_cycle', '!=', '')
-            ->value('pay_cycle');
-
-        $payCycle = is_string($payCycle) && in_array($payCycle, ['monthly', 'quarterly', 'annual'], true)
-            ? $payCycle
-            : 'quarterly';
-
-        $span = BillingRenewal::monthSpan($payCycle);
-        $end = Carbon::create($endYear, $endMonth, 1)->startOfMonth();
-        $windowStart = $end->copy()->subMonths($span - 1);
-        $startKey = ((int) $windowStart->year) * 12 + (int) $windowStart->month;
-        $endKey = $endYear * 12 + $endMonth;
-
-        $courseIds = Reconciliation::query()
-            ->where('student_id', $student->id)
-            ->where('status', 'paid')
-            ->whereNotNull('course_id')
-            ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey])
-            ->distinct()
-            ->orderBy('course_id')
-            ->pluck('course_id')
-            ->map(fn ($id) => (int) $id)
-            ->values()
-            ->all();
-
-        if ($courseIds === []) {
-            return null;
-        }
-
-        return [
-            'end_year' => $endYear,
-            'end_month' => $endMonth,
-            'pay_cycle' => $payCycle,
-            'course_ids' => $courseIds,
-        ];
-    }
-
-    /**
-     * @return list<array{y:int,m:int}>
-     */
-    private static function monthsFromStart(string $startDate, string $payCycle): array
-    {
-        $span = BillingRenewal::monthSpan($payCycle);
-        $start = Carbon::parse($startDate)->startOfMonth();
-        $months = [];
-        for ($i = 0; $i < $span; $i++) {
-            $d = $start->copy()->addMonths($i);
-            $months[] = ['y' => (int) $d->year, 'm' => (int) $d->month];
-        }
-
-        return $months;
     }
 
     /**
@@ -277,6 +184,22 @@ final class PaymentRosterBuilder
             ->unique()
             ->values()
             ->all();
+    }
+
+    /**
+     * @return list<array{y:int,m:int}>
+     */
+    private static function monthsFromStart(string $startDate, string $payCycle): array
+    {
+        $span = BillingRenewal::monthSpan($payCycle);
+        $start = Carbon::parse($startDate)->startOfMonth();
+        $months = [];
+        for ($i = 0; $i < $span; $i++) {
+            $d = $start->copy()->addMonths($i);
+            $months[] = ['y' => (int) $d->year, 'm' => (int) $d->month];
+        }
+
+        return $months;
     }
 
     private static function periodLabel(int $startYear, int $startMonth, int $endYear, int $endMonth): string

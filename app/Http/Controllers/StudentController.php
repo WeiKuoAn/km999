@@ -34,7 +34,7 @@ class StudentController extends Controller
     {
         $validated = $request->validate([
             'name' => ['nullable', 'string', 'max:255'],
-            'status' => ['nullable', 'in:active,paused'],
+            'status' => ['nullable', 'in:active,paused,graduated'],
         ]);
 
         $name = trim((string) ($validated['name'] ?? ''));
@@ -121,7 +121,7 @@ class StudentController extends Controller
             'class_name' => ['nullable', 'string', 'max:64'],
             'id_number' => ['nullable', 'string', 'max:32'],
             'gender' => ['nullable', 'string', 'max:16', 'in:男,女'],
-            'status' => ['required', 'in:active,paused'],
+            'status' => ['required', 'in:active,paused,graduated'],
             'note' => ['nullable', 'string'],
             'academic_year_id' => ['required', 'integer', 'exists:academic_years,id'],
             'grade_level_id' => ['required', 'integer', 'exists:grade_levels,id'],
@@ -184,7 +184,7 @@ class StudentController extends Controller
             'class_name' => ['nullable', 'string', 'max:64'],
             'id_number' => ['nullable', 'string', 'max:32'],
             'gender' => ['nullable', 'string', 'max:16', 'in:男,女'],
-            'status' => ['required', 'in:active,paused'],
+            'status' => ['required', 'in:active,paused,graduated'],
             'note' => ['nullable', 'string'],
             'academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
             'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],

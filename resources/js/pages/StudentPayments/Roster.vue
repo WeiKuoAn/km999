@@ -27,6 +27,7 @@ type Row = {
     pay_cycle?: string | null;
     pay_cycle_label?: string | null;
     fee_source?: string;
+    course_ids?: number[];
 };
 
 type Paginated<T> = {
@@ -56,8 +57,17 @@ watch(
 
 const formatMoney = (n: number) => n.toLocaleString('zh-TW');
 
-const detailHref = (row: Row) =>
-    `/student-payments/create?student_id=${row.student_id}`;
+const detailHref = (row: Row) => {
+    const params = new URLSearchParams();
+    params.set('student_id', String(row.student_id));
+    for (const id of row.course_ids ?? []) {
+        params.append('course_ids[]', String(id));
+    }
+    if (row.pay_cycle) {
+        params.set('pay_cycle', row.pay_cycle);
+    }
+    return `/student-payments/create?${params.toString()}`;
+};
 
 const filterParams = () => ({
     q: q.value.trim() || undefined,

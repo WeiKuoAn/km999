@@ -142,6 +142,92 @@ final class BillingRenewal
     }
 
     /**
+     * 續期用：最近一輪「已繳」快照（與繳費名單一致），科目已排除停修。
+     *
+     * @return array{
+     *   end_year:int,
+     *   end_month:int,
+     *   pay_cycle:string,
+     *   course_ids:list<int>
+     * }|null
+     */
+    public static function lastPaidRenewalSnapshot(Student $student): ?array
+    {
+        $latest = Reconciliation::query()
+            ->where('student_id', $student->id)
+            ->where('status', 'paid')
+            ->orderByDesc('billing_year')
+            ->orderByDesc('billing_month')
+            ->first(['billing_year', 'billing_month', 'pay_cycle']);
+
+        if ($latest === null) {
+            return null;
+        }
+
+        $endYear = (int) $latest->billing_year;
+        $endMonth = (int) $latest->billing_month;
+
+        $payCycle = Reconciliation::query()
+            ->where('student_id', $student->id)
+            ->where('billing_year', $endYear)
+            ->where('billing_month', $endMonth)
+            ->where('status', 'paid')
+            ->whereNotNull('pay_cycle')
+            ->where('pay_cycle', '!=', '')
+            ->value('pay_cycle');
+
+        $payCycle = is_string($payCycle) && in_array($payCycle, ['monthly', 'quarterly', 'annual'], true)
+            ? $payCycle
+            : 'quarterly';
+
+        $span = self::monthSpan($payCycle);
+        $end = Carbon::create($endYear, $endMonth, 1)->startOfMonth();
+        $windowStart = $end->copy()->subMonths($span - 1);
+        $startKey = ((int) $windowStart->year) * 12 + (int) $windowStart->month;
+        $endKey = $endYear * 12 + $endMonth;
+
+        $courseIds = Reconciliation::query()
+            ->where('student_id', $student->id)
+            ->where('status', 'paid')
+            ->whereNotNull('course_id')
+            ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey])
+            ->distinct()
+            ->orderBy('course_id')
+            ->pluck('course_id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        if ($courseIds === []) {
+            return null;
+        }
+
+        if (Schema::hasTable('student_course_drops')) {
+            $dropped = StudentCourseDrop::query()
+                ->where('student_id', $student->id)
+                ->whereIn('course_id', $courseIds)
+                ->pluck('course_id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+            $courseIds = array_values(array_filter(
+                $courseIds,
+                fn (int $id) => ! in_array($id, $dropped, true)
+            ));
+        }
+
+        if ($courseIds === []) {
+            return null;
+        }
+
+        return [
+            'end_year' => $endYear,
+            'end_month' => $endMonth,
+            'pay_cycle' => $payCycle,
+            'course_ids' => $courseIds,
+        ];
+    }
+
+    /**
      * 明細頁續期按鈕用摘要。
      *
      * @return array{

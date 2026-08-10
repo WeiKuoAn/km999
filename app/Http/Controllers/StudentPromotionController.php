@@ -9,6 +9,7 @@ use App\Support\StudentCodeGenerator;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Validator;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -19,25 +20,29 @@ class StudentPromotionController extends Controller
         $validated = $request->validate([
             'from_grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'to_grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'graduate' => ['nullable', 'boolean'],
             'from_academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
-            'to_academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
             'status' => ['nullable', 'in:active,paused,all'],
         ]);
 
         $fromGradeId = isset($validated['from_grade_level_id']) ? (int) $validated['from_grade_level_id'] : null;
         $toGradeId = isset($validated['to_grade_level_id']) ? (int) $validated['to_grade_level_id'] : null;
+        $graduate = (bool) ($validated['graduate'] ?? false);
         $fromYearId = isset($validated['from_academic_year_id']) ? (int) $validated['from_academic_year_id'] : null;
-        $toYearId = isset($validated['to_academic_year_id']) ? (int) $validated['to_academic_year_id'] : null;
         $status = (string) ($validated['status'] ?? 'active');
 
         $preview = [];
+        $fromGrade = $fromGradeId !== null ? GradeLevel::query()->find($fromGradeId) : null;
         $toGrade = $toGradeId !== null ? GradeLevel::query()->find($toGradeId) : null;
-        $toYear = $toYearId !== null ? AcademicYear::query()->find($toYearId) : null;
 
-        if ($fromGradeId !== null && $toGrade !== null) {
+        if ($fromGrade !== null && ($graduate || $toGrade !== null)) {
+            if ($graduate && ! $this->isGraduationGrade($fromGrade)) {
+                $graduate = false;
+            }
+
             $query = Student::query()
                 ->with(['academicYear:id,year_code,name', 'gradeLevel:id,name,code'])
-                ->where('grade_level_id', $fromGradeId)
+                ->where('grade_level_id', $fromGrade->id)
                 ->orderBy('student_code')
                 ->orderBy('name');
 
@@ -49,45 +54,64 @@ class StudentPromotionController extends Controller
                 $query->where('status', $status);
             }
 
-            $reservedCodes = [];
-            $preview = $query->get()->map(function (Student $student) use ($toGrade, $toYear, &$reservedCodes): array {
-                $year = $toYear ?? $student->academicYear;
-                $newCode = null;
-                $warning = null;
+            if ($graduate) {
+                $preview = $query->get()->map(function (Student $student): array {
+                    return [
+                        'id' => $student->id,
+                        'name' => $student->name,
+                        'student_code' => $student->student_code,
+                        'new_student_code' => $student->student_code,
+                        'grade_name' => $student->gradeLevel?->name,
+                        'academic_year_name' => $student->academicYear?->displayName(),
+                        'status' => $student->status,
+                        'new_status' => 'graduated',
+                        'action' => 'graduate',
+                        'warning' => $student->status === 'graduated' ? '已是畢業狀態' : null,
+                    ];
+                })->values()->all();
+            } elseif ($toGrade !== null) {
+                $reservedCodes = [];
+                $preview = $query->get()->map(function (Student $student) use ($toGrade, &$reservedCodes): array {
+                    $year = $student->academicYear;
+                    $newCode = null;
+                    $warning = null;
 
-                if ($year === null) {
-                    $warning = '缺少學年，無法預覽學號';
-                } else {
-                    $desiredSeq = is_string($student->student_code) && preg_match('/(\d{3})$/', $student->student_code, $m)
-                        ? $m[1]
-                        : null;
-                    $newCode = StudentCodeGenerator::rebuildKeepingSequence(
-                        $student->student_code,
-                        $year,
-                        $toGrade,
-                        $student->id,
-                        $reservedCodes,
-                    );
-                    $reservedCodes[] = $newCode;
+                    if ($year === null) {
+                        $warning = '缺少學年，無法預覽學號';
+                    } else {
+                        $desiredSeq = is_string($student->student_code) && preg_match('/(\d{3})$/', $student->student_code, $m)
+                            ? $m[1]
+                            : null;
+                        $newCode = StudentCodeGenerator::rebuildKeepingSequence(
+                            $student->student_code,
+                            $year,
+                            $toGrade,
+                            $student->id,
+                            $reservedCodes,
+                        );
+                        $reservedCodes[] = $newCode;
 
-                    if ($student->student_code === null) {
-                        $warning = '原無學號，將新編流水';
-                    } elseif ($desiredSeq !== null && ! str_ends_with($newCode, $desiredSeq)) {
-                        $warning = '目標學號已被占用，改配新流水 '.$newCode;
+                        if ($student->student_code === null) {
+                            $warning = '原無學號，將新編流水';
+                        } elseif ($desiredSeq !== null && ! str_ends_with($newCode, $desiredSeq)) {
+                            $warning = '新學號已被占用，改配新流水 '.$newCode;
+                        }
                     }
-                }
 
-                return [
-                    'id' => $student->id,
-                    'name' => $student->name,
-                    'student_code' => $student->student_code,
-                    'new_student_code' => $newCode,
-                    'grade_name' => $student->gradeLevel?->name,
-                    'academic_year_name' => $student->academicYear?->displayName(),
-                    'status' => $student->status,
-                    'warning' => $warning,
-                ];
-            })->values()->all();
+                    return [
+                        'id' => $student->id,
+                        'name' => $student->name,
+                        'student_code' => $student->student_code,
+                        'new_student_code' => $newCode,
+                        'grade_name' => $student->gradeLevel?->name,
+                        'academic_year_name' => $student->academicYear?->displayName(),
+                        'status' => $student->status,
+                        'new_status' => $student->status,
+                        'action' => 'promote',
+                        'warning' => $warning,
+                    ];
+                })->values()->all();
+            }
         }
 
         $grades = GradeLevel::query()
@@ -100,6 +124,7 @@ class StudentPromotionController extends Controller
                 'name' => $g->name,
                 'code' => $g->code,
                 'code_padded' => $g->codePadded(),
+                'is_graduation_grade' => $this->isGraduationGrade($g),
             ])
             ->all();
 
@@ -122,9 +147,9 @@ class StudentPromotionController extends Controller
             'preview' => $preview,
             'filters' => [
                 'from_grade_level_id' => $fromGradeId === null ? '' : (string) $fromGradeId,
-                'to_grade_level_id' => $toGradeId === null ? '' : (string) $toGradeId,
+                'to_grade_level_id' => $graduate ? '' : ($toGradeId === null ? '' : (string) $toGradeId),
+                'graduate' => $graduate,
                 'from_academic_year_id' => $fromYearId === null ? '' : (string) $fromYearId,
-                'to_academic_year_id' => $toYearId === null ? '' : (string) $toYearId,
                 'status' => $status,
             ],
         ]);
@@ -134,26 +159,39 @@ class StudentPromotionController extends Controller
     {
         $validated = $request->validate([
             'from_grade_level_id' => ['required', 'integer', 'exists:grade_levels,id'],
-            'to_grade_level_id' => ['required', 'integer', 'exists:grade_levels,id', 'different:from_grade_level_id'],
+            'to_grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id', 'different:from_grade_level_id'],
+            'graduate' => ['nullable', 'boolean'],
             'from_academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
-            'to_academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
             'status' => ['nullable', 'in:active,paused,all'],
             'student_ids' => ['required', 'array', 'min:1'],
             'student_ids.*' => ['integer', 'exists:students,id'],
         ]);
 
-        $fromGradeId = (int) $validated['from_grade_level_id'];
-        $toGrade = GradeLevel::query()->findOrFail((int) $validated['to_grade_level_id']);
-        $toYear = isset($validated['to_academic_year_id'])
-            ? AcademicYear::query()->findOrFail((int) $validated['to_academic_year_id'])
-            : null;
+        $request->validateWithBag(function (Validator $validator) use ($validated): void {
+            $graduate = (bool) ($validated['graduate'] ?? false);
+            if (! $graduate && empty($validated['to_grade_level_id'])) {
+                $validator->errors()->add('to_grade_level_id', '請選擇新的年級，或改為畢業轉檔。');
+            }
+        });
+
+        $fromGrade = GradeLevel::query()->findOrFail((int) $validated['from_grade_level_id']);
+        $graduate = (bool) ($validated['graduate'] ?? false);
         $status = (string) ($validated['status'] ?? 'active');
         $studentIds = array_map('intval', $validated['student_ids']);
+
+        if ($graduate && ! $this->isGraduationGrade($fromGrade)) {
+            return back()->with('error', '只有國三可以轉成已畢業。');
+        }
+
+        $toGrade = null;
+        if (! $graduate) {
+            $toGrade = GradeLevel::query()->findOrFail((int) $validated['to_grade_level_id']);
+        }
 
         $students = Student::query()
             ->with('academicYear')
             ->whereIn('id', $studentIds)
-            ->where('grade_level_id', $fromGradeId)
+            ->where('grade_level_id', $fromGrade->id)
             ->when(
                 isset($validated['from_academic_year_id']),
                 fn ($q) => $q->where('academic_year_id', (int) $validated['from_academic_year_id'])
@@ -167,11 +205,20 @@ class StudentPromotionController extends Controller
 
         $count = 0;
 
-        DB::transaction(function () use ($students, $toGrade, $toYear, &$count): void {
+        DB::transaction(function () use ($students, $toGrade, $graduate, &$count): void {
+            if ($graduate) {
+                foreach ($students as $student) {
+                    $student->update(['status' => 'graduated']);
+                    $count++;
+                }
+
+                return;
+            }
+
             $reservedCodes = [];
             foreach ($students as $student) {
-                $year = $toYear ?? $student->academicYear;
-                if ($year === null) {
+                $year = $student->academicYear;
+                if ($year === null || $toGrade === null) {
                     continue;
                 }
 
@@ -186,18 +233,27 @@ class StudentPromotionController extends Controller
 
                 $student->update([
                     'grade_level_id' => $toGrade->id,
-                    'academic_year_id' => $year->id,
                     'student_code' => $newCode,
                 ]);
                 $count++;
             }
         });
 
+        $message = $graduate
+            ? "已將 {$count} 位國三學生標記為已畢業。"
+            : "已完成轉檔 {$count} 位學生（年級＋學號已更新）。";
+
         return to_route('student-promotions.index', [
-            'from_grade_level_id' => $validated['to_grade_level_id'],
+            'from_grade_level_id' => $graduate ? $fromGrade->id : (string) $validated['to_grade_level_id'],
             'to_grade_level_id' => '',
-            'from_academic_year_id' => $validated['to_academic_year_id'] ?? $validated['from_academic_year_id'] ?? '',
+            'graduate' => false,
+            'from_academic_year_id' => $validated['from_academic_year_id'] ?? '',
             'status' => $status,
-        ])->with('success', "已完成轉檔 {$count} 位學生（年級＋學號已更新）。");
+        ])->with('success', $message);
+    }
+
+    private function isGraduationGrade(GradeLevel $grade): bool
+    {
+        return $grade->name === '國三' || (int) $grade->code === 9;
     }
 }
