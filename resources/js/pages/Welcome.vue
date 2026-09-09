@@ -14,7 +14,7 @@ withDefaults(
 </script>
 
 <template>
-    <Head title="補教點名系統">
+    <Head title="高名補教管理系統">
         <link rel="preconnect" href="https://rsms.me/" />
         <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
     </Head>
@@ -60,7 +60,7 @@ withDefaults(
                 >
                     <h1 class="mb-1 font-medium">開始使用</h1>
                     <p class="mb-2 text-[#706f6c] dark:text-[#A1A09A]">
-                        補教點名系統已準備完成。<br />建議先從下列資源開始。
+                        高名補教管理系統已準備完成。<br />建議先從下列資源開始。
                     </p>
                     <ul class="mb-4 flex flex-col lg:mb-6">
                         <li

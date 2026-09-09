@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'name' => env('APP_NAME', 'Laravel'),
+    'name' => env('APP_NAME', '高名補教管理系統'),
 
     /*
     |--------------------------------------------------------------------------
@@ -60,7 +60,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | Here you may specify the default timezone for your application, which
-    | will be used by the PHP date and date-time functions. 補教點名以台灣
+    | will be used by the PHP date and date-time functions. 高名補教以台灣
     | 營運時間為主；其他環境可於 .env 設定 APP_TIMEZONE。
     |
     */

@@ -23,7 +23,7 @@ defineProps<{
                     </Link>
                     <div class="space-y-2 text-center">
                         <p class="text-xl font-semibold tracking-wide text-primary md:text-2xl">
-                            補教點名系統
+                            高名補教管理系統
                         </p>
                         <h1 class="text-2xl font-semibold">{{ title }}</h1>
                         <p class="text-center text-sm text-muted-foreground">
