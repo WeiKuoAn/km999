@@ -39,6 +39,8 @@ const props = defineProps<{
             start_time: string | null;
             end_time: string | null;
         }>;
+        start_date?: string | null;
+        end_date?: string | null;
         course_prices: CoursePrice[];
     };
     categories: Array<{ id: number; name: string; sort_order: number }>;
@@ -75,6 +77,8 @@ const form = useForm({
             : '#0d9488',
     status: props.course.status,
     pricing_group: props.course.pricing_group ?? '',
+    start_date: props.course.start_date ?? '',
+    end_date: props.course.end_date ?? '',
     schedules: initialSchedules(),
     levels: initialLevels,
 });
@@ -128,6 +132,8 @@ const submit = () =>
                 pricing_group:
                     data.pricing_group === '' ? null : data.pricing_group,
                 color: data.color === '' ? null : data.color,
+                start_date: data.start_date || null,
+                end_date: data.end_date || null,
                 schedules,
             };
         })
@@ -206,6 +212,33 @@ defineOptions({
                     用於核心科單科／雙科等優惠分類；實際價目請至「收費標準」勾選適用課目。
                 </p>
                 <InputError :message="form.errors.pricing_group" />
+            </div>
+
+            <div class="space-y-2 rounded-lg border p-4">
+                <Label class="text-base font-medium">短期開課期間</Label>
+                <p class="text-xs text-muted-foreground">
+                    選填。夏令營等短期課請設定「上課日起～結束日」；空白則視為長期課（不限日期）。
+                </p>
+                <div class="grid gap-2 sm:grid-cols-2">
+                    <div class="grid gap-2">
+                        <Label for="start_date">上課日起</Label>
+                        <Input
+                            id="start_date"
+                            v-model="form.start_date"
+                            type="date"
+                        />
+                        <InputError :message="form.errors.start_date" />
+                    </div>
+                    <div class="grid gap-2">
+                        <Label for="end_date">結束日</Label>
+                        <Input
+                            id="end_date"
+                            v-model="form.end_date"
+                            type="date"
+                        />
+                        <InputError :message="form.errors.end_date" />
+                    </div>
+                </div>
             </div>
 
             <div class="space-y-2 rounded-lg border p-4">

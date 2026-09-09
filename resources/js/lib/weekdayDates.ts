@@ -174,30 +174,276 @@ export function buildDefaultSessionDates(
     return out;
 }
 
+export type ScheduleExceptionRange = {
+    date_from: string;
+    date_to: string;
+    name?: string;
+    grade_level_id?: number | null;
+    /** 空陣列＝該範圍內全部課程 */
+    course_ids?: number[];
+    start_time?: string | null;
+    end_time?: string | null;
+};
+
+function ymdInRange(ymd: string, from: string, to: string): boolean {
+    return ymd >= from.slice(0, 10) && ymd <= to.slice(0, 10);
+}
+
+function exceptionAppliesToCourse(
+    ex: ScheduleExceptionRange,
+    courseId: number,
+): boolean {
+    const ids = ex.course_ids ?? [];
+    return ids.length === 0 || ids.includes(courseId);
+}
+
+function expandExceptionDates(
+    ex: ScheduleExceptionRange,
+    rangeStart: string,
+    rangeEnd: string,
+): string[] {
+    const from = maxYmd(ex.date_from.slice(0, 10), rangeStart.slice(0, 10));
+    const to = minYmd(ex.date_to.slice(0, 10), rangeEnd.slice(0, 10));
+    if (from > to) {
+        return [];
+    }
+    const out: string[] = [];
+    const cursor = parseYmd(from);
+    const end = parseYmd(to);
+    while (cursor <= end) {
+        out.push(toYmd(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return out;
+}
+
+function maxYmd(a: string, b: string): string {
+    return a >= b ? a : b;
+}
+
+function minYmd(a: string, b: string): string {
+    return a <= b ? a : b;
+}
+
+function monthSpanEndDate(startDate: string, monthSpan: number): string {
+    const start = parseYmd(startDate);
+    const end = new Date(start.getFullYear(), start.getMonth() + monthSpan, 0);
+    return toYmd(end);
+}
+
+export type YearMonth = { y: number; m: number };
+
+export function monthKey(y: number, m: number): string {
+    return `${y}-${m}`;
+}
+
+export function parseMonthKey(key: string): YearMonth | null {
+    const [ys, ms] = key.split('-');
+    const y = Number(ys);
+    const m = Number(ms);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
+        return null;
+    }
+    return { y, m };
+}
+
+/** 自起算日起連續 monthSpan 個曆月（含起算月） */
+export function defaultBillingMonths(
+    startDate: string,
+    monthSpan: number,
+): YearMonth[] {
+    const start = parseYmd(startDate);
+    if (Number.isNaN(start.getTime()) || monthSpan <= 0) {
+        return [];
+    }
+    const out: YearMonth[] = [];
+    for (let i = 0; i < monthSpan; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+        out.push({ y: d.getFullYear(), m: d.getMonth() + 1 });
+    }
+    return out;
+}
+
+/** 自起算月起列出可勾選的月份選項（預設 12 個月） */
+export function billingMonthOptions(
+    startDate: string,
+    count = 12,
+): YearMonth[] {
+    return defaultBillingMonths(startDate, count);
+}
+
+function lastDayOfYearMonth(y: number, m: number): string {
+    return toYmd(new Date(y, m, 0));
+}
+
+function monthsSpanFromStart(startDate: string, months: YearMonth[]): number {
+    if (months.length === 0) {
+        return 1;
+    }
+    const start = parseYmd(startDate);
+    const sorted = [...months].sort((a, b) => a.y - b.y || a.m - b.m);
+    const last = sorted[sorted.length - 1];
+    const end = new Date(last.y, last.m - 1, 1);
+    return (
+        (end.getFullYear() - start.getFullYear()) * 12 +
+        (end.getMonth() - start.getMonth()) +
+        1
+    );
+}
+
 /** 報名／調課用：某一天上的某一科 */
 export type SessionEntry = {
     date: string;
     course_id: number;
 };
 
-/** 依各科上課日預填堂次（含 course_id） */
+/** 依各科上課日預填堂次（含 course_id）；可套用年級／科目停課與補課 */
 export function buildDefaultSessionEntries(
     startDate: string,
-    courses: Array<{ id: number; weekdays: number[] }>,
+    courses: Array<{
+        id: number;
+        weekdays: number[];
+        start_date?: string | null;
+        end_date?: string | null;
+    }>,
     monthSpan = 3,
     holidays?: Set<string> | string[],
+    options?: {
+        closures?: ScheduleExceptionRange[];
+        makeups?: ScheduleExceptionRange[];
+        gradeLevelId?: number | null;
+        /** 若有指定，只產生這些曆月的堂次（起算日前仍不計） */
+        months?: YearMonth[];
+    },
 ): SessionEntry[] {
+    const holidaySet =
+        holidays instanceof Set
+            ? holidays
+            : new Set((holidays ?? []).map((d) => d.slice(0, 10)));
+
+    const selectedMonths = options?.months ?? null;
+    const monthFilter =
+        selectedMonths && selectedMonths.length > 0
+            ? new Set(selectedMonths.map((m) => monthKey(m.y, m.m)))
+            : null;
+
+    const effectiveSpan =
+        selectedMonths && selectedMonths.length > 0
+            ? Math.max(1, monthsSpanFromStart(startDate, selectedMonths))
+            : monthSpan;
+
+    const rangeEnd =
+        selectedMonths && selectedMonths.length > 0
+            ? (() => {
+                  const sorted = [...selectedMonths].sort(
+                      (a, b) => a.y - b.y || a.m - b.m,
+                  );
+                  const last = sorted[sorted.length - 1];
+                  return lastDayOfYearMonth(last.y, last.m);
+              })()
+            : monthSpanEndDate(startDate, effectiveSpan);
+
+    const gradeLevelId = options?.gradeLevelId ?? null;
+    const closures = (options?.closures ?? []).filter(
+        (ex) =>
+            ex.grade_level_id == null ||
+            gradeLevelId == null ||
+            ex.grade_level_id === gradeLevelId,
+    );
+    const makeups = (options?.makeups ?? []).filter(
+        (ex) =>
+            ex.grade_level_id == null ||
+            gradeLevelId == null ||
+            ex.grade_level_id === gradeLevelId,
+    );
+
     const out: SessionEntry[] = [];
+    const seen = new Set<string>();
+
+    const acceptDate = (date: string, courseStart?: string | null, courseEnd?: string | null) => {
+        if (monthFilter) {
+            const [y, m] = date.slice(0, 10).split('-').map(Number);
+            if (!monthFilter.has(monthKey(y, m))) {
+                return false;
+            }
+        }
+        if (date > rangeEnd) {
+            return false;
+        }
+        const cs = courseStart?.slice(0, 10);
+        const ce = courseEnd?.slice(0, 10);
+        if (cs && date < cs) {
+            return false;
+        }
+        if (ce && date > ce) {
+            return false;
+        }
+        return true;
+    };
+
     for (const course of courses) {
+        const courseStart = course.start_date ?? null;
+        const courseEnd = course.end_date ?? null;
+        let effectiveStart = startDate.slice(0, 10);
+        if (courseStart && courseStart.slice(0, 10) > effectiveStart) {
+            effectiveStart = courseStart.slice(0, 10);
+        }
+        let effectiveEnd = rangeEnd;
+        if (courseEnd && courseEnd.slice(0, 10) < effectiveEnd) {
+            effectiveEnd = courseEnd.slice(0, 10);
+        }
+        if (effectiveStart > effectiveEnd) {
+            continue;
+        }
+
+        const closed = new Set<string>();
+        for (const ex of closures) {
+            if (!exceptionAppliesToCourse(ex, course.id)) {
+                continue;
+            }
+            for (const d of expandExceptionDates(ex, effectiveStart, effectiveEnd)) {
+                closed.add(d);
+            }
+        }
+
         for (const date of buildDefaultSessionDates(
-            startDate,
+            effectiveStart,
             course.weekdays ?? [],
-            monthSpan,
-            holidays,
+            effectiveSpan,
+            holidaySet,
         )) {
+            if (closed.has(date) || !acceptDate(date, courseStart, courseEnd)) {
+                continue;
+            }
+            const key = `${date}#${course.id}`;
+            if (seen.has(key)) {
+                continue;
+            }
+            seen.add(key);
             out.push({ date, course_id: course.id });
         }
+
+        for (const ex of makeups) {
+            if (!exceptionAppliesToCourse(ex, course.id)) {
+                continue;
+            }
+            for (const date of expandExceptionDates(ex, effectiveStart, effectiveEnd)) {
+                if (holidaySet.has(date) || closed.has(date)) {
+                    continue;
+                }
+                if (!acceptDate(date, courseStart, courseEnd)) {
+                    continue;
+                }
+                const key = `${date}#${course.id}`;
+                if (seen.has(key)) {
+                    continue;
+                }
+                seen.add(key);
+                out.push({ date, course_id: course.id });
+            }
+        }
     }
+
     return sortSessionEntries(out);
 }
 

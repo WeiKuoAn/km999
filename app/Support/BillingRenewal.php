@@ -2,10 +2,10 @@
 
 namespace App\Support;
 
-use App\Models\Holiday;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\StudentCourseDrop;
+use App\Support\ScheduleCalendar;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -279,15 +279,12 @@ final class BillingRenewal
             ->subDay()
             ->startOfDay();
 
-        $holidaySet = Holiday::query()
-            ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
-            ->get(['date'])
-            ->map(fn (Holiday $holiday): string => $holiday->date->toDateString())
-            ->flip()
-            ->all();
+        $holidaySet = ScheduleCalendar::holidaySet($start->toDateString(), $end->toDateString());
+        $gradeLevelId = $student->grade_level_id !== null ? (int) $student->grade_level_id : null;
 
         $subjects = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id');
         $out = [];
+        $seen = [];
 
         foreach ($courseIds as $courseId) {
             $courseId = (int) $courseId;
@@ -296,13 +293,56 @@ final class BillingRenewal
                 continue;
             }
             $weekdays = WeekdayDates::normalize($subject['weekdays'] ?? []);
-            if ($weekdays === []) {
+            $rangeStart = $start->copy();
+            $rangeEnd = $end->copy();
+            $courseStart = isset($subject['start_date']) && is_string($subject['start_date']) && $subject['start_date'] !== ''
+                ? Carbon::parse($subject['start_date'])->startOfDay()
+                : null;
+            $courseEnd = isset($subject['end_date']) && is_string($subject['end_date']) && $subject['end_date'] !== ''
+                ? Carbon::parse($subject['end_date'])->startOfDay()
+                : null;
+            if ($courseStart !== null && $courseStart->gt($rangeStart)) {
+                $rangeStart = $courseStart;
+            }
+            if ($courseEnd !== null && $courseEnd->lt($rangeEnd)) {
+                $rangeEnd = $courseEnd;
+            }
+            if ($rangeStart->gt($rangeEnd)) {
                 continue;
             }
-            foreach (WeekdayDates::inRange($start, $end, $weekdays) as $ymd) {
-                if (isset($holidaySet[$ymd])) {
+
+            $closed = array_fill_keys(
+                ScheduleCalendar::closedDates($gradeLevelId, $courseId, $rangeStart->toDateString(), $rangeEnd->toDateString()),
+                true
+            );
+
+            if ($weekdays !== []) {
+                foreach (WeekdayDates::inRange($rangeStart, $rangeEnd, $weekdays) as $ymd) {
+                    if (isset($holidaySet[$ymd]) || isset($closed[$ymd])) {
+                        continue;
+                    }
+                    $key = $ymd.'#'.$courseId;
+                    if (isset($seen[$key])) {
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $out[] = ['date' => $ymd, 'course_id' => $courseId];
+                }
+            }
+
+            foreach (ScheduleCalendar::makeupSessions($gradeLevelId, $courseId, $rangeStart->toDateString(), $rangeEnd->toDateString()) as $makeup) {
+                $ymd = $makeup['date'];
+                if ($ymd < $rangeStart->toDateString() || $ymd > $rangeEnd->toDateString()) {
                     continue;
                 }
+                if (isset($holidaySet[$ymd]) || isset($closed[$ymd])) {
+                    continue;
+                }
+                $key = $ymd.'#'.$courseId;
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
                 $out[] = ['date' => $ymd, 'course_id' => $courseId];
             }
         }
@@ -349,22 +389,34 @@ final class BillingRenewal
      *   months:list<array{y:int,m:int}>,
      *   lines:list<array<string, mixed>>
      * }  $quote
+     * @return string|null 單據編號（YYYYMMDD＋流水）
      */
     public static function persistQuote(
         Student $student,
         string $payCycle,
         array $quote,
         int $allowance = 0,
-    ): void {
+        ?int $feeDiscountId = null,
+        ?string $feeDiscountLabel = null,
+    ): ?string {
         $months = $quote['months'] ?? [];
         if ($months === [] || ($quote['lines'] ?? []) === []) {
-            return;
+            return null;
         }
 
-        DB::transaction(function () use ($student, $payCycle, $quote, $allowance, $months): void {
+        return DB::transaction(function () use (
+            $student,
+            $payCycle,
+            $quote,
+            $allowance,
+            $months,
+            $feeDiscountId,
+            $feeDiscountLabel,
+        ): string {
             $allowanceLeft = $allowance;
             $paidDate = now()->toDateString();
             $settledByUserId = auth()->id();
+            $receiptNo = ReceiptNumber::allocate($paidDate);
 
             $courseIds = collect($quote['lines'] ?? [])
                 ->pluck('course_id')
@@ -448,8 +500,26 @@ final class BillingRenewal
                     if ($monthAllowance > 0) {
                         $noteParts[] = sprintf('折讓 %s', number_format($monthAllowance));
                     }
+                    if ($index === 0 && is_string($feeDiscountLabel) && $feeDiscountLabel !== '') {
+                        $noteParts[] = '優惠 '.$feeDiscountLabel;
+                    }
                     if ($index === 0 && is_string($materialNote) && $materialNote !== '') {
                         $noteParts[] = $materialNote;
+                    }
+
+                    $payload = [
+                        'classroom_id' => null,
+                        'expected_amount' => $amount,
+                        'paid_amount' => $amount,
+                        'paid_date' => $paidDate,
+                        'status' => 'paid',
+                        'settled_by_user_id' => $settledByUserId,
+                        'pay_cycle' => $payCycle,
+                        'note' => implode('｜', $noteParts),
+                        'receipt_no' => $receiptNo,
+                    ];
+                    if (Schema::hasColumn('reconciliations', 'fee_discount_id')) {
+                        $payload['fee_discount_id'] = $feeDiscountId;
                     }
 
                     Reconciliation::query()->updateOrCreate(
@@ -459,19 +529,12 @@ final class BillingRenewal
                             'billing_year' => $y,
                             'billing_month' => $m,
                         ],
-                        [
-                            'classroom_id' => null,
-                            'expected_amount' => $amount,
-                            'paid_amount' => $amount,
-                            'paid_date' => $paidDate,
-                            'status' => 'paid',
-                            'settled_by_user_id' => $settledByUserId,
-                            'pay_cycle' => $payCycle,
-                            'note' => implode('｜', $noteParts),
-                        ]
+                        $payload
                     );
                 }
             }
+
+            return $receiptNo;
         });
     }
 }

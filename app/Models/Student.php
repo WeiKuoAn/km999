@@ -12,6 +12,7 @@ class Student extends Model
         'student_code',
         'academic_year_id',
         'grade_level_id',
+        'intended_course_ids',
         'name',
         'phone',
         'parent_name',
@@ -36,6 +37,7 @@ class Student extends Model
     {
         return [
             'parent_phones' => 'array',
+            'intended_course_ids' => 'array',
         ];
     }
 

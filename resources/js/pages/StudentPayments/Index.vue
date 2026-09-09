@@ -25,6 +25,7 @@ type Row = {
     paid_total: number;
     course_count: number;
     paid_date: string | null;
+    receipt_no?: string | null;
     status: string;
     settled_by_name: string;
     pay_cycle?: string | null;
@@ -136,8 +137,8 @@ defineOptions({
             @submit.prevent="applyFilters"
         >
             <div class="grid flex-1 gap-2">
-                <Label for="q">搜尋學生</Label>
-                <Input id="q" v-model="q" placeholder="學號或姓名" />
+                <Label for="q">搜尋</Label>
+                <Input id="q" v-model="q" placeholder="學號、姓名或單據編號" />
             </div>
             <div class="grid gap-2 sm:w-40">
                 <Label for="status">狀態</Label>
@@ -168,6 +169,9 @@ defineOptions({
                 <MobileRecordField label="總金額">{{
                     formatMoney(row.expected_total)
                 }}</MobileRecordField>
+                <MobileRecordField label="單據編號">{{
+                    row.receipt_no ?? '—'
+                }}</MobileRecordField>
                 <MobileRecordField label="收款日">{{
                     row.paid_date ?? '—'
                 }}</MobileRecordField>
@@ -197,6 +201,7 @@ defineOptions({
                 <thead>
                     <tr class="border-b bg-muted/30">
                         <th class="px-3 py-2 text-left">學生</th>
+                        <th class="px-3 py-2 text-left">單據編號</th>
                         <th class="px-3 py-2 text-left">帳期</th>
                         <th class="px-3 py-2 text-right">總金額</th>
                         <th class="px-3 py-2 text-left">收款日</th>
@@ -215,6 +220,9 @@ defineOptions({
                             <div class="text-xs text-muted-foreground">
                                 {{ row.grade_name ?? '—' }}
                             </div>
+                        </td>
+                        <td class="px-3 py-2.5 font-mono text-sm whitespace-nowrap">
+                            {{ row.receipt_no ?? '—' }}
                         </td>
                         <td class="px-3 py-2.5 whitespace-nowrap">
                             {{ row.period_label }}
@@ -240,7 +248,7 @@ defineOptions({
                     </tr>
                     <tr v-if="rows.data.length === 0">
                         <td
-                            colspan="7"
+                            colspan="8"
                             class="px-3 py-10 text-center text-muted-foreground"
                         >
                             尚無收款明細。可按右上角「新增收款」產生帳期。

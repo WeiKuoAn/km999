@@ -23,6 +23,8 @@ final class EnrollmentPricing
      *   material:int,
      *   material_unit:string,
      *   weekdays:list<int>,
+     *   start_date:?string,
+     *   end_date:?string,
      *   fee_plan_id:int|null,
      *   group_name:string|null,
      *   color:string|null
@@ -113,6 +115,8 @@ final class EnrollmentPricing
                 'material_unit' => $materialUnit,
                 'weekdays' => $weekdays,
                 'schedules' => $gradeSchedules,
+                'start_date' => $course->start_date?->toDateString(),
+                'end_date' => $course->end_date?->toDateString(),
                 'fee_plan_id' => $plan?->id,
                 'group_name' => $plan?->group_name,
             ];
@@ -217,7 +221,13 @@ final class EnrollmentPricing
         array $sessions,
         int $allowance = 0,
         ?string $startDate = null,
+        /** @var list<int>|null 要收取「半年教材」的科目；null=不收（打勾才收）；class_day 仍依堂次計 */
+        ?array $chargeMaterialCourseIds = null,
     ): array {
+        $chargeMaterialSet = array_fill_keys(
+            array_map('intval', $chargeMaterialCourseIds ?? []),
+            true
+        );
         $subjects = collect(self::subjectsForStudent($student))->keyBy('id');
         $selected = collect($courseIds)
             ->map(fn ($id) => $subjects->get((int) $id))
@@ -316,6 +326,7 @@ final class EnrollmentPricing
                 $subject,
                 $subjectDates,
                 $months,
+                isset($chargeMaterialSet[(int) $subject['id']]),
             );
 
             $materialTotal += $material;
@@ -461,7 +472,7 @@ final class EnrollmentPricing
         $map = [];
         foreach ($dates as $date) {
             $d = Carbon::parse($date);
-            $key = $d->year.'-'.$d->month;
+            $key = $d->year.'-'.str_pad((string) $d->month, 2, '0', STR_PAD_LEFT);
             $map[$key] = ['y' => (int) $d->year, 'm' => (int) $d->month];
         }
         ksort($map);
@@ -470,7 +481,19 @@ final class EnrollmentPricing
     }
 
     /**
-     * 教材年費換算每月金額（÷12）。
+     * 教材年費換算半年金額（÷2）。1–6、7–12 各收一次。
+     */
+    public static function semiAnnualMaterialFee(int $annualOrTermFee): int
+    {
+        if ($annualOrTermFee <= 0) {
+            return 0;
+        }
+
+        return (int) round($annualOrTermFee / 2);
+    }
+
+    /**
+     * @deprecated 改用 semiAnnualMaterialFee；保留給舊文案／相容。
      */
     public static function monthlyMaterialFee(int $annualOrTermFee): int
     {
@@ -479,6 +502,23 @@ final class EnrollmentPricing
         }
 
         return (int) round($annualOrTermFee / 12);
+    }
+
+    /**
+     * 曆月所屬半年：H1=1–6、H2=7–12。
+     *
+     * @return array{0:int,1:string} [year, 'H1'|'H2']
+     */
+    public static function halfYearOf(int $year, int $month): array
+    {
+        return [$year, $month <= 6 ? 'H1' : 'H2'];
+    }
+
+    public static function halfYearLabel(int $year, string $half): string
+    {
+        return $half === 'H1'
+            ? sprintf('%d上半年（1–6）', $year)
+            : sprintf('%d下半年（7–12）', $year);
     }
 
     /**
@@ -492,8 +532,12 @@ final class EnrollmentPricing
      * @param  list<array{y:int,m:int}>  $months
      * @return array{0:int,1:array<string, array{amount:int, days:int}>,2:?string}
      */
-    private static function materialForSubject(array $subject, array $dates, array $months): array
-    {
+    private static function materialForSubject(
+        array $subject,
+        array $dates,
+        array $months,
+        bool $chargeTermMaterial = false,
+    ): array {
         $fee = (int) ($subject['material'] ?? 0);
         $unit = (string) ($subject['material_unit'] ?? 'term');
 
@@ -501,51 +545,59 @@ final class EnrollmentPricing
             return [0, [], null];
         }
 
-        if ($unit !== 'class_day') {
-            if ($months === []) {
+        if ($unit === 'class_day') {
+            // 耗材按日：需打勾才收
+            if (! $chargeTermMaterial || $dates === []) {
                 return [0, [], null];
             }
-            $monthly = self::monthlyMaterialFee($fee);
-            if ($monthly <= 0) {
-                return [0, [], null];
+
+            $byMonth = [];
+            foreach ($dates as $date) {
+                $d = Carbon::parse($date);
+                $key = $d->year.'-'.$d->month;
+                $byMonth[$key] = ($byMonth[$key] ?? 0) + 1;
             }
 
             $materialMonths = [];
             $total = 0;
-            foreach ($months as $month) {
-                $key = ((int) $month['y']).'-'.((int) $month['m']);
-                $materialMonths[$key] = ['amount' => $monthly, 'days' => 0];
-                $total += $monthly;
+            $parts = [];
+            foreach ($byMonth as $key => $days) {
+                $amount = $fee * $days;
+                $materialMonths[$key] = ['amount' => $amount, 'days' => $days];
+                $total += $amount;
+                $parts[] = sprintf('%s %d天×%s', str_replace('-', '/', (string) $key), $days, number_format($fee));
             }
 
-            $note = sprintf('教材月費 %s（年 %s ÷ 12）', number_format($monthly), number_format($fee));
+            $note = $parts !== [] ? '耗材 '.implode('；', $parts) : null;
 
             return [$total, $materialMonths, $note];
         }
 
-        if ($dates === []) {
+        // 半年教材：需明確打勾才收；金額＝年費÷2，掛在帳期第一個月
+        if (! $chargeTermMaterial || $months === []) {
+            return [0, [], null];
+        }
+        $semi = self::semiAnnualMaterialFee($fee);
+        if ($semi <= 0) {
             return [0, [], null];
         }
 
-        $byMonth = [];
-        foreach ($dates as $date) {
-            $d = Carbon::parse($date);
-            $key = $d->year.'-'.$d->month;
-            $byMonth[$key] = ($byMonth[$key] ?? 0) + 1;
-        }
+        $first = $months[0];
+        $y = (int) $first['y'];
+        $m = (int) $first['m'];
+        [$hy, $half] = self::halfYearOf($y, $m);
+        $monthKey = $y.'-'.$m;
+        $note = sprintf(
+            '教材 %s %s（年 %s ÷ 2，打勾收取）',
+            self::halfYearLabel($hy, $half),
+            number_format($semi),
+            number_format($fee)
+        );
 
-        $materialMonths = [];
-        $total = 0;
-        $parts = [];
-        foreach ($byMonth as $key => $days) {
-            $amount = $fee * $days;
-            $materialMonths[$key] = ['amount' => $amount, 'days' => $days];
-            $total += $amount;
-            $parts[] = sprintf('%s %d天×%s', str_replace('-', '/', (string) $key), $days, number_format($fee));
-        }
-
-        $note = $parts !== [] ? '耗材 '.implode('；', $parts) : null;
-
-        return [$total, $materialMonths, $note];
+        return [
+            $semi,
+            [$monthKey => ['amount' => $semi, 'days' => 0]],
+            $note,
+        ];
     }
 }

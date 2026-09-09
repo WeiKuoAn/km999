@@ -70,7 +70,10 @@ final class PaymentRosterBuilder
                 continue;
             }
 
-            $courseIds = $snapshot['course_ids'];
+            $intended = is_array($student->intended_course_ids) ? $student->intended_course_ids : [];
+            $courseIds = $intended !== []
+                ? array_values(array_unique(array_map('intval', $intended)))
+                : $snapshot['course_ids'];
             if ($courseIds === []) {
                 continue;
             }
@@ -124,7 +127,7 @@ final class PaymentRosterBuilder
                 if ($sessions === []) {
                     continue;
                 }
-                $quote = EnrollmentPricing::quote($student, $courseIds, $payCycle, $sessions, 0, $startDate);
+                $quote = EnrollmentPricing::quote($student, $courseIds, $payCycle, $sessions, 0, $startDate, []);
                 $fee = (int) ($quote['grand_total'] ?? 0);
                 if ($fee <= 0 || ($quote['lines'] ?? []) === []) {
                     continue;

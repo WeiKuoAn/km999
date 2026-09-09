@@ -50,14 +50,10 @@ class CalendarController extends Controller
                     ->values()
                     ->all();
 
-                return [
+                return array_merge([
                     'id' => $course->id,
                     'name' => $course->name,
                     'color' => $course->color,
-                    'start_date' => null,
-                    'end_date' => null,
-                    'date_range_unrestricted' => true,
-                    'teaching_periods' => [],
                     'schedules' => $schedules,
                     'extra_sessions' => [],
                     'course' => [
@@ -65,7 +61,7 @@ class CalendarController extends Controller
                         'course_category' => $category,
                     ],
                     'teacher' => null,
-                ];
+                ], $course->scheduleDatePayload());
             })->values()->all(),
             'teacherOptions' => [],
             'canFilterByTeacher' => false,

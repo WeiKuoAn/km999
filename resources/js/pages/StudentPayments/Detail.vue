@@ -26,6 +26,7 @@ type Row = {
     settled_by_name: string;
     note: string | null;
     pay_cycle: string | null;
+    receipt_no?: string | null;
 };
 
 type Paginated<T> = {
@@ -70,6 +71,8 @@ const props = defineProps<{
         status: string;
         paid_date: string | null;
         settled_by_name: string;
+        receipt_no?: string | null;
+        receipt_nos?: string[];
     } | null;
     renewal?: Renewal | null;
 }>();
@@ -269,6 +272,12 @@ defineOptions({
                         period.settled_by_name
                     }}
                 </p>
+                <p
+                    v-if="period.receipt_no"
+                    class="mt-1 font-mono text-sm tabular-nums"
+                >
+                    單據 {{ period.receipt_no }}
+                </p>
             </div>
         </div>
 
@@ -279,6 +288,7 @@ defineOptions({
                 <thead>
                     <tr class="border-b bg-muted/30">
                         <th class="px-3 py-2 text-left">帳期</th>
+                        <th class="px-3 py-2 text-left">單據編號</th>
                         <th class="px-3 py-2 text-left">課程</th>
                         <th class="px-3 py-2 text-left">班級</th>
                         <th class="px-3 py-2 text-right">應收</th>
@@ -293,6 +303,9 @@ defineOptions({
                     <tr v-for="row in rows.data" :key="row.id" class="border-b">
                         <td class="px-3 py-2.5 whitespace-nowrap">
                             {{ row.billing_year }}/{{ row.billing_month }}
+                        </td>
+                        <td class="px-3 py-2.5 font-mono text-sm whitespace-nowrap">
+                            {{ row.receipt_no ?? '—' }}
                         </td>
                         <td class="px-3 py-2.5">
                             {{ row.course_category_name }} /
@@ -331,7 +344,7 @@ defineOptions({
                     </tr>
                     <tr v-if="rows.data.length === 0">
                         <td
-                            colspan="9"
+                            colspan="10"
                             class="px-3 py-10 text-center text-muted-foreground"
                         >
                             尚無帳期。可先按右上角「新增收款」產生應收。

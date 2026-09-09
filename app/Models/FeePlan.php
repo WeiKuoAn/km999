@@ -103,7 +103,7 @@ class FeePlan extends Model
         $unit = match ($this->material_unit) {
             'subject' => '科',
             'class_day' => '日',
-            default => '學期',
+            default => '年（半年收一次）',
         };
 
         return "{$price}／{$unit}";

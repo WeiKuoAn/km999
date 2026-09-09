@@ -20,6 +20,8 @@ class Reconciliation extends Model
         'status',
         'settled_by_user_id',
         'note',
+        'receipt_no',
+        'fee_discount_id',
     ];
 
     protected function casts(): array
@@ -47,5 +49,10 @@ class Reconciliation extends Model
     public function settledByUser(): BelongsTo
     {
         return $this->belongsTo(User::class, 'settled_by_user_id');
+    }
+
+    public function feeDiscount(): BelongsTo
+    {
+        return $this->belongsTo(FeeDiscount::class);
     }
 }

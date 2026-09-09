@@ -3,9 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\Holiday;
+use App\Models\ScheduleException;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -26,8 +28,48 @@ class HolidayController extends Controller
             ->values()
             ->all();
 
+        $exceptions = [];
+        if (Schema::hasTable('schedule_exceptions')) {
+            $exceptions = ScheduleException::query()
+                ->with([
+                    'gradeLevel:id,name',
+                    'courses:id,name,course_category_id',
+                    'courses.courseCategory:id,name',
+                ])
+                ->orderByDesc('date_from')
+                ->orderBy('type')
+                ->get()
+                ->map(function (ScheduleException $ex): array {
+                    $courseLabels = $ex->courses
+                        ->map(fn ($c) => $c->courseCategory?->name ?: $c->name)
+                        ->filter()
+                        ->values()
+                        ->all();
+
+                    return [
+                        'id' => $ex->id,
+                        'type' => $ex->type,
+                        'date_from' => $ex->date_from->toDateString(),
+                        'date_to' => $ex->date_to->toDateString(),
+                        'name' => $ex->name,
+                        'grade_level_id' => $ex->grade_level_id !== null ? (int) $ex->grade_level_id : null,
+                        'grade_name' => $ex->gradeLevel?->name,
+                        'course_ids' => $ex->courses->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
+                        'course_labels' => $courseLabels,
+                        'all_courses' => $courseLabels === [],
+                        'start_time' => $ex->start_time ? substr((string) $ex->start_time, 0, 5) : null,
+                        'end_time' => $ex->end_time ? substr((string) $ex->end_time, 0, 5) : null,
+                    ];
+                })
+                ->values()
+                ->all();
+        }
+
         return Inertia::render('Holidays/Index', [
             'holidays' => $holidays,
+            'exceptions' => $exceptions,
+            'grades' => ScheduleExceptionController::gradeOptions(),
+            'courses' => ScheduleExceptionController::courseOptions(),
         ]);
     }
 

@@ -84,6 +84,8 @@ class CourseController extends Controller
             'schedules.*.end_time' => ['nullable', 'date_format:H:i'],
             'levels' => ['nullable', 'array'],
             'levels.*' => ['string', Rule::in($allowedGrades)],
+            'start_date' => ['nullable', 'date'],
+            'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
         ]);
 
         $priceRows = $this->levelsToPriceRows($validated['levels'] ?? [], $allowedGrades);
@@ -94,8 +96,10 @@ class CourseController extends Controller
         $schedules = $this->normalizedSchedulesForLevels($validated['schedules'] ?? [], $levels);
         $this->assertScheduleTimesValid($schedules);
         $weekdays = WeekdayDates::weekdaysFromSchedules($schedules);
+        $startDate = ! empty($validated['start_date']) ? $validated['start_date'] : null;
+        $endDate = ! empty($validated['end_date']) ? $validated['end_date'] : null;
 
-        DB::transaction(function () use ($validated, $priceRows, $schedules, $weekdays): void {
+        DB::transaction(function () use ($validated, $priceRows, $schedules, $weekdays, $startDate, $endDate): void {
             $course = Course::query()->create([
                 'course_category_id' => $validated['course_category_id'],
                 'name' => $validated['name'],
@@ -104,6 +108,8 @@ class CourseController extends Controller
                 'pricing_group' => $validated['pricing_group'] ?? null,
                 'weekdays' => $weekdays === [] ? null : $weekdays,
                 'schedules' => $schedules === [] ? null : $schedules,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
             ]);
 
             foreach ($priceRows as $row) {
@@ -145,6 +151,8 @@ class CourseController extends Controller
         return Inertia::render('Courses/Edit', [
             'course' => array_merge($course->toArray(), [
                 'schedules' => $schedules,
+                'start_date' => $course->start_date?->toDateString(),
+                'end_date' => $course->end_date?->toDateString(),
             ]),
             'categories' => CourseCategory::query()
                 ->orderBy('sort_order')
@@ -185,6 +193,8 @@ class CourseController extends Controller
             'schedules.*.end_time' => ['nullable', 'date_format:H:i'],
             'levels' => ['nullable', 'array'],
             'levels.*' => ['string', Rule::in($allowedGrades)],
+            'start_date' => ['nullable', 'date'],
+            'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
         ]);
 
         $priceRows = $this->levelsToPriceRows($validated['levels'] ?? [], $allowedGrades);
@@ -195,8 +205,10 @@ class CourseController extends Controller
         $schedules = $this->normalizedSchedulesForLevels($validated['schedules'] ?? [], $levels);
         $this->assertScheduleTimesValid($schedules);
         $weekdays = WeekdayDates::weekdaysFromSchedules($schedules);
+        $startDate = ! empty($validated['start_date']) ? $validated['start_date'] : null;
+        $endDate = ! empty($validated['end_date']) ? $validated['end_date'] : null;
 
-        DB::transaction(function () use ($course, $validated, $priceRows, $schedules, $weekdays): void {
+        DB::transaction(function () use ($course, $validated, $priceRows, $schedules, $weekdays, $startDate, $endDate): void {
             $course->update([
                 'course_category_id' => $validated['course_category_id'],
                 'name' => $validated['name'],
@@ -205,6 +217,8 @@ class CourseController extends Controller
                 'pricing_group' => $validated['pricing_group'] ?? null,
                 'weekdays' => $weekdays === [] ? null : $weekdays,
                 'schedules' => $schedules === [] ? null : $schedules,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
             ]);
 
             $course->coursePrices()->delete();

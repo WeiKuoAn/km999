@@ -12,6 +12,7 @@ import {
     CalendarDays,
     LayoutDashboard,
     Layers,
+    Percent,
     Route,
     Settings,
     Tags,
@@ -137,7 +138,7 @@ const navGroups = computed<NavGroup[]>(() => {
                 icon: CalendarRange,
             },
             {
-                title: '假日設定',
+                title: '假日／停課補課',
                 href: '/holidays',
                 icon: CalendarOff,
             },
@@ -150,6 +151,11 @@ const navGroups = computed<NavGroup[]>(() => {
                 title: '收費標準',
                 href: '/fee-plans',
                 icon: CircleDollarSign,
+            },
+            {
+                title: '優惠管理',
+                href: '/fee-discounts',
+                icon: Percent,
             },
             {
                 title: '課程類別管理',

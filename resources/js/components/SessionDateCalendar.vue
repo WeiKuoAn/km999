@@ -16,6 +16,7 @@ import {
     parseYmd,
     toggleSession,
     toYmd,
+    type ScheduleExceptionRange,
     type SessionEntry,
 } from '@/lib/weekdayDates';
 
@@ -41,6 +42,9 @@ const props = defineProps<{
     monthSpan?: number;
     /** 國定假日／自訂連假（預選會略過；格子標示） */
     holidays?: Array<{ date: string; name: string }>;
+    /** 停課（年級／科目）；預選會略過，格子淡紅標示 */
+    closures?: ScheduleExceptionRange[];
+    gradeLevelId?: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -59,6 +63,42 @@ const holidayMap = computed(() => {
     }
     return map;
 });
+
+const relevantClosures = computed(() => {
+    const gradeId = props.gradeLevelId ?? null;
+    return (props.closures ?? []).filter(
+        (ex) =>
+            ex.grade_level_id == null ||
+            gradeId == null ||
+            ex.grade_level_id === gradeId,
+    );
+});
+
+const ymdInRange = (ymd: string, from: string, to: string) =>
+    ymd >= from.slice(0, 10) && ymd <= to.slice(0, 10);
+
+/** 該日對目前已選科目是否停課；回傳顯示名稱 */
+const closureNameForDate = (ymd: string): string | null => {
+    const courses = props.courses ?? [];
+    const courseIds = new Set(courses.map((c) => c.id));
+    for (const ex of relevantClosures.value) {
+        if (!ymdInRange(ymd, ex.date_from, ex.date_to)) {
+            continue;
+        }
+        const ids = ex.course_ids ?? [];
+        const applies =
+            ids.length === 0 ||
+            (courseIds.size > 0
+                ? ids.some((id) => courseIds.has(id))
+                : true);
+        if (!applies) {
+            continue;
+        }
+        const name = (ex.name ?? '').trim();
+        return name !== '' ? name : '停課';
+    }
+    return null;
+};
 
 const syncViewToStart = () => {
     const d = parseYmd(props.startDate || toYmd(new Date()));
@@ -144,12 +184,30 @@ type Cell = {
     selected: boolean;
     isHoliday: boolean;
     holidayName: string | null;
+    isClosure: boolean;
+    closureName: string | null;
     dayNum: number;
     courseLabels: CourseLabel[];
     /** 起算日前、符合科目上課日但未計入的科目 */
     skippedLabels: CourseLabel[];
     selectedStyle: Record<string, string> | undefined;
 };
+
+const emptyCell = (key: string): Cell => ({
+    key,
+    date: null,
+    inMonth: false,
+    disabled: true,
+    selected: false,
+    isHoliday: false,
+    holidayName: null,
+    isClosure: false,
+    closureName: null,
+    dayNum: 0,
+    courseLabels: [],
+    skippedLabels: [],
+    selectedStyle: undefined,
+});
 
 const cells = computed<Cell[]>(() => {
     const y = viewCursor.value.y;
@@ -165,19 +223,7 @@ const cells = computed<Cell[]>(() => {
     );
 
     for (let i = 0; i < startPad; i++) {
-        out.push({
-            key: `pad-${i}`,
-            date: null,
-            inMonth: false,
-            disabled: true,
-            selected: false,
-            isHoliday: false,
-            holidayName: null,
-            dayNum: 0,
-            courseLabels: [],
-            skippedLabels: [],
-            selectedStyle: undefined,
-        });
+        out.push(emptyCell(`pad-${i}`));
     }
 
     for (let day = 1; day <= daysInMonth; day++) {
@@ -188,6 +234,7 @@ const cells = computed<Cell[]>(() => {
         const labels = labelsForDate(ymd);
         const selected = labels.length > 0;
         const holidayName = holidayMap.value.get(ymd) ?? null;
+        const closureName = closureNameForDate(ymd);
         const wd = isoWeekday(date);
         const skippedLabels: CourseLabel[] = [];
         if (beforeStart && !selected) {
@@ -209,6 +256,8 @@ const cells = computed<Cell[]>(() => {
             selected,
             isHoliday: holidayName !== null,
             holidayName,
+            isClosure: closureName !== null,
+            closureName,
             dayNum: day,
             courseLabels: labels,
             skippedLabels,
@@ -217,19 +266,7 @@ const cells = computed<Cell[]>(() => {
     }
 
     while (out.length % 7 !== 0) {
-        out.push({
-            key: `tail-${out.length}`,
-            date: null,
-            inMonth: false,
-            disabled: true,
-            selected: false,
-            isHoliday: false,
-            holidayName: null,
-            dayNum: 0,
-            courseLabels: [],
-            skippedLabels: [],
-            selectedStyle: undefined,
-        });
+        out.push(emptyCell(`tail-${out.length}`));
     }
 
     return out;
@@ -326,7 +363,7 @@ const sessionCount = computed(() => props.modelValue.length);
                         ? 'cursor-not-allowed border-transparent bg-transparent text-muted-foreground/40'
                         : cell.selected
                           ? 'hover:opacity-90'
-                          : cell.isHoliday
+                          : cell.isHoliday || cell.isClosure
                             ? 'border-rose-200 bg-rose-50 text-rose-800 hover:border-rose-300 hover:bg-rose-100/80'
                             : 'border-transparent bg-white text-foreground hover:border-primary/40 hover:bg-accent/40',
                 ]"
@@ -335,9 +372,11 @@ const sessionCount = computed(() => props.modelValue.length);
                 :title="
                     cell.courseLabels.length
                         ? cell.courseLabels.map((c) => c.name).join('、')
-                        : cell.holidayName
-                          ? `假日：${cell.holidayName}（仍可點選加課）`
-                          : '點選加課'
+                        : cell.closureName
+                          ? `停課：${cell.closureName}（預選略過，仍可手動加課）`
+                          : cell.holidayName
+                            ? `假日：${cell.holidayName}（仍可點選加課）`
+                            : '點選加課'
                 "
                 @click="onCellClick(cell)"
             >
@@ -363,6 +402,12 @@ const sessionCount = computed(() => props.modelValue.length);
                     未入班
                 </span>
                 <span
+                    v-else-if="cell.inMonth && cell.closureName"
+                    class="line-clamp-2 w-full text-center text-[9px] leading-tight text-rose-700 sm:text-[10px]"
+                >
+                    {{ cell.closureName }}
+                </span>
+                <span
                     v-else-if="cell.inMonth && cell.holidayName"
                     class="line-clamp-2 w-full text-center text-[9px] leading-tight text-rose-700 sm:text-[10px]"
                 >
@@ -372,7 +417,7 @@ const sessionCount = computed(() => props.modelValue.length);
         </div>
 
         <p class="text-xs text-muted-foreground">
-            已選 {{ sessionCount }} 堂。起算日前的上課日標「未入班」不計費；淡紅為假日（預選會略過，仍可手動加課）。
+            已選 {{ sessionCount }} 堂。起算日前的上課日標「未入班」不計費；淡紅為假日或停課（預選會略過，仍可手動加課）。
         </p>
 
         <Dialog v-model:open="pickerOpen">
