@@ -27,7 +27,11 @@ class FeePlanController extends Controller
             ->orderBy('id');
 
         if ($gradeFilter !== '' && $gradeFilter !== '全部') {
-            $query->whereHas('gradeLevel', fn ($q) => $q->where('name', $gradeFilter));
+            if ($gradeFilter === '全年級') {
+                $query->whereNull('grade_level_id');
+            } else {
+                $query->whereHas('gradeLevel', fn ($q) => $q->where('name', $gradeFilter));
+            }
         }
 
         return Inertia::render('FeePlans/Index', [
@@ -106,7 +110,7 @@ class FeePlanController extends Controller
     {
         $validated = $request->validate([
             'academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
-            'grade_level_id' => ['required', 'integer', 'exists:grade_levels,id'],
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'course_ids' => ['required', 'array', 'min:1'],
             'course_ids.*' => ['required', 'integer', 'distinct', 'exists:courses,id'],
             'group_name' => ['required', 'string', 'max:64'],
@@ -131,9 +135,26 @@ class FeePlanController extends Controller
 
         $validated['sort_order'] = $validated['sort_order'] ?? 0;
         $validated['is_active'] = $request->boolean('is_active', true);
+        $validated['grade_level_id'] = isset($validated['grade_level_id'])
+            ? (int) $validated['grade_level_id']
+            : null;
+        $validated['academic_year_id'] = isset($validated['academic_year_id'])
+            ? (int) $validated['academic_year_id']
+            : null;
+
+        $gradeId = $validated['grade_level_id'];
 
         $conflictingPlan = FeePlan::query()
-            ->where('grade_level_id', $validated['grade_level_id'])
+            ->when(
+                $gradeId === null,
+                // 全年級：同學年下任何年級已套用同課目即衝突
+                fn ($query) => $query,
+                // 指定年級：與同年級或全年級衝突
+                fn ($query) => $query->where(function ($builder) use ($gradeId): void {
+                    $builder->whereNull('grade_level_id')
+                        ->orWhere('grade_level_id', $gradeId);
+                })
+            )
             ->when(
                 $validated['academic_year_id'] === null,
                 fn ($query) => $query->whereNull('academic_year_id'),
@@ -144,8 +165,9 @@ class FeePlanController extends Controller
             ->first();
 
         if ($conflictingPlan !== null) {
+            $conflictGrade = $conflictingPlan->gradeLevel?->name ?? '全年級';
             throw ValidationException::withMessages([
-                'course_ids' => "所選課目已套用於同學年、同年級的「{$conflictingPlan->group_name}」，請勿重複設定。",
+                'course_ids' => "所選課目已套用於同學年、「{$conflictGrade}」的「{$conflictingPlan->group_name}」，請勿重複設定。",
             ]);
         }
 
@@ -162,7 +184,7 @@ class FeePlanController extends Controller
             'academic_year_id' => $plan->academic_year_id,
             'academic_year_name' => $plan->academicYear?->name,
             'grade_level_id' => $plan->grade_level_id,
-            'grade_name' => $plan->gradeLevel?->name,
+            'grade_name' => $plan->gradeLevel?->name ?? '全年級',
             'group_name' => $plan->group_name,
             'pricing_group' => $plan->pricing_group,
             'pricing_group_label' => PricingGroup::label($plan->pricing_group),
@@ -191,7 +213,7 @@ class FeePlanController extends Controller
     private function gradeFilterOptions(): array
     {
         return array_merge(
-            ['全部'],
+            ['全部', '全年級'],
             GradeLevel::query()
                 ->where('is_active', true)
                 ->orderBy('sort_order')

@@ -25,7 +25,7 @@ const props = defineProps<{
     plan: {
         id: number;
         academic_year_id: number | null;
-        grade_level_id: number;
+        grade_level_id: number | null;
         course_ids: number[];
         group_name: string;
         pricing_group: string;
@@ -50,7 +50,9 @@ const form = useForm({
     academic_year_id: props.plan.academic_year_id
         ? String(props.plan.academic_year_id)
         : '',
-    grade_level_id: String(props.plan.grade_level_id),
+    grade_level_id: props.plan.grade_level_id
+        ? String(props.plan.grade_level_id)
+        : 'all',
     course_ids: [...props.plan.course_ids],
     group_name: props.plan.group_name,
     pricing_group: props.plan.pricing_group,
@@ -123,7 +125,10 @@ const submit = () =>
                 data.academic_year_id === ''
                     ? null
                     : Number(data.academic_year_id),
-            grade_level_id: Number(data.grade_level_id),
+            grade_level_id:
+                data.grade_level_id === '' || data.grade_level_id === 'all'
+                    ? null
+                    : Number(data.grade_level_id),
             course_ids: data.course_ids.map(Number),
             group_name: data.group_name,
             pricing_group: data.pricing_group,
@@ -182,6 +187,7 @@ const submit = () =>
                         class="h-9 rounded-md border px-3"
                         required
                     >
+                        <option value="all">全年級</option>
                         <option
                             v-for="g in gradeLevels"
                             :key="g.id"
@@ -190,6 +196,9 @@ const submit = () =>
                             {{ g.name }}
                         </option>
                     </select>
+                    <p class="text-xs text-muted-foreground">
+                        「全年級」適用所有年級；若另有指定年級價目，以指定年級為準。
+                    </p>
                     <InputError :message="form.errors.grade_level_id" />
                 </div>
             </div>

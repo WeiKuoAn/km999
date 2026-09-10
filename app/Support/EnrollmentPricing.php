@@ -44,14 +44,24 @@ final class EnrollmentPricing
                 'coursePrices:id,course_id,level',
                 'feePlans' => function ($query) use ($student): void {
                     $query
-                        ->where('grade_level_id', $student->grade_level_id)
                         ->where('is_active', true)
+                        ->where(function ($builder) use ($student): void {
+                            $builder
+                                ->whereNull('grade_level_id')
+                                ->orWhere('grade_level_id', $student->grade_level_id);
+                        })
                         ->where(function ($builder) use ($student): void {
                             $builder->whereNull('academic_year_id');
                             if ($student->academic_year_id !== null) {
                                 $builder->orWhere('academic_year_id', $student->academic_year_id);
                             }
                         });
+
+                    // 同年級優先於全年級；同學年優先於不限學年
+                    $query->orderByRaw(
+                        'CASE WHEN grade_level_id = ? THEN 0 ELSE 1 END',
+                        [$student->grade_level_id]
+                    );
 
                     if ($student->academic_year_id !== null) {
                         $query->orderByRaw(

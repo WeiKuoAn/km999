@@ -100,7 +100,10 @@ const submit = () =>
                 data.academic_year_id === ''
                     ? null
                     : Number(data.academic_year_id),
-            grade_level_id: Number(data.grade_level_id),
+            grade_level_id:
+                data.grade_level_id === '' || data.grade_level_id === 'all'
+                    ? null
+                    : Number(data.grade_level_id),
             course_ids: data.course_ids.map(Number),
             group_name: data.group_name,
             pricing_group: data.pricing_group,
@@ -160,6 +163,7 @@ const submit = () =>
                         required
                     >
                         <option value="">請選擇</option>
+                        <option value="all">全年級</option>
                         <option
                             v-for="g in gradeLevels"
                             :key="g.id"
@@ -168,6 +172,9 @@ const submit = () =>
                             {{ g.name }}
                         </option>
                     </select>
+                    <p class="text-xs text-muted-foreground">
+                        「全年級」適用所有年級；若另有指定年級價目，以指定年級為準。
+                    </p>
                     <InputError :message="form.errors.grade_level_id" />
                 </div>
             </div>
