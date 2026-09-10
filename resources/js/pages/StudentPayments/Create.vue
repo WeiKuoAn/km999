@@ -217,6 +217,10 @@ const suggestedHalfFromStart = computed(() => {
     return month <= 6 ? 'H1' : 'H2';
 });
 
+/** 教材年費 ÷ 2；1–6、7–12 各收一次（需打勾） */
+const semiAnnualMaterialFee = (annualOrTermFee: number) =>
+    annualOrTermFee > 0 ? Math.round(annualOrTermFee / 2) : 0;
+
 const syncDefaultMaterialChecks = () => {
     if (isGrade9PackageMode.value) {
         chargeMaterialMaster.value = false;
@@ -726,10 +730,6 @@ const lineTuition = (s: Subject) => {
     }, 0);
 };
 
-/** 教材年費 ÷ 2；1–6、7–12 各收一次（需打勾） */
-const semiAnnualMaterialFee = (annualOrTermFee: number) =>
-    annualOrTermFee > 0 ? Math.round(annualOrTermFee / 2) : 0;
-
 const isChargingConsumable = (courseId: number) =>
     chargeMaterialMaster.value && chargeConsumableIds.value.includes(courseId);
 
@@ -774,6 +774,28 @@ const setHalfAmount = (courseId: number, half: string, raw: string) => {
         ...materialHalfState.value,
         [key]: { ...current, amount },
     };
+};
+
+const toggleMaterialMaster = (event: Event) => {
+    const input = event.target as HTMLInputElement | null;
+    chargeMaterialMaster.value = !!input?.checked;
+};
+
+const onHalfCheckedChange = (
+    courseId: number,
+    half: string,
+    event: Event,
+) => {
+    const input = event.target as HTMLInputElement | null;
+    setHalfChecked(courseId, half, !!input?.checked);
+};
+
+const onHalfAmountInput = (
+    courseId: number,
+    half: string,
+    value: string | number | null | undefined,
+) => {
+    setHalfAmount(courseId, half, String(value ?? ''));
 };
 
 const courseHalfAmount = (courseId: number) => {
@@ -1657,11 +1679,7 @@ defineOptions({
                                     type="checkbox"
                                     class="size-4 shrink-0 accent-[var(--brand-green)]"
                                     :checked="chargeMaterialMaster"
-                                    @change="
-                                        chargeMaterialMaster = (
-                                            $event.target as HTMLInputElement
-                                        ).checked
-                                    "
+                                    @change="toggleMaterialMaster"
                                 />
                                 <span>
                                     <span
@@ -1726,12 +1744,10 @@ defineOptions({
                                                     :checked="half.checked"
                                                     :disabled="half.locked"
                                                     @change="
-                                                        setHalfChecked(
+                                                        onHalfCheckedChange(
                                                             course.id,
                                                             half.half,
-                                                            (
-                                                                $event.target as HTMLInputElement
-                                                            ).checked,
+                                                            $event,
                                                         )
                                                     "
                                                 />
@@ -1747,10 +1763,10 @@ defineOptions({
                                                 "
                                                 :model-value="half.amount"
                                                 @update:model-value="
-                                                    setHalfAmount(
+                                                    onHalfAmountInput(
                                                         course.id,
                                                         half.half,
-                                                        String($event ?? ''),
+                                                        $event,
                                                     )
                                                 "
                                             />
