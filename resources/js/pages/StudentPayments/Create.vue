@@ -97,10 +97,10 @@ const props = defineProps<{
         period_year: number;
         period_half: string;
         period_label: string;
+        months_label?: string;
         paid_at: string | null;
         note: string | null;
     }>;
-    next_receipt_no?: string | null;
     fee_discounts?: Array<{
         id: number;
         name: string;
@@ -170,6 +170,7 @@ const selected = ref<number[]>(defaultCourseIds());
 const payCycle = ref<'monthly' | 'quarterly' | 'annual'>(defaultPayCycle());
 const allowance = ref(0);
 const selectedDiscountId = ref<number | null>(null);
+const receiptNo = ref('');
 const startDate = ref(
     hasPriorPayments.value && suggestedStartDate.value
         ? suggestedStartDate.value
@@ -178,43 +179,98 @@ const startDate = ref(
 const sessions = ref<SessionEntry[]>([]);
 /** 帳期月份勾選（例：8 月不足 + 9–11 季繳連續） */
 const selectedMonthKeys = ref<string[]>([]);
-/** 本次要收取半年教材的科目（打勾） */
-const chargeMaterialIds = ref<number[]>([]);
+/** 教材費大總覽（勾了才展開各科半年） */
+const chargeMaterialMaster = ref(false);
+/** 耗材 class_day 科目 id */
+const chargeConsumableIds = ref<number[]>([]);
+/** 各科半年勾選與金額：key = `${courseId}-H1|H2` */
+const materialHalfState = ref<
+    Record<string, { checked: boolean; amount: number }>
+>({});
 
-const materialStatusByCourse = computed(() => {
-    const map = new Map<
-        number,
-        NonNullable<typeof props.material_status>[number]
-    >();
-    for (const row of props.material_status ?? []) {
-        map.set(row.course_id, row);
+type MaterialStatusRow = NonNullable<typeof props.material_status>[number];
+
+const materialStatusRows = computed(() => props.material_status ?? []);
+
+const materialStatusByKey = computed(() => {
+    const map = new Map<string, MaterialStatusRow>();
+    for (const row of materialStatusRows.value) {
+        map.set(`${row.course_id}-${row.period_half}`, row);
     }
     return map;
 });
 
+const halfKey = (courseId: number, half: string) => `${courseId}-${half}`;
+
+const materialPeriodYear = computed(() => {
+    if (startDate.value && startDate.value.length >= 4) {
+        return Number(startDate.value.slice(0, 4));
+    }
+    return new Date().getFullYear();
+});
+
+const suggestedHalfFromStart = computed(() => {
+    if (!startDate.value || startDate.value.length < 7) {
+        return 'H2';
+    }
+    const month = Number(startDate.value.slice(5, 7));
+    return month <= 6 ? 'H1' : 'H2';
+});
+
 const syncDefaultMaterialChecks = () => {
     if (isGrade9PackageMode.value) {
-        chargeMaterialIds.value = [];
+        chargeMaterialMaster.value = false;
+        chargeConsumableIds.value = [];
+        materialHalfState.value = {};
         return;
     }
-    const next: number[] = [];
+
+    const consumables: number[] = [];
+    const nextHalf: Record<string, { checked: boolean; amount: number }> = {
+        ...materialHalfState.value,
+    };
+
     for (const id of selected.value) {
         const s = props.subjects.find((x) => x.id === id);
         if (!s || !s.material) {
             continue;
         }
         if (s.material_unit === 'class_day') {
-            // 耗材：預設勾選（可取消）
-            next.push(id);
+            consumables.push(id);
             continue;
         }
-        const status = materialStatusByCourse.value.get(id);
-        // 半年教材：可收且尚未收過本半年 → 預設勾選
-        if (!status || status.can_charge) {
-            next.push(id);
+        const semi = semiAnnualMaterialFee(s.material);
+        for (const half of ['H1', 'H2'] as const) {
+            const key = halfKey(id, half);
+            const status = materialStatusByKey.value.get(key);
+            const defaultAmount = status?.amount ?? semi;
+            const prev = nextHalf[key];
+            const suggested =
+                half === suggestedHalfFromStart.value &&
+                (!status || status.can_charge);
+            nextHalf[key] = {
+                checked: prev?.checked ?? suggested,
+                amount:
+                    prev?.amount && prev.amount > 0
+                        ? prev.amount
+                        : defaultAmount,
+            };
+            if (status && !status.can_charge) {
+                nextHalf[key].checked = false;
+            }
         }
     }
-    chargeMaterialIds.value = next;
+
+    // 清掉已不在選課中的 key
+    for (const key of Object.keys(nextHalf)) {
+        const courseId = Number(key.split('-')[0]);
+        if (!selected.value.includes(courseId)) {
+            delete nextHalf[key];
+        }
+    }
+
+    chargeConsumableIds.value = consumables;
+    materialHalfState.value = nextHalf;
 };
 
 /** 依繳別決定預選／可瀏覽堂次月數 */
@@ -304,7 +360,9 @@ const applyGrade9Package = () => {
             : `${year}-07-01`;
     selectedDiscountId.value = null;
     allowance.value = 0;
-    chargeMaterialIds.value = [];
+    chargeMaterialMaster.value = false;
+    chargeConsumableIds.value = [];
+    materialHalfState.value = {};
     syncSuggestedMonths();
     refillSessionDates();
 };
@@ -527,7 +585,9 @@ watch([startDate, payCycle], () => {
 
 watch(isGrade9PackageMode, (active) => {
     if (active) {
-        chargeMaterialIds.value = [];
+        chargeMaterialMaster.value = false;
+        chargeConsumableIds.value = [];
+        materialHalfState.value = {};
         syncSuggestedMonths();
     }
 });
@@ -537,8 +597,12 @@ watch(
     () => {
         refillSessionDates();
         if (isGrade9PackageMode.value) {
-            chargeMaterialIds.value = [];
+            chargeMaterialMaster.value = false;
+            chargeConsumableIds.value = [];
+            materialHalfState.value = {};
             syncSuggestedMonths();
+        } else {
+            syncDefaultMaterialChecks();
         }
     },
 );
@@ -547,6 +611,9 @@ if (props.student) {
     syncSuggestedMonths();
     refillSessionDates();
     syncDefaultMaterialChecks();
+    chargeMaterialMaster.value =
+        Object.values(materialHalfState.value).some((v) => v.checked) ||
+        chargeConsumableIds.value.length > 0;
 }
 
 let materialStatusReloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -579,10 +646,7 @@ watch(startDate, (value, oldValue) => {
 watch(
     () => props.material_status,
     () => {
-        chargeMaterialIds.value = chargeMaterialIds.value.filter((id) => {
-            const status = materialStatusByCourse.value.get(id);
-            return !status || status.can_charge;
-        });
+        syncDefaultMaterialChecks();
     },
 );
 
@@ -593,7 +657,14 @@ const form = useForm({
     allowance: 0,
     start_date: '' as string | null,
     charge_material_course_ids: [] as number[],
+    material_half_charges: [] as Array<{
+        course_id: number;
+        period_year: number;
+        period_half: string;
+        amount: number;
+    }>,
     fee_discount_id: null as number | null,
+    receipt_no: null as string | null,
 });
 
 const coreCount = computed(
@@ -659,38 +730,80 @@ const lineTuition = (s: Subject) => {
 const semiAnnualMaterialFee = (annualOrTermFee: number) =>
     annualOrTermFee > 0 ? Math.round(annualOrTermFee / 2) : 0;
 
-const isChargingMaterial = (courseId: number) =>
-    chargeMaterialIds.value.includes(courseId);
+const isChargingConsumable = (courseId: number) =>
+    chargeMaterialMaster.value && chargeConsumableIds.value.includes(courseId);
 
-const toggleMaterialCharge = (courseId: number) => {
-    const status = materialStatusByCourse.value.get(courseId);
-    if (status && !status.can_charge) {
-        return;
-    }
-    if (chargeMaterialIds.value.includes(courseId)) {
-        chargeMaterialIds.value = chargeMaterialIds.value.filter(
+const toggleConsumable = (courseId: number) => {
+    if (chargeConsumableIds.value.includes(courseId)) {
+        chargeConsumableIds.value = chargeConsumableIds.value.filter(
             (id) => id !== courseId,
         );
     } else {
-        chargeMaterialIds.value = [...chargeMaterialIds.value, courseId];
+        chargeConsumableIds.value = [...chargeConsumableIds.value, courseId];
     }
+};
+
+const halfState = (courseId: number, half: string) => {
+    const key = halfKey(courseId, half);
+    return (
+        materialHalfState.value[key] ?? {
+            checked: false,
+            amount: 0,
+        }
+    );
+};
+
+const setHalfChecked = (courseId: number, half: string, checked: boolean) => {
+    const key = halfKey(courseId, half);
+    const status = materialStatusByKey.value.get(key);
+    if (checked && status && !status.can_charge) {
+        return;
+    }
+    const current = halfState(courseId, half);
+    materialHalfState.value = {
+        ...materialHalfState.value,
+        [key]: { ...current, checked },
+    };
+};
+
+const setHalfAmount = (courseId: number, half: string, raw: string) => {
+    const key = halfKey(courseId, half);
+    const current = halfState(courseId, half);
+    const amount = Math.max(0, Math.floor(Number(raw) || 0));
+    materialHalfState.value = {
+        ...materialHalfState.value,
+        [key]: { ...current, amount },
+    };
+};
+
+const courseHalfAmount = (courseId: number) => {
+    if (!chargeMaterialMaster.value) {
+        return 0;
+    }
+    let sum = 0;
+    for (const half of ['H1', 'H2']) {
+        const st = halfState(courseId, half);
+        if (st.checked) {
+            sum += Math.max(0, st.amount);
+        }
+    }
+    return sum;
 };
 
 const lineMaterial = (s: Subject) => {
-    if (!s.material) return 0;
-    if (!isChargingMaterial(s.id)) {
-        return 0;
-    }
+    if (!s.material || !chargeMaterialMaster.value) return 0;
     if (s.material_unit === 'class_day') {
+        if (!isChargingConsumable(s.id)) return 0;
         return countSessionsForCourse(sessions.value, s.id) * s.material;
     }
-    return semiAnnualMaterialFee(s.material);
+    return courseHalfAmount(s.id);
 };
 
-/** 半年教材掛在帳期第一個月；耗材仍按月 */
+/** 半年教材合計掛在帳期第一個月；耗材仍按月 */
 const lineMaterialForMonth = (s: Subject, y: number, m: number) => {
-    if (!s.material || !isChargingMaterial(s.id)) return 0;
+    if (!s.material || !chargeMaterialMaster.value) return 0;
     if (s.material_unit === 'class_day') {
+        if (!isChargingConsumable(s.id)) return 0;
         return countSessionsInMonth(s.id, y, m) * s.material;
     }
     if (billingMonths.value.length === 0) {
@@ -700,7 +813,7 @@ const lineMaterialForMonth = (s: Subject, y: number, m: number) => {
     if (first.y !== y || first.m !== m) {
         return 0;
     }
-    return semiAnnualMaterialFee(s.material);
+    return courseHalfAmount(s.id);
 };
 
 const materialHint = (s: Subject): string => {
@@ -714,53 +827,95 @@ const materialHint = (s: Subject): string => {
     return `教材 ${s.material.toLocaleString()}（半年 ${semi.toLocaleString()}）`;
 };
 
-/** 已選科目中可勾選教材／耗材的列 */
-const materialChargeRows = computed(() => {
+/** 有教材或耗材的已選科目（總覽區塊是否顯示） */
+const hasMaterialSubjects = computed(() => {
     if (isGrade9PackageMode.value) {
-        return [];
+        return false;
     }
-    const rows: Array<{
-        id: number;
-        name: string;
-        unit: string;
-        locked: boolean;
-        note: string | null;
-        periodLabel: string | null;
-        amountLabel: string;
-        amount: number;
-    }> = [];
+    return selected.value.some((id) => {
+        const s = props.subjects.find((x) => x.id === id);
+        return !!(s && s.material > 0);
+    });
+});
+
+/** 各科教材列（半年兩段） */
+const materialTermCourses = computed(() => {
+    if (isGrade9PackageMode.value || !chargeMaterialMaster.value) {
+        return [] as Array<{
+            id: number;
+            name: string;
+            annual: number;
+            semi: number;
+            halves: Array<{
+                half: 'H1' | 'H2';
+                periodYear: number;
+                monthsLabel: string;
+                periodLabel: string;
+                locked: boolean;
+                note: string | null;
+                checked: boolean;
+                amount: number;
+            }>;
+        }>;
+    }
+    const rows = [];
     for (const id of selected.value) {
         const s = props.subjects.find((x) => x.id === id);
-        if (!s || !s.material) {
+        if (!s || !s.material || s.material_unit === 'class_day') {
             continue;
         }
-        if (s.material_unit === 'class_day') {
-            const days = countSessionsForCourse(sessions.value, s.id);
-            const amount = days * s.material;
-            rows.push({
-                id: s.id,
-                name: s.name,
-                unit: 'class_day',
-                locked: false,
-                note: null,
-                periodLabel: null,
-                amountLabel: `${s.material.toLocaleString()}/日 × ${days}天`,
-                amount,
-            });
-            continue;
-        }
-        const status = materialStatusByCourse.value.get(s.id);
         const semi = semiAnnualMaterialFee(s.material);
-        const locked = !!(status && !status.can_charge);
+        const halves = (['H1', 'H2'] as const).map((half) => {
+            const key = halfKey(id, half);
+            const status = materialStatusByKey.value.get(key);
+            const st = halfState(id, half);
+            return {
+                half,
+                periodYear: status?.period_year ?? materialPeriodYear.value,
+                monthsLabel:
+                    status?.months_label ?? (half === 'H1' ? '1–6' : '7–12'),
+                periodLabel:
+                    status?.period_label ??
+                    `${materialPeriodYear.value}${half === 'H1' ? '上半年（1–6）' : '下半年（7–12）'}`,
+                locked: !!(status && !status.can_charge),
+                note: status?.note ?? null,
+                checked: st.checked && !(status && !status.can_charge),
+                amount: st.amount > 0 ? st.amount : (status?.amount ?? semi),
+            };
+        });
         rows.push({
             id: s.id,
             name: s.name,
-            unit: 'term',
-            locked,
-            note: status?.note ?? null,
-            periodLabel: status?.period_label ?? null,
-            amountLabel: `半年 ${semi.toLocaleString()}`,
-            amount: semi,
+            annual: s.material,
+            semi,
+            halves,
+        });
+    }
+    return rows;
+});
+
+/** 耗材列 */
+const consumableRows = computed(() => {
+    if (isGrade9PackageMode.value || !chargeMaterialMaster.value) {
+        return [] as Array<{
+            id: number;
+            name: string;
+            amountLabel: string;
+            amount: number;
+        }>;
+    }
+    const rows = [];
+    for (const id of selected.value) {
+        const s = props.subjects.find((x) => x.id === id);
+        if (!s || !s.material || s.material_unit !== 'class_day') {
+            continue;
+        }
+        const days = countSessionsForCourse(sessions.value, s.id);
+        rows.push({
+            id: s.id,
+            name: s.name,
+            amountLabel: `${s.material.toLocaleString()}/日 × ${days}天`,
+            amount: days * s.material,
         });
     }
     return rows;
@@ -768,19 +923,25 @@ const materialChargeRows = computed(() => {
 
 const materialHalfSummary = computed(() => {
     const rows: Array<{ label: string; amount: number }> = [];
-    for (const id of selected.value) {
-        const s = props.subjects.find((x) => x.id === id);
-        if (!s || !s.material || s.material_unit === 'class_day') {
+    if (!chargeMaterialMaster.value) {
+        return rows;
+    }
+    for (const course of materialTermCourses.value) {
+        for (const half of course.halves) {
+            if (!half.checked || half.locked) {
+                continue;
+            }
+            rows.push({
+                label: `${course.name}｜${half.periodLabel}`,
+                amount: half.amount,
+            });
+        }
+    }
+    for (const row of consumableRows.value) {
+        if (!isChargingConsumable(row.id)) {
             continue;
         }
-        if (!isChargingMaterial(id)) {
-            continue;
-        }
-        const status = materialStatusByCourse.value.get(id);
-        const label = status?.period_label
-            ? `${s.name}｜${status.period_label}`
-            : `${s.name}｜半年教材`;
-        rows.push({ label, amount: semiAnnualMaterialFee(s.material) });
+        rows.push({ label: `${row.name}｜耗材`, amount: row.amount });
     }
     return rows;
 });
@@ -844,7 +1005,7 @@ const monthBreakdown = computed(() => {
                 (s) =>
                     s.material > 0 &&
                     s.material_unit !== 'class_day' &&
-                    isChargingMaterial(s.id),
+                    courseHalfAmount(s.id) > 0,
             )
                 ? '含半年教材'
                 : null;
@@ -938,23 +1099,10 @@ const toggleSubject = (id: number) => {
 
     if (selected.value.includes(id)) {
         selected.value = selected.value.filter((x) => x !== id);
-        chargeMaterialIds.value = chargeMaterialIds.value.filter((x) => x !== id);
     } else {
         selected.value = [...selected.value, id];
-        const s = props.subjects.find((x) => x.id === id);
-        const status = materialStatusByCourse.value.get(id);
-        if (
-            s &&
-            s.material > 0 &&
-            (s.material_unit === 'class_day' ||
-                !status ||
-                status.can_charge)
-        ) {
-            if (!chargeMaterialIds.value.includes(id)) {
-                chargeMaterialIds.value = [...chargeMaterialIds.value, id];
-            }
-        }
     }
+    syncDefaultMaterialChecks();
 };
 
 const search = async (q: string) => {
@@ -1043,12 +1191,38 @@ const submit = () => {
     form.sessions = [...sessions.value];
     form.allowance = Number(allowance.value || 0);
     form.start_date = startDate.value || null;
-    form.charge_material_course_ids = isGrade9PackageMode.value
-        ? []
-        : chargeMaterialIds.value.filter((id) =>
-              selected.value.includes(id),
-          );
+    if (isGrade9PackageMode.value || !chargeMaterialMaster.value) {
+        form.charge_material_course_ids = [];
+        form.material_half_charges = [];
+    } else {
+        form.charge_material_course_ids = chargeConsumableIds.value.filter((id) =>
+            selected.value.includes(id),
+        );
+        const year = materialPeriodYear.value;
+        const charges: Array<{
+            course_id: number;
+            period_year: number;
+            period_half: string;
+            amount: number;
+        }> = [];
+        for (const course of materialTermCourses.value) {
+            for (const half of course.halves) {
+                if (!half.checked || half.locked || half.amount <= 0) {
+                    continue;
+                }
+                charges.push({
+                    course_id: course.id,
+                    period_year: half.periodYear || year,
+                    period_half: half.half,
+                    amount: half.amount,
+                });
+            }
+        }
+        form.material_half_charges = charges;
+    }
     form.fee_discount_id = selectedDiscountId.value;
+    const trimmedReceipt = receiptNo.value.trim();
+    form.receipt_no = trimmedReceipt === '' ? null : trimmedReceipt;
     form.post(`/student-payments/${props.student.id}/quote`, {
         preserveScroll: true,
     });
@@ -1473,39 +1647,142 @@ defineOptions({
                         </div>
 
                         <div
-                            v-if="materialChargeRows.length > 0"
+                            v-if="hasMaterialSubjects"
                             class="mt-4 rounded-xl border border-amber-300/80 bg-amber-50/50 p-4"
                         >
-                            <h2 class="text-lg font-semibold text-amber-950">
-                                教材／耗材
-                            </h2>
-                            <p class="mt-1 text-sm text-amber-900/80">
-                                請確認本次是否收取。半年教材（1–6／7–12）同一半年只收一次；耗材依上課日計算。
-                            </p>
-                            <ul class="mt-3 space-y-2">
-                                <li
-                                    v-for="row in materialChargeRows"
-                                    :key="row.id"
+                            <label
+                                class="flex cursor-pointer items-center gap-3"
+                            >
+                                <input
+                                    type="checkbox"
+                                    class="size-4 shrink-0 accent-[var(--brand-green)]"
+                                    :checked="chargeMaterialMaster"
+                                    @change="
+                                        chargeMaterialMaster = (
+                                            $event.target as HTMLInputElement
+                                        ).checked
+                                    "
+                                />
+                                <span>
+                                    <span
+                                        class="text-lg font-semibold text-amber-950"
+                                        >教材費</span
+                                    >
+                                    <span
+                                        class="mt-0.5 block text-sm text-amber-900/80"
+                                    >
+                                        勾選後可為各科分別收 1–6／7–12（可同時勾兩段）；金額預設年費一半，可手動調整。
+                                    </span>
+                                </span>
+                            </label>
+
+                            <div
+                                v-if="chargeMaterialMaster"
+                                class="mt-3 space-y-3"
+                            >
+                                <div
+                                    v-for="course in materialTermCourses"
+                                    :key="`term-${course.id}`"
+                                    class="rounded-lg border border-amber-200/80 bg-background px-3 py-2.5"
+                                >
+                                    <div
+                                        class="flex flex-wrap items-baseline justify-between gap-2"
+                                    >
+                                        <p class="font-medium">
+                                            {{ course.name }}
+                                        </p>
+                                        <p
+                                            class="text-sm text-muted-foreground"
+                                        >
+                                            年費
+                                            {{
+                                                course.annual.toLocaleString()
+                                            }}｜半年預設
+                                            {{ course.semi.toLocaleString() }}
+                                        </p>
+                                    </div>
+                                    <ul class="mt-2 space-y-2">
+                                        <li
+                                            v-for="half in course.halves"
+                                            :key="`${course.id}-${half.half}`"
+                                            class="flex flex-wrap items-center gap-3 rounded-md border border-border/70 px-2.5 py-2"
+                                            :class="
+                                                half.locked
+                                                    ? 'opacity-70'
+                                                    : ''
+                                            "
+                                        >
+                                            <label
+                                                class="inline-flex min-w-[7rem] cursor-pointer items-center gap-2 text-sm"
+                                                :class="
+                                                    half.locked
+                                                        ? 'cursor-not-allowed'
+                                                        : ''
+                                                "
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    class="size-3.5 accent-[var(--brand-green)]"
+                                                    :checked="half.checked"
+                                                    :disabled="half.locked"
+                                                    @change="
+                                                        setHalfChecked(
+                                                            course.id,
+                                                            half.half,
+                                                            (
+                                                                $event.target as HTMLInputElement
+                                                            ).checked,
+                                                        )
+                                                    "
+                                                />
+                                                {{ half.monthsLabel }}
+                                            </label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                step="1"
+                                                class="h-9 w-28 tabular-nums"
+                                                :disabled="
+                                                    half.locked || !half.checked
+                                                "
+                                                :model-value="half.amount"
+                                                @update:model-value="
+                                                    setHalfAmount(
+                                                        course.id,
+                                                        half.half,
+                                                        String($event ?? ''),
+                                                    )
+                                                "
+                                            />
+                                            <span
+                                                class="text-xs text-muted-foreground"
+                                            >
+                                                <template v-if="half.locked">{{
+                                                    half.note
+                                                }}</template>
+                                                <template v-else>{{
+                                                    half.periodLabel
+                                                }}</template>
+                                            </span>
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                <div
+                                    v-for="row in consumableRows"
+                                    :key="`day-${row.id}`"
                                     class="rounded-lg border border-amber-200/80 bg-background px-3 py-2.5"
                                 >
                                     <label
                                         class="flex cursor-pointer items-start gap-3"
-                                        :class="
-                                            row.locked
-                                                ? 'cursor-not-allowed opacity-80'
-                                                : ''
-                                        "
                                     >
                                         <input
                                             type="checkbox"
                                             class="mt-1 size-4 shrink-0 accent-[var(--brand-green)]"
                                             :checked="
-                                                isChargingMaterial(row.id)
+                                                isChargingConsumable(row.id)
                                             "
-                                            :disabled="row.locked"
-                                            @change="
-                                                toggleMaterialCharge(row.id)
-                                            "
+                                            @change="toggleConsumable(row.id)"
                                         />
                                         <span class="min-w-0 flex-1">
                                             <span
@@ -1518,44 +1795,26 @@ defineOptions({
                                                     class="tabular-nums font-semibold text-primary"
                                                 >
                                                     {{
-                                                        row.locked ||
-                                                        !isChargingMaterial(
+                                                        isChargingConsumable(
                                                             row.id,
                                                         )
-                                                            ? '—'
-                                                            : row.amount.toLocaleString()
+                                                            ? row.amount.toLocaleString()
+                                                            : '—'
                                                     }}
                                                 </span>
                                             </span>
                                             <span
                                                 class="mt-0.5 block text-sm text-muted-foreground"
                                             >
-                                                <template v-if="row.locked">
-                                                    {{ row.note }}
-                                                </template>
-                                                <template
-                                                    v-else-if="
-                                                        row.unit === 'class_day'
-                                                    "
-                                                >
-                                                    耗材｜{{ row.amountLabel }}
-                                                </template>
-                                                <template v-else>
-                                                    半年教材｜{{
-                                                        row.amountLabel
-                                                    }}{{
-                                                        row.periodLabel
-                                                            ? `｜${row.periodLabel}`
-                                                            : ''
-                                                    }}
-                                                </template>
+                                                耗材｜{{ row.amountLabel }}
                                             </span>
                                         </span>
                                     </label>
-                                </li>
-                            </ul>
+                                </div>
+                            </div>
                             <InputError
                                 :message="
+                                    form.errors.material_half_charges ||
                                     form.errors.charge_material_course_ids
                                 "
                             />
@@ -1683,48 +1942,18 @@ defineOptions({
                                 </dd>
                             </div>
                             <ul
-                                v-if="materialChargeRows.length"
-                                class="space-y-1 rounded-md border border-dashed border-amber-200/80 bg-amber-50/40 px-2.5 py-2 text-sm"
-                            >
-                                <li
-                                    v-for="row in materialChargeRows"
-                                    :key="`sum-${row.id}`"
-                                    class="flex justify-between gap-2"
-                                    :class="
-                                        isChargingMaterial(row.id) && !row.locked
-                                            ? 'text-foreground'
-                                            : 'text-muted-foreground'
-                                    "
-                                >
-                                    <span class="min-w-0 truncate">
-                                        {{
-                                            isChargingMaterial(row.id) &&
-                                            !row.locked
-                                                ? '✓'
-                                                : '○'
-                                        }}
-                                        {{ row.name }}
-                                    </span>
-                                    <span class="shrink-0 tabular-nums">{{
-                                        isChargingMaterial(row.id) && !row.locked
-                                            ? row.amount.toLocaleString()
-                                            : row.locked
-                                              ? '已收'
-                                              : '未收'
-                                    }}</span>
-                                </li>
-                            </ul>
-                            <ul
                                 v-if="materialHalfSummary.length"
-                                class="space-y-1 border-t border-dashed pt-2 text-sm text-muted-foreground"
+                                class="space-y-1 rounded-md border border-dashed border-amber-200/80 bg-amber-50/40 px-2.5 py-2 text-sm"
                             >
                                 <li
                                     v-for="row in materialHalfSummary"
                                     :key="row.label"
                                     class="flex justify-between gap-2"
                                 >
-                                    <span>{{ row.label }}</span>
-                                    <span class="tabular-nums">{{
+                                    <span class="min-w-0 truncate">✓ {{
+                                        row.label
+                                    }}</span>
+                                    <span class="shrink-0 tabular-nums">{{
                                         row.amount.toLocaleString()
                                     }}</span>
                                 </li>
@@ -1778,13 +2007,17 @@ defineOptions({
                                     已套用「{{ selectedDiscount.label }}」
                                 </p>
                             </div>
-                            <div
-                                class="flex justify-between gap-2 border-t pt-2 text-sm"
-                            >
-                                <dt class="text-muted-foreground">單據編號</dt>
-                                <dd class="font-mono tabular-nums">
-                                    {{ next_receipt_no ?? '確認後產生' }}
-                                </dd>
+                            <div class="grid gap-1.5 border-t pt-2">
+                                <Label for="receipt_no">單據編號</Label>
+                                <Input
+                                    id="receipt_no"
+                                    v-model="receiptNo"
+                                    type="text"
+                                    maxlength="20"
+                                    placeholder="選填／手動輸入"
+                                    class="h-11 font-mono text-base"
+                                />
+                                <InputError :message="form.errors.receipt_no" />
                             </div>
                             <div
                                 class="flex justify-between gap-2 border-t pt-2 text-lg font-semibold"
@@ -1797,7 +2030,7 @@ defineOptions({
                         </dl>
                         <p class="mt-3 text-sm text-muted-foreground">
                             僅學費按比例：基準堂數＝每週上課日數 × 4（例：雙天 8
-                            堂，上 3 堂則學費 × 3/8）。教材為年費 ÷ 2，帳期碰到的半年（1–6／7–12）各收一次，不拆月。
+                            堂，上 3 堂則學費 × 3/8）。教材：先勾「教材費」，各科可分別勾 1–6／7–12（可同時收兩段），金額預設年費 ÷ 2 且可改；掛在帳期第一個月。
                         </p>
                         <Button
                             class="mt-4 h-11 w-full text-base"

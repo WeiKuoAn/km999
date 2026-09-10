@@ -389,7 +389,7 @@ final class BillingRenewal
      *   months:list<array{y:int,m:int}>,
      *   lines:list<array<string, mixed>>
      * }  $quote
-     * @return string|null 單據編號（YYYYMMDD＋流水）
+     * @return string|null 手動輸入的單據編號（空白則 null）
      */
     public static function persistQuote(
         Student $student,
@@ -398,10 +398,16 @@ final class BillingRenewal
         int $allowance = 0,
         ?int $feeDiscountId = null,
         ?string $feeDiscountLabel = null,
+        ?string $receiptNo = null,
     ): ?string {
         $months = $quote['months'] ?? [];
         if ($months === [] || ($quote['lines'] ?? []) === []) {
             return null;
+        }
+
+        $receiptNo = is_string($receiptNo) ? trim($receiptNo) : null;
+        if ($receiptNo === '') {
+            $receiptNo = null;
         }
 
         return DB::transaction(function () use (
@@ -412,11 +418,11 @@ final class BillingRenewal
             $months,
             $feeDiscountId,
             $feeDiscountLabel,
-        ): string {
+            $receiptNo,
+        ): ?string {
             $allowanceLeft = $allowance;
             $paidDate = now()->toDateString();
             $settledByUserId = auth()->id();
-            $receiptNo = ReceiptNumber::allocate($paidDate);
 
             $courseIds = collect($quote['lines'] ?? [])
                 ->pluck('course_id')

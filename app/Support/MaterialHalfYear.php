@@ -8,7 +8,7 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * 教材半年制：1–6＝H1、7–12＝H2；打勾才收，已收過該半年則註記並鎖定。
+ * 教材半年制：1–6＝H1、7–12＝H2；各科可分別勾選，可同時收兩段；已收過該半年則鎖定。
  */
 final class MaterialHalfYear
 {
@@ -28,6 +28,8 @@ final class MaterialHalfYear
     }
 
     /**
+     * 回傳指定年（asOf 所屬年）各科 H1／H2 狀態。
+     *
      * @param  list<int>  $courseIds
      * @return list<array{
      *   course_id:int,
@@ -36,6 +38,7 @@ final class MaterialHalfYear
      *   period_year:int,
      *   period_half:string,
      *   period_label:string,
+     *   months_label:string,
      *   paid_at:?string,
      *   note:?string
      * }>
@@ -46,22 +49,27 @@ final class MaterialHalfYear
         string $asOfDate,
         array $subjectsById,
     ): array {
-        $period = self::periodFromDate($asOfDate);
+        $year = (int) Carbon::parse($asOfDate)->year;
         $courseIds = array_values(array_unique(array_map('intval', $courseIds)));
         if ($courseIds === []) {
             return [];
         }
 
-        $paidMap = [];
+        $paidRows = [];
         if (Schema::hasTable('student_material_payments')) {
-            $paidMap = StudentMaterialPayment::query()
+            $paidRows = StudentMaterialPayment::query()
                 ->where('student_id', $student->id)
-                ->where('period_year', $period['year'])
-                ->where('period_half', $period['half'])
+                ->where('period_year', $year)
                 ->whereIn('course_id', $courseIds)
-                ->get(['course_id', 'paid_at', 'amount'])
-                ->keyBy(fn ($row) => (int) $row->course_id)
-                ->all();
+                ->whereIn('period_half', ['H1', 'H2'])
+                ->get(['course_id', 'period_half', 'paid_at', 'amount']);
+        }
+
+        /** @var array<string, object> $paidMap */
+        $paidMap = [];
+        foreach ($paidRows as $row) {
+            $key = ((int) $row->course_id).'-'.(string) $row->period_half;
+            $paidMap[$key] = $row;
         }
 
         $out = [];
@@ -74,35 +82,39 @@ final class MaterialHalfYear
                 continue;
             }
 
-            $amount = EnrollmentPricing::semiAnnualMaterialFee($fee);
-            $paid = $paidMap[$courseId] ?? null;
-            $paidAt = null;
-            if ($paid !== null && $paid->paid_at) {
-                $paidAt = $paid->paid_at instanceof Carbon
-                    ? $paid->paid_at->toDateString()
-                    : substr((string) $paid->paid_at, 0, 10);
+            $defaultAmount = EnrollmentPricing::semiAnnualMaterialFee($fee);
+            foreach (['H1', 'H2'] as $half) {
+                $key = $courseId.'-'.$half;
+                $paid = $paidMap[$key] ?? null;
+                $paidAt = null;
+                if ($paid !== null && $paid->paid_at) {
+                    $paidAt = $paid->paid_at instanceof Carbon
+                        ? $paid->paid_at->toDateString()
+                        : substr((string) $paid->paid_at, 0, 10);
+                }
+                $canCharge = $paidAt === null;
+                $label = EnrollmentPricing::halfYearLabel($year, $half);
+                $out[] = [
+                    'course_id' => $courseId,
+                    'can_charge' => $canCharge,
+                    'amount' => $defaultAmount,
+                    'period_year' => $year,
+                    'period_half' => $half,
+                    'period_label' => $label,
+                    'months_label' => $half === 'H1' ? '1–6' : '7–12',
+                    'paid_at' => $paidAt,
+                    'note' => $canCharge
+                        ? null
+                        : sprintf('已於 %s 收取%s教材', $paidAt, $label),
+                ];
             }
-
-            $canCharge = $paidAt === null;
-            $out[] = [
-                'course_id' => $courseId,
-                'can_charge' => $canCharge,
-                'amount' => $amount,
-                'period_year' => $period['year'],
-                'period_half' => $period['half'],
-                'period_label' => $period['label'],
-                'paid_at' => $paidAt,
-                'note' => $canCharge
-                    ? null
-                    : sprintf('已於 %s 收取%s教材', $paidAt, $period['label']),
-            ];
         }
 
         return $out;
     }
 
     /**
-     * @param  list<array{course_id:int, amount:int}>  $rows
+     * @param  list<array{course_id:int, amount:int, period_year?:int, period_half?:string}>  $rows
      */
     public static function recordCharges(
         Student $student,
@@ -114,7 +126,7 @@ final class MaterialHalfYear
             return;
         }
 
-        $period = self::periodFromDate($asOfDate);
+        $fallback = self::periodFromDate($asOfDate);
         $paidAt = Carbon::parse($asOfDate)->toDateString();
 
         foreach ($rows as $row) {
@@ -124,12 +136,18 @@ final class MaterialHalfYear
                 continue;
             }
 
+            $periodYear = isset($row['period_year']) ? (int) $row['period_year'] : $fallback['year'];
+            $periodHalf = isset($row['period_half']) ? (string) $row['period_half'] : $fallback['half'];
+            if (! in_array($periodHalf, ['H1', 'H2'], true)) {
+                continue;
+            }
+
             StudentMaterialPayment::query()->updateOrCreate(
                 [
                     'student_id' => $student->id,
                     'course_id' => $courseId,
-                    'period_year' => $period['year'],
-                    'period_half' => $period['half'],
+                    'period_year' => $periodYear,
+                    'period_half' => $periodHalf,
                 ],
                 [
                     'amount' => $amount,

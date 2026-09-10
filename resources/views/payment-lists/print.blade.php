@@ -43,13 +43,32 @@
         .sheet {
             width: 100%;
             max-width: 190mm;
-            margin: 0 auto;
+            margin: 0 auto 16mm;
+            padding-bottom: 8mm;
+            border-bottom: 2px dashed #94a3b8;
             page-break-after: always;
             break-after: page;
         }
         .sheet:last-of-type {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
             page-break-after: auto;
             break-after: auto;
+        }
+        .grade-title {
+            margin: 0 0 8px;
+            text-align: center;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+        }
+        .page-hint {
+            display: block;
+            margin: -4px 0 10px;
+            text-align: center;
+            color: #64748b;
+            font-size: 12px;
         }
         .cols {
             display: grid;
@@ -110,8 +129,14 @@
         .legend .cycle { background: #dcfce7; }
         @media print {
             .toolbar { display: none !important; }
+            .page-hint { display: none !important; }
+            .sheet {
+                margin-bottom: 0;
+                padding-bottom: 0;
+                border-bottom: none;
+                max-width: none;
+            }
             body { padding: 6mm; }
-            .sheet { max-width: none; }
             @page { size: A4 portrait; margin: 8mm; }
         }
     </style>
@@ -120,19 +145,24 @@
     <div class="toolbar">
         <button type="button" onclick="window.print()">列印／另存 PDF</button>
         <a class="secondary" href="{{ route('payment-lists.index', array_filter(['q' => $q ?: null, 'year' => $yearLabel !== '全部' ? $yearLabel : null])) }}">返回繳費名單</a>
+        <span style="color:#64748b;font-size:13px;">共 {{ count($gradeSheets) }} 張（每年級一張）</span>
     </div>
 
     @forelse ($gradeSheets as $sheet)
         @php
             $sheetRows = $sheet['rows'];
-            $mid = (int) ceil(count($sheetRows) / 2);
+            $mid = (int) ceil(max(count($sheetRows), 1) / 2);
             $left = array_slice($sheetRows, 0, $mid);
             $right = array_slice($sheetRows, $mid);
             $rowCount = max(count($left), count($right), 1);
             $padTo = max($rowCount, 20);
+            $sheetIndex = $loop->iteration;
+            $sheetTotal = $loop->count;
         @endphp
 
         <div class="sheet">
+            <h2 class="grade-title">{{ $sheet['grade_name'] }}</h2>
+            <span class="page-hint">第 {{ $sheetIndex }} / {{ $sheetTotal }} 張｜列印時各自成頁</span>
             <div class="meta">
                 繳費名單（尚未繳下一期）｜產生時間 {{ $generatedAt }}｜年份 {{ $yearLabel }}
                 ｜年級 {{ $sheet['grade_name'] }}
@@ -152,22 +182,33 @@
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach ($columnRows as $row)
+                            @if (count($sheetRows) === 0 && $loop->first)
                                 <tr>
-                                    <td class="name">{{ $row['student_name'] }}</td>
-                                    <td class="subj">
-                                        <div class="subj-main">{{ $row['subjects_label'] }}</div>
-                                        <div class="period">{{ $row['period_label'] }}</div>
-                                    </td>
-                                    <td class="fee">{{ number_format($row['fee']) }}</td>
-                                    <td class="note">{{ $row['note'] !== '' ? $row['note'] : '' }}</td>
+                                    <td colspan="4" style="color:#666;padding:16px;">本年級無待繳名單</td>
                                 </tr>
-                            @endforeach
-                            @for ($i = count($columnRows); $i < $padTo; $i++)
-                                <tr class="empty">
-                                    <td></td><td></td><td></td><td></td>
-                                </tr>
-                            @endfor
+                                @for ($i = 1; $i < $padTo; $i++)
+                                    <tr class="empty">
+                                        <td></td><td></td><td></td><td></td>
+                                    </tr>
+                                @endfor
+                            @else
+                                @foreach ($columnRows as $row)
+                                    <tr>
+                                        <td class="name">{{ $row['student_name'] }}</td>
+                                        <td class="subj">
+                                            <div class="subj-main">{{ $row['subjects_label'] }}</div>
+                                            <div class="period">{{ $row['period_label'] }}</div>
+                                        </td>
+                                        <td class="fee">{{ number_format($row['fee']) }}</td>
+                                        <td class="note">{{ $row['note'] !== '' ? $row['note'] : '' }}</td>
+                                    </tr>
+                                @endforeach
+                                @for ($i = count($columnRows); $i < $padTo; $i++)
+                                    <tr class="empty">
+                                        <td></td><td></td><td></td><td></td>
+                                    </tr>
+                                @endfor
+                            @endif
                         </tbody>
                     </table>
                 @endforeach

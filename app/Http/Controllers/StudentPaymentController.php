@@ -14,7 +14,6 @@ use App\Support\Grade9AnnualPackage;
 use App\Support\MaterialHalfYear;
 use App\Support\PaymentRosterBuilder;
 use App\Support\PromotionCourses;
-use App\Support\ReceiptNumber;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -224,52 +223,48 @@ class StudentPaymentController extends Controller
     }
 
     /**
-     * 依年級分組繳費名單（列印每年級一張）。
+     * 依年級分組繳費名單（列印每年級一張；含尚無待繳的年級空表）。
      *
      * @param  list<array<string, mixed>>  $rows
      * @return list<array{grade_name:string, rows:list<array<string, mixed>>}>
      */
     private function groupRosterRowsByGrade(array $rows): array
     {
-        $order = GradeLevel::query()
+        $gradeNames = GradeLevel::query()
             ->orderBy('sort_order')
             ->orderBy('code')
             ->pluck('name')
             ->map(fn ($name) => (string) $name)
             ->values()
             ->all();
-        $rank = array_flip($order);
 
         $grouped = [];
+        foreach ($gradeNames as $name) {
+            $grouped[$name] = [];
+        }
+
+        $ungraded = [];
         foreach ($rows as $row) {
             $name = trim((string) ($row['grade_name'] ?? ''));
-            if ($name === '') {
-                $name = '未分年級';
+            if ($name === '' || ! array_key_exists($name, $grouped)) {
+                $ungraded[] = $row;
+                continue;
             }
             $grouped[$name][] = $row;
         }
-
-        uksort($grouped, function (string $a, string $b) use ($rank): int {
-            if ($a === '未分年級') {
-                return 1;
-            }
-            if ($b === '未分年級') {
-                return -1;
-            }
-            $ra = $rank[$a] ?? PHP_INT_MAX;
-            $rb = $rank[$b] ?? PHP_INT_MAX;
-            if ($ra === $rb) {
-                return strcmp($a, $b);
-            }
-
-            return $ra <=> $rb;
-        });
 
         $sheets = [];
         foreach ($grouped as $gradeName => $gradeRows) {
             $sheets[] = [
                 'grade_name' => $gradeName,
                 'rows' => array_values($gradeRows),
+            ];
+        }
+
+        if ($ungraded !== []) {
+            $sheets[] = [
+                'grade_name' => '未分年級',
+                'rows' => array_values($ungraded),
             ];
         }
 
@@ -393,7 +388,6 @@ class StudentPaymentController extends Controller
             'suggested_course_ids' => $suggestedCourseIds,
             'suggested_pay_cycle' => $suggestedPayCycle,
             'material_status' => $materialStatus,
-            'next_receipt_no' => ReceiptNumber::peekNext(),
             'fee_discounts' => FeeDiscount::query()
                 ->active()
                 ->availableOn(Carbon::today()->toDateString())
@@ -620,7 +614,13 @@ class StudentPaymentController extends Controller
             'start_date' => ['nullable', 'date'],
             'charge_material_course_ids' => ['nullable', 'array'],
             'charge_material_course_ids.*' => ['integer', 'exists:courses,id'],
+            'material_half_charges' => ['nullable', 'array'],
+            'material_half_charges.*.course_id' => ['required', 'integer', 'exists:courses,id'],
+            'material_half_charges.*.period_year' => ['required', 'integer', 'between:2000,2100'],
+            'material_half_charges.*.period_half' => ['required', 'in:H1,H2'],
+            'material_half_charges.*.amount' => ['required', 'integer', 'min:1'],
             'fee_discount_id' => ['nullable', 'integer', 'exists:fee_discounts,id'],
+            'receipt_no' => ['nullable', 'string', 'max:20'],
         ]);
 
         $suggested = BillingRenewal::suggestedStartDate($student);
@@ -631,14 +631,31 @@ class StudentPaymentController extends Controller
             }
         }
 
+        $courseIdSet = array_fill_keys(array_map('intval', $validated['course_ids']), true);
+
         $chargeMaterialCourseIds = array_values(array_unique(array_map(
             'intval',
             $validated['charge_material_course_ids'] ?? []
         )));
         $chargeMaterialCourseIds = array_values(array_filter(
             $chargeMaterialCourseIds,
-            fn (int $id) => in_array($id, array_map('intval', $validated['course_ids']), true)
+            fn (int $id) => isset($courseIdSet[$id])
         ));
+
+        /** @var list<array{course_id:int, period_year:int, period_half:string, amount:int}> $materialHalfCharges */
+        $materialHalfCharges = [];
+        foreach ($validated['material_half_charges'] ?? [] as $row) {
+            $cid = (int) ($row['course_id'] ?? 0);
+            if (! isset($courseIdSet[$cid])) {
+                continue;
+            }
+            $materialHalfCharges[] = [
+                'course_id' => $cid,
+                'period_year' => (int) $row['period_year'],
+                'period_half' => (string) $row['period_half'],
+                'amount' => (int) $row['amount'],
+            ];
+        }
 
         $useGrade9Package = Grade9AnnualPackage::qualifies(
             $student,
@@ -649,26 +666,35 @@ class StudentPaymentController extends Controller
 
         if ($useGrade9Package) {
             $chargeMaterialCourseIds = [];
+            $materialHalfCharges = [];
         }
 
-        // 擋下本半年已收過教材的科目
+        // 擋下已收過的半年教材
         $asOf = $startDate ?? Carbon::today()->toDateString();
         $subjects = EnrollmentPricing::subjectsForStudent($student);
         $subjectsById = collect($subjects)->keyBy('id')->all();
+        $statusCourseIds = array_values(array_unique(array_map(
+            fn (array $row): int => (int) $row['course_id'],
+            $materialHalfCharges
+        )));
         $materialStatus = MaterialHalfYear::statusForCourses(
             $student,
-            $chargeMaterialCourseIds,
+            $statusCourseIds,
             $asOf,
             $subjectsById
         );
-        $blocked = collect($materialStatus)
-            ->filter(fn (array $row): bool => ! $row['can_charge'])
-            ->pluck('course_id')
-            ->all();
-        if ($blocked !== []) {
-            return back()->withErrors([
-                'charge_material_course_ids' => '部分科目本半年教材已收過，請取消勾選後再送出。',
-            ]);
+        $statusKey = [];
+        foreach ($materialStatus as $row) {
+            $statusKey[$row['course_id'].'-'.$row['period_half'].'-'.$row['period_year']] = $row;
+        }
+        foreach ($materialHalfCharges as $charge) {
+            $key = $charge['course_id'].'-'.$charge['period_half'].'-'.$charge['period_year'];
+            $status = $statusKey[$key] ?? null;
+            if ($status !== null && ! $status['can_charge']) {
+                return back()->withErrors([
+                    'material_half_charges' => '部分科目該半年教材已收過，請取消勾選後再送出。',
+                ]);
+            }
         }
 
         $feeDiscount = null;
@@ -703,6 +729,7 @@ class StudentPaymentController extends Controller
                 0,
                 $startDate,
                 $chargeMaterialCourseIds,
+                $materialHalfCharges,
             );
         }
 
@@ -730,6 +757,11 @@ class StudentPaymentController extends Controller
         $allowance = min($subtotal, max(0, $allowance));
         $quote['grand_total'] = max(0, $subtotal - $allowance);
 
+        $manualReceiptNo = isset($validated['receipt_no'])
+            ? trim((string) $validated['receipt_no'])
+            : '';
+        $manualReceiptNo = $manualReceiptNo === '' ? null : $manualReceiptNo;
+
         $receiptNo = BillingRenewal::persistQuote(
             $student,
             $validated['pay_cycle'],
@@ -737,20 +769,12 @@ class StudentPaymentController extends Controller
             $allowance,
             $feeDiscount?->id,
             $feeDiscount?->label(),
+            $manualReceiptNo,
         );
 
-        $materialChargeRows = [];
-        foreach ($quote['lines'] as $line) {
-            $cid = (int) ($line['course_id'] ?? 0);
-            $mat = (int) ($line['material'] ?? 0);
-            $unit = (string) ($line['material_unit'] ?? 'term');
-            if ($cid > 0 && $mat > 0 && $unit !== 'class_day' && in_array($cid, $chargeMaterialCourseIds, true)) {
-                $materialChargeRows[] = ['course_id' => $cid, 'amount' => $mat];
-            }
-        }
         MaterialHalfYear::recordCharges(
             $student,
-            $materialChargeRows,
+            $materialHalfCharges,
             $asOf,
             auth()->id(),
         );
