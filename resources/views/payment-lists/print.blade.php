@@ -44,6 +44,12 @@
             width: 100%;
             max-width: 190mm;
             margin: 0 auto;
+            page-break-after: always;
+            break-after: page;
+        }
+        .sheet:last-of-type {
+            page-break-after: auto;
+            break-after: auto;
         }
         .cols {
             display: grid;
@@ -116,67 +122,86 @@
         <a class="secondary" href="{{ route('payment-lists.index', array_filter(['q' => $q ?: null, 'year' => $yearLabel !== '全部' ? $yearLabel : null])) }}">返回繳費名單</a>
     </div>
 
-    <div class="meta">
-        繳費名單（尚未繳下一期）｜產生時間 {{ $generatedAt }}｜年份 {{ $yearLabel }}
-        @if($q !== '')｜搜尋：{{ $q }}@endif
-        ｜共 {{ count($rows) }} 人
-    </div>
+    @forelse ($gradeSheets as $sheet)
+        @php
+            $sheetRows = $sheet['rows'];
+            $mid = (int) ceil(count($sheetRows) / 2);
+            $left = array_slice($sheetRows, 0, $mid);
+            $right = array_slice($sheetRows, $mid);
+            $rowCount = max(count($left), count($right), 1);
+            $padTo = max($rowCount, 20);
+        @endphp
 
-    @php
-        $mid = (int) ceil(count($rows) / 2);
-        $left = array_slice($rows, 0, $mid);
-        $right = array_slice($rows, $mid);
-        $rowCount = max(count($left), count($right), 1);
-        $padTo = max($rowCount, 20);
-    @endphp
+        <div class="sheet">
+            <div class="meta">
+                繳費名單（尚未繳下一期）｜產生時間 {{ $generatedAt }}｜年份 {{ $yearLabel }}
+                ｜年級 {{ $sheet['grade_name'] }}
+                @if($q !== '')｜搜尋：{{ $q }}@endif
+                ｜共 {{ count($sheetRows) }} 人
+            </div>
 
-    <div class="sheet">
-        <div class="cols">
-            @foreach ([$left, $right] as $columnRows)
-                <table>
-                    <thead>
-                        <tr>
-                            <th class="name">學生姓名</th>
-                            <th class="subj">科目月份</th>
-                            <th class="fee">費用</th>
-                            <th class="note">備註</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @forelse ($columnRows as $row)
+            <div class="cols">
+                @foreach ([$left, $right] as $columnRows)
+                    <table>
+                        <thead>
                             <tr>
-                                <td class="name">{{ $row['student_name'] }}</td>
-                                <td class="subj">
-                                    <div class="subj-main">{{ $row['subjects_label'] }}</div>
-                                    <div class="period">{{ $row['period_label'] }}</div>
-                                </td>
-                                <td class="fee">{{ number_format($row['fee']) }}</td>
-                                <td class="note">{{ $row['note'] !== '' ? $row['note'] : '' }}</td>
+                                <th class="name">學生姓名</th>
+                                <th class="subj">科目月份</th>
+                                <th class="fee">費用</th>
+                                <th class="note">備註</th>
                             </tr>
-                        @empty
-                            @if ($loop->first && count($rows) === 0)
+                        </thead>
+                        <tbody>
+                            @foreach ($columnRows as $row)
                                 <tr>
-                                    <td colspan="4" style="color:#666;padding:24px;">無待繳名單</td>
+                                    <td class="name">{{ $row['student_name'] }}</td>
+                                    <td class="subj">
+                                        <div class="subj-main">{{ $row['subjects_label'] }}</div>
+                                        <div class="period">{{ $row['period_label'] }}</div>
+                                    </td>
+                                    <td class="fee">{{ number_format($row['fee']) }}</td>
+                                    <td class="note">{{ $row['note'] !== '' ? $row['note'] : '' }}</td>
                                 </tr>
-                            @endif
-                        @endforelse
-                        @if (count($rows) > 0)
+                            @endforeach
                             @for ($i = count($columnRows); $i < $padTo; $i++)
                                 <tr class="empty">
                                     <td></td><td></td><td></td><td></td>
                                 </tr>
                             @endfor
-                        @endif
-                    </tbody>
-                </table>
-            @endforeach
-        </div>
+                        </tbody>
+                    </table>
+                @endforeach
+            </div>
 
-        <div class="legend">
-            <div class="box fee">教材費／學期<br>依收費標準</div>
-            <div class="box fee">學費<br>依繳別與科目數計價</div>
-            <div class="box cycle">繳費週期<br>季繳／三個月（首期可不足）</div>
+            <div class="legend">
+                <div class="box fee">教材費／學期<br>依收費標準</div>
+                <div class="box fee">學費<br>依繳別與科目數計價</div>
+                <div class="box cycle">繳費週期<br>季繳／三個月（首期可不足）</div>
+            </div>
         </div>
-    </div>
+    @empty
+        <div class="sheet">
+            <div class="meta">
+                繳費名單（尚未繳下一期）｜產生時間 {{ $generatedAt }}｜年份 {{ $yearLabel }}
+                @if($q !== '')｜搜尋：{{ $q }}@endif
+                ｜共 0 人
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th class="name">學生姓名</th>
+                        <th class="subj">科目月份</th>
+                        <th class="fee">費用</th>
+                        <th class="note">備註</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td colspan="4" style="color:#666;padding:24px;">無待繳名單</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    @endforelse
 </body>
 </html>

@@ -39,6 +39,12 @@ const selectedGrades = computed(() =>
     props.gradeLevels.filter((g) => form.levels.includes(g.name)),
 );
 
+const allLevelsSelected = computed(
+    () =>
+        props.gradeLevels.length > 0 &&
+        props.gradeLevels.every((g) => form.levels.includes(g.name)),
+);
+
 const schedulesForLevel = (level: string | null) =>
     form.schedules
         .map((s, index) => ({ s, index }))
@@ -51,6 +57,18 @@ const toggleLevel = (level: string) => {
     } else {
         form.levels = [...form.levels, level];
     }
+};
+
+const toggleAllLevels = () => {
+    if (allLevelsSelected.value) {
+        const names = new Set(props.gradeLevels.map((g) => g.name));
+        form.levels = [];
+        form.schedules = form.schedules.filter(
+            (s) => s.level == null || !names.has(s.level),
+        );
+        return;
+    }
+    form.levels = props.gradeLevels.map((g) => g.name);
 };
 
 const addSchedule = (level: string | null) => {
@@ -210,6 +228,17 @@ defineOptions({
                     尚未設定年級，請先至「設定管理 → 年級編號」新增。
                 </div>
                 <div v-else class="flex flex-wrap gap-3">
+                    <label
+                        class="flex cursor-pointer items-center gap-2 text-sm font-medium"
+                    >
+                        <input
+                            type="checkbox"
+                            class="size-4 accent-[var(--brand-green)]"
+                            :checked="allLevelsSelected"
+                            @change="toggleAllLevels"
+                        />
+                        全年級
+                    </label>
                     <label
                         v-for="g in props.gradeLevels"
                         :key="g.id"

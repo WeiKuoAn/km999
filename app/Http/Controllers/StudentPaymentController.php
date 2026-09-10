@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\FeeDiscount;
+use App\Models\GradeLevel;
 use App\Models\Holiday;
 use App\Models\Reconciliation;
 use App\Models\Student;
@@ -215,11 +216,64 @@ class StudentPaymentController extends Controller
         $rows = $this->filterRosterRowsForTeacher($rows);
 
         return response()->view('payment-lists.print', [
-            'rows' => $rows,
+            'gradeSheets' => $this->groupRosterRowsByGrade($rows),
             'generatedAt' => now()->format('Y-m-d H:i'),
             'yearLabel' => $year === null ? '全部' : (string) $year,
             'q' => $q,
         ]);
+    }
+
+    /**
+     * 依年級分組繳費名單（列印每年級一張）。
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array{grade_name:string, rows:list<array<string, mixed>>}>
+     */
+    private function groupRosterRowsByGrade(array $rows): array
+    {
+        $order = GradeLevel::query()
+            ->orderBy('sort_order')
+            ->orderBy('code')
+            ->pluck('name')
+            ->map(fn ($name) => (string) $name)
+            ->values()
+            ->all();
+        $rank = array_flip($order);
+
+        $grouped = [];
+        foreach ($rows as $row) {
+            $name = trim((string) ($row['grade_name'] ?? ''));
+            if ($name === '') {
+                $name = '未分年級';
+            }
+            $grouped[$name][] = $row;
+        }
+
+        uksort($grouped, function (string $a, string $b) use ($rank): int {
+            if ($a === '未分年級') {
+                return 1;
+            }
+            if ($b === '未分年級') {
+                return -1;
+            }
+            $ra = $rank[$a] ?? PHP_INT_MAX;
+            $rb = $rank[$b] ?? PHP_INT_MAX;
+            if ($ra === $rb) {
+                return strcmp($a, $b);
+            }
+
+            return $ra <=> $rb;
+        });
+
+        $sheets = [];
+        foreach ($grouped as $gradeName => $gradeRows) {
+            $sheets[] = [
+                'grade_name' => $gradeName,
+                'rows' => array_values($gradeRows),
+            ];
+        }
+
+        return $sheets;
     }
 
     /** 新增收款／報名計價 */
