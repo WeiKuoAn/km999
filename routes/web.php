@@ -9,7 +9,6 @@ use App\Http\Controllers\CourseController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FeeDiscountController;
 use App\Http\Controllers\FeePlanController;
-use App\Http\Controllers\FlowPreviewController;
 use App\Http\Controllers\GradeLevelController;
 use App\Http\Controllers\HolidayController;
 use App\Http\Controllers\ReportController;
@@ -35,21 +34,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('todos', [UserTodoController::class, 'store'])->name('todos.store');
     Route::patch('todos/{todo}', [UserTodoController::class, 'update'])->name('todos.update');
     Route::delete('todos/{todo}', [UserTodoController::class, 'destroy'])->name('todos.destroy');
-
-    // 營運流程預覽頁（假資料，供核對流暢）
-    Route::prefix('flow-preview')->name('flow-preview.')->group(function () {
-        Route::get('/', [FlowPreviewController::class, 'index'])->name('index');
-        Route::get('students', [FlowPreviewController::class, 'students'])->name('students');
-        Route::get('trial', [FlowPreviewController::class, 'trial'])->name('trial');
-        Route::get('enrollment', [FlowPreviewController::class, 'enrollment'])->name('enrollment');
-        Route::get('counter', [FlowPreviewController::class, 'counter'])->name('counter');
-        Route::get('fee-plans', [FlowPreviewController::class, 'feePlans'])->name('fee-plans');
-        Route::get('sessions', [FlowPreviewController::class, 'sessions'])->name('sessions');
-        Route::get('calendar', [FlowPreviewController::class, 'calendar'])->name('calendar');
-        Route::get('short-courses', [FlowPreviewController::class, 'shortCourses'])->name('short-courses');
-        Route::get('roster', [FlowPreviewController::class, 'roster'])->name('roster');
-        Route::get('revenue', [FlowPreviewController::class, 'revenue'])->name('revenue');
-    });
 
     Route::middleware('role:super_admin,admin,teacher')->group(function () {
         Route::get('students', [StudentController::class, 'index'])->name('students.index');
