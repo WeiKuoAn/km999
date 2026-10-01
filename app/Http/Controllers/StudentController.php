@@ -12,17 +12,15 @@ use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\StudentCourseDrop;
 use App\Models\User;
-use App\Support\ClassroomRecurringScheduleLabel;
 use App\Support\CourseTuition;
 use App\Support\EnrollmentTuitionSync;
 use App\Support\MakeupAttendanceNote;
 use App\Support\StudentCodeGenerator;
-use App\Support\StudentEnrollmentSync;
 use App\Support\WeekdayDates;
 use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
@@ -96,7 +94,7 @@ class StudentController extends Controller
         ]);
     }
 
-    public function nextCode(Request $request): \Illuminate\Http\JsonResponse
+    public function nextCode(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'academic_year_id' => ['required', 'integer', 'exists:academic_years,id'],
@@ -152,6 +150,7 @@ class StudentController extends Controller
                 'name' => $student->name,
                 'phone' => $student->phone,
                 'parent_phones' => $this->parentPhonesForForm($student),
+                'siblings' => $this->siblingsForForm($student),
                 'graduate_school' => $student->graduate_school,
                 'current_school' => $student->current_school,
                 'class_name' => $student->class_name,
@@ -868,6 +867,11 @@ class StudentController extends Controller
             'parent_phones' => ['nullable', 'array'],
             'parent_phones.*.title' => ['nullable', 'string', 'max:32'],
             'parent_phones.*.phone' => ['nullable', 'string', 'max:32'],
+            'siblings' => ['nullable', 'array'],
+            'siblings.*.relation' => ['nullable', 'string', 'max:16'],
+            'siblings.*.name' => ['nullable', 'string', 'max:64'],
+            'siblings.*.school' => ['nullable', 'string', 'max:255'],
+            'siblings.*.grade' => ['nullable', 'string', 'max:32'],
             'address_city' => ['nullable', 'string', 'max:32'],
             'address_district' => ['nullable', 'string', 'max:32'],
             'address_zip' => ['nullable', 'string', 'max:8'],
@@ -894,6 +898,20 @@ class StudentController extends Controller
         $first = $phones[0] ?? null;
         $validated['parent_name'] = $first['title'] ?? null;
         $validated['parent_phone'] = $first['phone'] ?? null;
+
+        $siblings = collect($validated['siblings'] ?? [])
+            ->map(fn ($sibling): array => [
+                'relation' => trim((string) ($sibling['relation'] ?? '')),
+                'name' => trim((string) ($sibling['name'] ?? '')),
+                'school' => trim((string) ($sibling['school'] ?? '')),
+                'grade' => trim((string) ($sibling['grade'] ?? '')),
+            ])
+            ->filter(fn (array $sibling): bool => $sibling['name'] !== ''
+                || $sibling['school'] !== ''
+                || $sibling['grade'] !== '')
+            ->values()
+            ->all();
+        $validated['siblings'] = $siblings !== [] ? $siblings : null;
 
         $zip = trim((string) ($validated['address_zip'] ?? ''));
         $city = trim((string) ($validated['address_city'] ?? ''));
@@ -934,5 +952,22 @@ class StudentController extends Controller
             ['title' => '', 'phone' => ''],
             ['title' => '', 'phone' => ''],
         ];
+    }
+
+    /**
+     * @return list<array{relation:string,name:string,school:string,grade:string}>
+     */
+    private function siblingsForForm(Student $student): array
+    {
+        if (! is_array($student->siblings)) {
+            return [];
+        }
+
+        return array_values(array_map(fn (array $sibling): array => [
+            'relation' => (string) ($sibling['relation'] ?? ''),
+            'name' => (string) ($sibling['name'] ?? ''),
+            'school' => (string) ($sibling['school'] ?? ''),
+            'grade' => (string) ($sibling['grade'] ?? ''),
+        ], $student->siblings));
     }
 }

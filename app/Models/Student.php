@@ -18,6 +18,7 @@ class Student extends Model
         'parent_name',
         'parent_phone',
         'parent_phones',
+        'siblings',
         'graduate_school',
         'current_school',
         'class_name',
@@ -37,6 +38,7 @@ class Student extends Model
     {
         return [
             'parent_phones' => 'array',
+            'siblings' => 'array',
             'intended_course_ids' => 'array',
         ];
     }

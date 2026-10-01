@@ -9,9 +9,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
     defaultParentPhones,
+    emptySibling,
     emptyToNull,
     normalizeParentPhones,
+    normalizeSiblings,
+    SIBLING_RELATIONS,
+    type Sibling,
 } from '@/lib/studentForm';
+import { STUDENT_STATUSES, studentStatusLabel, type StudentStatus } from '@/lib/studentStatus';
 
 type YearOption = { id: number; year_code: string; name: string; is_current: boolean };
 type GradeOption = { id: number; name: string; code: number; code_padded: string };
@@ -26,6 +31,7 @@ const form = useForm({
     name: '',
     phone: '',
     parent_phones: defaultParentPhones(),
+    siblings: [] as Sibling[],
     graduate_school: '',
     current_school: '',
     class_name: '',
@@ -35,7 +41,7 @@ const form = useForm({
     address_zip: '',
     address_detail: '',
     gender: '',
-    status: 'active',
+    status: 'active' as StudentStatus,
     note: '',
     academic_year_id: props.defaultAcademicYearId ? String(props.defaultAcademicYearId) : '',
     grade_level_id: '',
@@ -100,6 +106,14 @@ const removeParentPhone = (index: number) => {
     form.parent_phones.splice(index, 1);
 };
 
+const addSibling = () => {
+    form.siblings.push(emptySibling());
+};
+
+const removeSibling = (index: number) => {
+    form.siblings.splice(index, 1);
+};
+
 const submit = () =>
     form
         .transform((data) => ({
@@ -108,6 +122,7 @@ const submit = () =>
             grade_level_id: data.grade_level_id === '' ? null : Number(data.grade_level_id),
             phone: emptyToNull(data.phone),
             parent_phones: normalizeParentPhones(data.parent_phones),
+            siblings: normalizeSiblings(data.siblings),
             graduate_school: emptyToNull(data.graduate_school),
             current_school: emptyToNull(data.current_school),
             class_name: emptyToNull(data.class_name),
@@ -169,7 +184,7 @@ const submit = () =>
                 </div>
             </div>
 
-            <div class="grid gap-4 sm:grid-cols-2">
+            <div class="grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
                 <div class="grid gap-2">
                     <Label for="name">姓名</Label>
                     <Input id="name" v-model="form.name" />
@@ -183,6 +198,15 @@ const submit = () =>
                         <option value="女">女</option>
                     </select>
                     <InputError :message="form.errors.gender" />
+                </div>
+                <div class="grid gap-2">
+                    <Label for="status">狀態</Label>
+                    <select id="status" v-model="form.status" class="h-9 rounded-md border bg-background px-3">
+                        <option v-for="s in STUDENT_STATUSES" :key="s" :value="s">
+                            {{ studentStatusLabel(s) }}
+                        </option>
+                    </select>
+                    <InputError :message="form.errors.status" />
                 </div>
             </div>
 
@@ -236,6 +260,56 @@ const submit = () =>
                     </Button>
                 </div>
                 <InputError :message="form.errors['parent_phones']" />
+            </div>
+
+            <div class="space-y-3 rounded-lg border p-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <Label>兄弟姊妹</Label>
+                    <Button type="button" variant="outline" size="sm" @click="addSibling">
+                        <Plus class="mr-1 size-4" />
+                        新增
+                    </Button>
+                </div>
+                <p v-if="form.siblings.length === 0" class="text-sm text-muted-foreground">尚未填寫</p>
+                <div
+                    v-for="(sibling, index) in form.siblings"
+                    :key="index"
+                    class="grid gap-2 sm:grid-cols-[6rem_minmax(0,1fr)_minmax(0,1.5fr)_6rem_auto] sm:items-end"
+                >
+                    <div class="grid gap-1">
+                        <Label :for="`sibling_relation_${index}`" class="text-xs text-muted-foreground">稱謂</Label>
+                        <select
+                            :id="`sibling_relation_${index}`"
+                            v-model="sibling.relation"
+                            class="h-9 rounded-md border bg-background px-2"
+                        >
+                            <option value="">—</option>
+                            <option v-for="r in SIBLING_RELATIONS" :key="r" :value="r">{{ r }}</option>
+                        </select>
+                    </div>
+                    <div class="grid gap-1">
+                        <Label :for="`sibling_name_${index}`" class="text-xs text-muted-foreground">姓名</Label>
+                        <Input :id="`sibling_name_${index}`" v-model="sibling.name" />
+                    </div>
+                    <div class="grid gap-1">
+                        <Label :for="`sibling_school_${index}`" class="text-xs text-muted-foreground">學校</Label>
+                        <Input :id="`sibling_school_${index}`" v-model="sibling.school" />
+                    </div>
+                    <div class="grid gap-1">
+                        <Label :for="`sibling_grade_${index}`" class="text-xs text-muted-foreground">年級</Label>
+                        <Input :id="`sibling_grade_${index}`" v-model="sibling.grade" placeholder="例：小五" />
+                    </div>
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        class="shrink-0 self-end"
+                        @click="removeSibling(index)"
+                    >
+                        <Trash2 class="size-4" />
+                    </Button>
+                </div>
+                <InputError :message="form.errors['siblings']" />
             </div>
 
             <div class="grid gap-4 sm:grid-cols-2">
