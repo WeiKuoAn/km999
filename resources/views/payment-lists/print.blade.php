@@ -97,10 +97,11 @@
             font-size: 13px;
             height: 36px;
         }
-        .name { width: 22%; }
-        .subj { width: 34%; }
-        .fee { width: 18%; font-variant-numeric: tabular-nums; font-weight: 600; }
-        .note { width: 26%; }
+        .name { width: 18%; }
+        .subj { width: 28%; }
+        .fee { width: 15%; font-variant-numeric: tabular-nums; font-weight: 600; }
+        .note { width: 23%; }
+        .receipt { width: 16%; }
         .subj-main { font-weight: 600; font-size: 13px; }
         .period {
             margin-top: 2px;
@@ -179,16 +180,17 @@
                                 <th class="subj">科目月份</th>
                                 <th class="fee">費用</th>
                                 <th class="note">備註</th>
+                                <th class="receipt">收據編號</th>
                             </tr>
                         </thead>
                         <tbody>
                             @if (count($sheetRows) === 0 && $loop->first)
                                 <tr>
-                                    <td colspan="4" style="color:#666;padding:16px;">本年級無待繳名單</td>
+                                    <td colspan="5" style="color:#666;padding:16px;">本年級無待繳名單</td>
                                 </tr>
                                 @for ($i = 1; $i < $padTo; $i++)
                                     <tr class="empty">
-                                        <td></td><td></td><td></td><td></td>
+                                        <td></td><td></td><td></td><td></td><td></td>
                                     </tr>
                                 @endfor
                             @else
@@ -201,11 +203,12 @@
                                         </td>
                                         <td class="fee">{{ number_format($row['fee']) }}</td>
                                         <td class="note">{{ $row['note'] !== '' ? $row['note'] : '' }}</td>
+                                        <td class="receipt"></td>
                                     </tr>
                                 @endforeach
                                 @for ($i = count($columnRows); $i < $padTo; $i++)
                                     <tr class="empty">
-                                        <td></td><td></td><td></td><td></td>
+                                        <td></td><td></td><td></td><td></td><td></td>
                                     </tr>
                                 @endfor
                             @endif
@@ -234,11 +237,12 @@
                         <th class="subj">科目月份</th>
                         <th class="fee">費用</th>
                         <th class="note">備註</th>
+                        <th class="receipt">收據編號</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td colspan="4" style="color:#666;padding:24px;">無待繳名單</td>
+                        <td colspan="5" style="color:#666;padding:24px;">無待繳名單</td>
                     </tr>
                 </tbody>
             </table>
