@@ -26,6 +26,7 @@ import {
     classroomCalendarSurface,
     normalizeClassroomHex,
 } from '@/lib/classroomColor';
+import { studentStatusLabel, studentStatusPillClass } from '@/lib/studentStatus';
 
 type Subject = {
     id: number;
@@ -81,8 +82,19 @@ type EditContext = {
     }>;
 };
 
+type GradeStudent = {
+    id: number;
+    student_code: string | null;
+    name: string;
+    status: string;
+    paid_through: string | null;
+};
+
 const props = defineProps<{
     edit?: EditContext | null;
+    grade_levels?: Array<{ id: number; name: string }>;
+    grade_filter?: number | null;
+    grade_students?: GradeStudent[];
     student: StudentInfo | null;
     subjects: Subject[];
     warnings: string[];
@@ -1282,12 +1294,36 @@ const clearStudent = () => {
     query.value = '';
     results.value = [];
     open.value = false;
+    const gradeId = props.student?.grade_level_id ?? null;
     router.get(
         '/student-payments/create',
-        {},
+        gradeId ? { grade_level_id: gradeId } : {},
         { preserveState: false, replace: true },
     );
 };
+
+const gradeFilterValue = ref(props.grade_filter ? String(props.grade_filter) : '');
+const gradeListQuery = ref('');
+
+const onGradeFilterChange = () => {
+    gradeListQuery.value = '';
+    router.get(
+        '/student-payments/create',
+        gradeFilterValue.value ? { grade_level_id: Number(gradeFilterValue.value) } : {},
+        { preserveState: true, preserveScroll: true, replace: true },
+    );
+};
+
+const filteredGradeStudents = computed(() => {
+    const keyword = gradeListQuery.value.trim();
+    const list = props.grade_students ?? [];
+    if (keyword === '') {
+        return list;
+    }
+    return list.filter(
+        (s) => s.name.includes(keyword) || (s.student_code ?? '').includes(keyword),
+    );
+});
 
 const submit = () => {
     if (!props.student) {
@@ -1475,10 +1511,81 @@ defineOptions({
         </div>
 
         <template v-if="!student">
-            <div
-                class="rounded-xl border border-dashed bg-card p-10 text-center text-sm text-muted-foreground"
-            >
-                請先在上方選擇學生，再進行科目勾選與報名計價。
+            <div class="rounded-xl border border-sidebar-border/70 bg-card p-4">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div class="grid gap-2 sm:w-48">
+                        <Label for="grade_filter">依年級選學生</Label>
+                        <select
+                            id="grade_filter"
+                            v-model="gradeFilterValue"
+                            class="h-11 rounded-md border bg-background px-3"
+                            @change="onGradeFilterChange"
+                        >
+                            <option value="">請選擇年級</option>
+                            <option v-for="g in grade_levels ?? []" :key="g.id" :value="String(g.id)">
+                                {{ g.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div v-if="grade_filter" class="grid flex-1 gap-2">
+                        <Label for="grade_list_q">在此年級中搜尋</Label>
+                        <Input
+                            id="grade_list_q"
+                            v-model="gradeListQuery"
+                            class="h-11"
+                            placeholder="學號或姓名"
+                        />
+                    </div>
+                </div>
+
+                <p
+                    v-if="!grade_filter"
+                    class="mt-6 rounded-lg border border-dashed p-8 text-center text-muted-foreground"
+                >
+                    請在上方搜尋學生，或選擇年級後從清單直接新增收款。
+                </p>
+
+                <template v-else>
+                    <p class="mt-4 text-sm text-muted-foreground">
+                        共 {{ filteredGradeStudents.length }} 位學生（不含已畢業）
+                    </p>
+                    <div class="mt-2 overflow-hidden rounded-lg border">
+                        <div
+                            v-for="s in filteredGradeStudents"
+                            :key="s.id"
+                            class="flex flex-wrap items-center gap-3 border-b px-3 py-2.5 last:border-b-0"
+                        >
+                            <div class="min-w-0 flex-1">
+                                <div class="font-medium">
+                                    <span class="font-mono">{{ s.student_code ?? '無學號' }}</span>
+                                    {{ s.name }}
+                                    <span
+                                        v-if="s.status !== 'active'"
+                                        :class="studentStatusPillClass(s.status)"
+                                        class="ml-1 align-middle"
+                                    >
+                                        {{ studentStatusLabel(s.status) }}
+                                    </span>
+                                </div>
+                                <div class="text-sm text-muted-foreground">
+                                    {{ s.paid_through ? `已繳至 ${s.paid_through}` : '尚無收款紀錄' }}
+                                </div>
+                            </div>
+                            <Button variant="outline" size="sm" as-child>
+                                <Link :href="`/student-payments/${s.id}`">收款明細</Link>
+                            </Button>
+                            <Button size="sm" as-child>
+                                <Link :href="`/student-payments/create?student_id=${s.id}`">新增收款</Link>
+                            </Button>
+                        </div>
+                        <p
+                            v-if="filteredGradeStudents.length === 0"
+                            class="p-8 text-center text-muted-foreground"
+                        >
+                            此年級沒有符合的學生。
+                        </p>
+                    </div>
+                </template>
             </div>
         </template>
 

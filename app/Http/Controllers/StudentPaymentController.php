@@ -286,10 +286,16 @@ class StudentPaymentController extends Controller
             'as_of' => ['nullable', 'date'],
             'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
             'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
         ]);
 
         $studentPayload = null;
         $edit = null;
+        $gradeFilter = isset($validated['grade_level_id']) ? (int) $validated['grade_level_id'] : null;
+        $gradeStudents = [];
+        if (empty($validated['student_id']) && $gradeFilter !== null) {
+            $gradeStudents = $this->studentsForGrade($gradeFilter);
+        }
         $subjects = [];
         $warnings = [];
         $hasPriorPayments = false;
@@ -401,6 +407,15 @@ class StudentPaymentController extends Controller
 
         return Inertia::render('StudentPayments/Create', [
             'edit' => $edit,
+            'grade_levels' => GradeLevel::query()
+                ->where('is_active', true)
+                ->orderBy('sort_order')
+                ->orderBy('code')
+                ->get(['id', 'name'])
+                ->map(fn (GradeLevel $g): array => ['id' => $g->id, 'name' => $g->name])
+                ->all(),
+            'grade_filter' => $gradeFilter,
+            'grade_students' => $gradeStudents,
             'student' => $studentPayload,
             'subjects' => $subjects,
             'warnings' => $warnings,
@@ -613,6 +628,55 @@ class StudentPaymentController extends Controller
             'period' => $period,
             'renewal' => BillingRenewal::renewalSummary($student),
         ]);
+    }
+
+    /**
+     * 新增收款：依年級列出學生（不含已畢業），附最近已繳帳期月。
+     *
+     * @return list<array{id:int, student_code:?string, name:string, status:string, paid_through:?string}>
+     */
+    private function studentsForGrade(int $gradeLevelId): array
+    {
+        $query = Student::query()
+            ->where('grade_level_id', $gradeLevelId)
+            ->where('status', '!=', 'graduated')
+            ->orderBy('student_code')
+            ->orderBy('name');
+
+        $user = auth()->user();
+        if ($user?->role === User::ROLE_TEACHER) {
+            $teacherId = $user->teacher?->id;
+            if ($teacherId === null) {
+                return [];
+            }
+            $query->whereHas('enrollments.classroom', fn ($builder) => $builder->where('teacher_id', $teacherId));
+        }
+
+        $students = $query->get(['id', 'student_code', 'name', 'status']);
+
+        $latestKeys = Reconciliation::query()
+            ->whereIn('student_id', $students->pluck('id'))
+            ->where('status', '!=', 'cancelled')
+            ->groupBy('student_id')
+            ->selectRaw('student_id, MAX(billing_year * 12 + billing_month) as end_key')
+            ->pluck('end_key', 'student_id');
+
+        return $students
+            ->map(function (Student $student) use ($latestKeys): array {
+                $endKey = isset($latestKeys[$student->id]) ? (int) $latestKeys[$student->id] : null;
+
+                return [
+                    'id' => $student->id,
+                    'student_code' => $student->student_code,
+                    'name' => $student->name,
+                    'status' => (string) $student->status,
+                    'paid_through' => $endKey !== null
+                        ? sprintf('%d/%d', intdiv($endKey - 1, 12), (($endKey - 1) % 12) + 1)
+                        : null,
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     /** 刪除整期收款（含本期所收教材紀錄） */
