@@ -28,7 +28,70 @@ final class MaterialHalfYear
     }
 
     /**
-     * 回傳指定年（asOf 所屬年）各科 H1／H2 狀態。
+     * 帳期跨到 1 月或 7 月時自動收該半年教材（已收過者略過），金額為年費 ÷ 2。
+     *
+     * @param  list<int>  $courseIds
+     * @param  list<array{y:int|string, m:int|string}>  $months
+     * @param  array<int, array<string, mixed>>  $subjectsById
+     * @return list<array{course_id:int, period_year:int, period_half:string, amount:int}>
+     */
+    public static function autoChargesForMonths(
+        Student $student,
+        array $courseIds,
+        array $months,
+        array $subjectsById,
+    ): array {
+        $periods = [];
+        foreach ($months as $month) {
+            $m = (int) $month['m'];
+            if ($m === 1 || $m === 7) {
+                $periods[] = ['year' => (int) $month['y'], 'half' => $m === 1 ? 'H1' : 'H2'];
+            }
+        }
+        if ($periods === [] || $courseIds === []) {
+            return [];
+        }
+
+        $paid = [];
+        if (Schema::hasTable('student_material_payments')) {
+            StudentMaterialPayment::query()
+                ->where('student_id', $student->id)
+                ->whereIn('course_id', $courseIds)
+                ->whereIn('period_year', array_column($periods, 'year'))
+                ->get(['course_id', 'period_year', 'period_half'])
+                ->each(function (StudentMaterialPayment $row) use (&$paid): void {
+                    $paid[$row->course_id.'-'.$row->period_year.'-'.$row->period_half] = true;
+                });
+        }
+
+        $out = [];
+        foreach ($courseIds as $courseId) {
+            $subject = $subjectsById[(int) $courseId] ?? null;
+            if (! is_array($subject)) {
+                continue;
+            }
+            $fee = (int) ($subject['material'] ?? 0);
+            if (($subject['material_unit'] ?? 'term') === 'class_day' || $fee <= 0) {
+                continue;
+            }
+            foreach ($periods as $period) {
+                if (isset($paid[$courseId.'-'.$period['year'].'-'.$period['half']])) {
+                    continue;
+                }
+                $out[] = [
+                    'course_id' => (int) $courseId,
+                    'period_year' => $period['year'],
+                    'period_half' => $period['half'],
+                    'amount' => EnrollmentPricing::semiAnnualMaterialFee($fee),
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * 回傳 asOf 所屬年與隔年各科 H1／H2 狀態（帳期可能跨年）。
      *
      * @param  list<int>  $courseIds
      * @return list<array{
@@ -49,7 +112,8 @@ final class MaterialHalfYear
         string $asOfDate,
         array $subjectsById,
     ): array {
-        $year = (int) Carbon::parse($asOfDate)->year;
+        $baseYear = (int) Carbon::parse($asOfDate)->year;
+        $years = [$baseYear, $baseYear + 1];
         $courseIds = array_values(array_unique(array_map('intval', $courseIds)));
         if ($courseIds === []) {
             return [];
@@ -59,16 +123,16 @@ final class MaterialHalfYear
         if (Schema::hasTable('student_material_payments')) {
             $paidRows = StudentMaterialPayment::query()
                 ->where('student_id', $student->id)
-                ->where('period_year', $year)
+                ->whereIn('period_year', $years)
                 ->whereIn('course_id', $courseIds)
                 ->whereIn('period_half', ['H1', 'H2'])
-                ->get(['course_id', 'period_half', 'paid_at', 'amount']);
+                ->get(['course_id', 'period_year', 'period_half', 'paid_at', 'amount']);
         }
 
         /** @var array<string, object> $paidMap */
         $paidMap = [];
         foreach ($paidRows as $row) {
-            $key = ((int) $row->course_id).'-'.(string) $row->period_half;
+            $key = ((int) $row->course_id).'-'.((int) $row->period_year).'-'.(string) $row->period_half;
             $paidMap[$key] = $row;
         }
 
@@ -83,30 +147,32 @@ final class MaterialHalfYear
             }
 
             $defaultAmount = EnrollmentPricing::semiAnnualMaterialFee($fee);
-            foreach (['H1', 'H2'] as $half) {
-                $key = $courseId.'-'.$half;
-                $paid = $paidMap[$key] ?? null;
-                $paidAt = null;
-                if ($paid !== null && $paid->paid_at) {
-                    $paidAt = $paid->paid_at instanceof Carbon
-                        ? $paid->paid_at->toDateString()
-                        : substr((string) $paid->paid_at, 0, 10);
+            foreach ($years as $year) {
+                foreach (['H1', 'H2'] as $half) {
+                    $key = $courseId.'-'.$year.'-'.$half;
+                    $paid = $paidMap[$key] ?? null;
+                    $paidAt = null;
+                    if ($paid !== null && $paid->paid_at) {
+                        $paidAt = $paid->paid_at instanceof Carbon
+                            ? $paid->paid_at->toDateString()
+                            : substr((string) $paid->paid_at, 0, 10);
+                    }
+                    $canCharge = $paidAt === null;
+                    $label = EnrollmentPricing::halfYearLabel($year, $half);
+                    $out[] = [
+                        'course_id' => $courseId,
+                        'can_charge' => $canCharge,
+                        'amount' => $defaultAmount,
+                        'period_year' => $year,
+                        'period_half' => $half,
+                        'period_label' => $label,
+                        'months_label' => $half === 'H1' ? '1–6' : '7–12',
+                        'paid_at' => $paidAt,
+                        'note' => $canCharge
+                            ? null
+                            : sprintf('已於 %s 收取%s教材', $paidAt, $label),
+                    ];
                 }
-                $canCharge = $paidAt === null;
-                $label = EnrollmentPricing::halfYearLabel($year, $half);
-                $out[] = [
-                    'course_id' => $courseId,
-                    'can_charge' => $canCharge,
-                    'amount' => $defaultAmount,
-                    'period_year' => $year,
-                    'period_half' => $half,
-                    'period_label' => $label,
-                    'months_label' => $half === 'H1' ? '1–6' : '7–12',
-                    'paid_at' => $paidAt,
-                    'note' => $canCharge
-                        ? null
-                        : sprintf('已於 %s 收取%s教材', $paidAt, $label),
-                ];
             }
         }
 

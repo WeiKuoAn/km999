@@ -287,6 +287,7 @@ class StudentPaymentController extends Controller
             'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
             'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
             'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'return_grade' => ['nullable', 'integer', 'exists:grade_levels,id'],
         ]);
 
         $studentPayload = null;
@@ -416,6 +417,7 @@ class StudentPaymentController extends Controller
                 ->all(),
             'grade_filter' => $gradeFilter,
             'grade_students' => $gradeStudents,
+            'return_grade_level_id' => isset($validated['return_grade']) ? (int) $validated['return_grade'] : null,
             'student' => $studentPayload,
             'subjects' => $subjects,
             'warnings' => $warnings,
@@ -888,6 +890,7 @@ class StudentPaymentController extends Controller
             'receipt_no' => ['nullable', 'string', 'max:20'],
             'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
             'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
+            'return_grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
         ]);
 
         $edit = null;
@@ -1115,6 +1118,12 @@ class StudentPaymentController extends Controller
             $message .= '單據編號：'.$receiptNo;
         }
 
+        if ($edit === null && ! empty($validated['return_grade_level_id'])) {
+            return to_route('student-payments.create', [
+                'grade_level_id' => (int) $validated['return_grade_level_id'],
+            ])->with('success', $student->name.'：'.$message);
+        }
+
         $first = $months[0];
         $last = $months[count($months) - 1];
 
@@ -1149,6 +1158,19 @@ class StudentPaymentController extends Controller
             return back()->withErrors(['renewal' => '無法依科目上課日預選堂次，請確認課程已設定上課時段後再試，或改用「新增收款」。']);
         }
 
+        $sessionMonths = collect($sessions)
+            ->map(fn (array $s): array => ['y' => (int) substr($s['date'], 0, 4), 'm' => (int) substr($s['date'], 5, 2)])
+            ->unique(fn (array $m): string => $m['y'].'-'.$m['m'])
+            ->values()
+            ->all();
+        $subjectsById = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id')->all();
+        $materialCharges = MaterialHalfYear::autoChargesForMonths(
+            $student,
+            $snapshot['course_ids'],
+            $sessionMonths,
+            $subjectsById,
+        );
+
         $quote = EnrollmentPricing::quote(
             $student,
             $snapshot['course_ids'],
@@ -1157,6 +1179,7 @@ class StudentPaymentController extends Controller
             0,
             $startDate,
             [],
+            $materialCharges,
         );
 
         if ($quote['lines'] === []) {
@@ -1172,10 +1195,18 @@ class StudentPaymentController extends Controller
             return back()->withErrors(['renewal' => '下一期帳期中已有已繳紀錄，請勿重複產生。']);
         }
 
-        $receiptNo = BillingRenewal::persistQuote($student, $snapshot['pay_cycle'], $quote, 0);
+        $receiptNo = DB::transaction(function () use ($student, $snapshot, $quote, $materialCharges, $startDate): ?string {
+            $receiptNo = BillingRenewal::persistQuote($student, $snapshot['pay_cycle'], $quote, 0);
+            MaterialHalfYear::recordCharges($student, $materialCharges, $startDate, auth()->id());
+
+            return $receiptNo;
+        });
 
         $label = BillingRenewal::renewButtonLabel($snapshot['pay_cycle']);
         $message = "已確認收款並{$label}（自 {$startDate} 起算）。";
+        if ((int) ($quote['material_total'] ?? 0) > 0) {
+            $message .= '已含教材 '.number_format((int) $quote['material_total']).'。';
+        }
         if (is_string($receiptNo) && $receiptNo !== '') {
             $message .= '單據編號：'.$receiptNo;
         }

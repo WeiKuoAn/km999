@@ -158,6 +158,9 @@ defineOptions({
                 <MobileRecordField label="繳別">{{
                     row.pay_cycle_label ?? '—'
                 }}</MobileRecordField>
+                <MobileRecordField v-if="row.note" label="備註">{{
+                    row.note
+                }}</MobileRecordField>
                 <template #actions>
                     <div class="mobile-card-actions">
                         <Button variant="outline" size="sm" as-child>

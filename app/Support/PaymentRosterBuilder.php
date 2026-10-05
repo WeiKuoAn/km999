@@ -3,8 +3,8 @@
 namespace App\Support;
 
 use App\Models\Course;
-use App\Models\Student;
 use App\Models\Reconciliation;
+use App\Models\Student;
 use Carbon\Carbon;
 
 final class PaymentRosterBuilder
@@ -114,6 +114,7 @@ final class PaymentRosterBuilder
                 ->get(['expected_amount', 'paid_amount', 'status', 'course_id']);
 
             $feeSource = 'estimate';
+            $note = '';
             if ($existing->isNotEmpty()) {
                 $unpaid = $existing->where('status', 'unpaid');
                 if ($unpaid->isEmpty()) {
@@ -127,10 +128,20 @@ final class PaymentRosterBuilder
                 if ($sessions === []) {
                     continue;
                 }
-                $quote = EnrollmentPricing::quote($student, $courseIds, $payCycle, $sessions, 0, $startDate, []);
+                $subjectsById = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id')->all();
+                $materialCharges = MaterialHalfYear::autoChargesForMonths($student, $courseIds, $months, $subjectsById);
+                $quote = EnrollmentPricing::quote($student, $courseIds, $payCycle, $sessions, 0, $startDate, [], $materialCharges);
                 $fee = (int) ($quote['grand_total'] ?? 0);
                 if ($fee <= 0 || ($quote['lines'] ?? []) === []) {
                     continue;
+                }
+                $materialTotal = (int) ($quote['material_total'] ?? 0);
+                if ($materialTotal > 0) {
+                    $halves = collect($materialCharges)
+                        ->map(fn (array $c): string => EnrollmentPricing::halfYearLabel($c['period_year'], $c['period_half']))
+                        ->unique()
+                        ->implode('、');
+                    $note = sprintf('含教材 %s（%s）', number_format($materialTotal), $halves);
                 }
             }
 
@@ -151,7 +162,7 @@ final class PaymentRosterBuilder
                 'end_year' => $endYear,
                 'end_month' => $endMonth,
                 'fee' => $fee,
-                'note' => '',
+                'note' => $note,
                 'pay_cycle' => $payCycle,
                 'pay_cycle_label' => BillingRenewal::payCycleLabel($payCycle),
                 'fee_source' => $feeSource,

@@ -661,36 +661,42 @@ final class EnrollmentPricing
 
         $total = 0;
         $parts = [];
+        $byMonth = [];
+        $first = $months[0];
         foreach ($charges as $charge) {
             $amount = (int) ($charge['amount'] ?? 0);
             if ($amount <= 0) {
                 continue;
             }
             $total += $amount;
-            $parts[] = sprintf(
-                '%s %s',
-                self::halfYearLabel((int) $charge['period_year'], (string) $charge['period_half']),
-                number_format($amount)
-            );
+            $year = (int) $charge['period_year'];
+            $half = (string) $charge['period_half'];
+            $parts[] = sprintf('%s %s', self::halfYearLabel($year, $half), number_format($amount));
+
+            // 掛在帳期中第一個落在該半年的月份；帳期不含該半年則掛第一個月
+            $target = $first;
+            foreach ($months as $month) {
+                [$my, $mh] = self::halfYearOf((int) $month['y'], (int) $month['m']);
+                if ($my === $year && $mh === $half) {
+                    $target = $month;
+                    break;
+                }
+            }
+            $key = ((int) $target['y']).'-'.((int) $target['m']);
+            $byMonth[$key] = ['amount' => ($byMonth[$key]['amount'] ?? 0) + $amount, 'days' => 0];
         }
 
         if ($total <= 0) {
             return [0, [], null];
         }
 
-        $first = $months[0];
-        $monthKey = ((int) $first['y']).'-'.((int) $first['m']);
         $annual = (int) ($subject['material'] ?? 0);
         $note = sprintf(
-            '教材 %s（年費 %s，手動／半年勾選）',
+            '教材 %s（年費 %s，半年收取）',
             implode('＋', $parts),
             number_format($annual)
         );
 
-        return [
-            $total,
-            [$monthKey => ['amount' => $total, 'days' => 0]],
-            $note,
-        ];
+        return [$total, $byMonth, $note];
     }
 }

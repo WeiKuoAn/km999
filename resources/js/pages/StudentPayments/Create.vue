@@ -95,6 +95,7 @@ const props = defineProps<{
     grade_levels?: Array<{ id: number; name: string }>;
     grade_filter?: number | null;
     grade_students?: GradeStudent[];
+    return_grade_level_id?: number | null;
     student: StudentInfo | null;
     subjects: Subject[];
     warnings: string[];
@@ -202,6 +203,9 @@ const isEditMode = computed(() => editContext.value !== null);
 
 const editBackHref = computed(() => {
     const edit = editContext.value;
+    if (!edit && props.return_grade_level_id) {
+        return `/student-payments/create?grade_level_id=${props.return_grade_level_id}`;
+    }
     if (!edit || !props.student) {
         return '/student-payments';
     }
@@ -235,24 +239,28 @@ const selectedMonthKeys = ref<string[]>([]);
 const chargeMaterialMaster = ref(false);
 /** 耗材 class_day 科目 id */
 const chargeConsumableIds = ref<number[]>([]);
-/** 各科半年勾選與金額：key = `${courseId}-H1|H2` */
+/** 各科半年勾選與金額：key = `${courseId}-${year}-H1|H2` */
 const materialHalfState = ref<
     Record<string, { checked: boolean; amount: number }>
 >({});
+/** 使用者手動勾／取消過的半年（不再被自動預設覆蓋） */
+const materialManualKeys = ref<Set<string>>(new Set());
 
 type MaterialStatusRow = NonNullable<typeof props.material_status>[number];
+type HalfPeriod = { year: number; half: 'H1' | 'H2' };
 
 const materialStatusRows = computed(() => props.material_status ?? []);
+
+const halfKey = (courseId: number, year: number, half: string) =>
+    `${courseId}-${year}-${half}`;
 
 const materialStatusByKey = computed(() => {
     const map = new Map<string, MaterialStatusRow>();
     for (const row of materialStatusRows.value) {
-        map.set(`${row.course_id}-${row.period_half}`, row);
+        map.set(halfKey(row.course_id, row.period_year, row.period_half), row);
     }
     return map;
 });
-
-const halfKey = (courseId: number, half: string) => `${courseId}-${half}`;
 
 const materialPeriodYear = computed(() => {
     if (startDate.value && startDate.value.length >= 4) {
@@ -268,6 +276,48 @@ const suggestedHalfFromStart = computed(() => {
     const month = Number(startDate.value.slice(5, 7));
     return month <= 6 ? 'H1' : 'H2';
 });
+
+const selectedYearMonths = computed(() =>
+    selectedMonthKeys.value
+        .map((key) => key.split('-').map(Number))
+        .filter(([y, m]) => y > 0 && m > 0)
+        .map(([y, m]) => ({ y, m }))
+        .sort((a, b) => a.y * 12 + a.m - (b.y * 12 + b.m)),
+);
+
+/** 起算年上／下半年＋帳期跨到的其他半年（例：2026/12–2027/2 → 多一個 2027 上半年） */
+const materialPeriods = computed<HalfPeriod[]>(() => {
+    const year = materialPeriodYear.value;
+    const periods: HalfPeriod[] = [
+        { year, half: 'H1' },
+        { year, half: 'H2' },
+    ];
+    for (const { y, m } of selectedYearMonths.value) {
+        const half = m <= 6 ? 'H1' : 'H2';
+        if (!periods.some((p) => p.year === y && p.half === half)) {
+            periods.push({ year: y, half });
+        }
+    }
+    return periods.sort(
+        (a, b) => a.year * 2 + (a.half === 'H1' ? 0 : 1) - (b.year * 2 + (b.half === 'H1' ? 0 : 1)),
+    );
+});
+
+/** 帳期含 1 月或 7 月，或為起算月所屬半年 → 預設要收 */
+const isHalfSuggested = (period: HalfPeriod) => {
+    const startMonth = period.half === 'H1' ? 1 : 7;
+    if (
+        selectedYearMonths.value.some(
+            ({ y, m }) => y === period.year && m === startMonth,
+        )
+    ) {
+        return true;
+    }
+    return (
+        period.year === materialPeriodYear.value &&
+        period.half === suggestedHalfFromStart.value
+    );
+};
 
 /** 教材年費 ÷ 2；1–6、7–12 各收一次（需打勾） */
 const semiAnnualMaterialFee = (annualOrTermFee: number) =>
@@ -285,6 +335,7 @@ const syncDefaultMaterialChecks = () => {
     const nextHalf: Record<string, { checked: boolean; amount: number }> = {
         ...materialHalfState.value,
     };
+    let autoAdded = false;
 
     for (const id of selected.value) {
         const s = props.subjects.find((x) => x.id === id);
@@ -296,37 +347,47 @@ const syncDefaultMaterialChecks = () => {
             continue;
         }
         const semi = semiAnnualMaterialFee(s.material);
-        for (const half of ['H1', 'H2'] as const) {
-            const key = halfKey(id, half);
+        for (const period of materialPeriods.value) {
+            const key = halfKey(id, period.year, period.half);
             const status = materialStatusByKey.value.get(key);
-            const defaultAmount = status?.amount ?? semi;
+            const locked = !!(status && !status.can_charge);
             const prev = nextHalf[key];
-            const suggested =
-                half === suggestedHalfFromStart.value &&
-                (!status || status.can_charge);
+            const checked = locked
+                ? false
+                : props.edit || materialManualKeys.value.has(key)
+                  ? !!prev?.checked
+                  : isHalfSuggested(period);
+            if (checked && !prev?.checked) {
+                autoAdded = true;
+            }
             nextHalf[key] = {
-                checked: prev?.checked ?? suggested,
+                checked,
                 amount:
                     prev?.amount && prev.amount > 0
                         ? prev.amount
-                        : defaultAmount,
+                        : (status?.amount ?? semi),
             };
-            if (status && !status.can_charge) {
-                nextHalf[key].checked = false;
-            }
         }
     }
 
-    // 清掉已不在選課中的 key
+    // 清掉已不在選課或已不在帳期內的半年
     for (const key of Object.keys(nextHalf)) {
-        const courseId = Number(key.split('-')[0]);
-        if (!selected.value.includes(courseId)) {
+        const [courseId, year, half] = key.split('-');
+        if (
+            !selected.value.includes(Number(courseId)) ||
+            !materialPeriods.value.some(
+                (p) => p.year === Number(year) && p.half === half,
+            )
+        ) {
             delete nextHalf[key];
         }
     }
 
     chargeConsumableIds.value = consumables;
     materialHalfState.value = nextHalf;
+    if (autoAdded) {
+        chargeMaterialMaster.value = true;
+    }
 };
 
 /** 依繳別決定預選／可瀏覽堂次月數 */
@@ -689,13 +750,8 @@ watch(
 if (props.student && props.edit) {
     pendingMonthKeys = [...props.edit.month_keys];
     const seeded: Record<string, { checked: boolean; amount: number }> = {};
-    for (const id of selected.value) {
-        for (const half of ['H1', 'H2'] as const) {
-            seeded[halfKey(id, half)] = { checked: false, amount: 0 };
-        }
-    }
     for (const row of props.edit.material_halves) {
-        seeded[halfKey(row.course_id, row.period_half)] = {
+        seeded[halfKey(row.course_id, row.period_year, row.period_half)] = {
             checked: true,
             amount: row.amount,
         };
@@ -749,6 +805,10 @@ watch(
     },
 );
 
+watch(selectedMonthKeys, () => {
+    syncDefaultMaterialChecks();
+});
+
 const form = useForm({
     course_ids: [] as number[],
     pay_cycle: 'quarterly' as 'monthly' | 'quarterly' | 'annual',
@@ -766,6 +826,7 @@ const form = useForm({
     receipt_no: null as string | null,
     edit_from: props.edit?.from ?? null,
     edit_to: props.edit?.to ?? null,
+    return_grade_level_id: props.return_grade_level_id ?? null,
 });
 
 const coreCount = computed(
@@ -840,8 +901,8 @@ const toggleConsumable = (courseId: number) => {
     }
 };
 
-const halfState = (courseId: number, half: string) => {
-    const key = halfKey(courseId, half);
+const halfState = (courseId: number, year: number, half: string) => {
+    const key = halfKey(courseId, year, half);
     return (
         materialHalfState.value[key] ?? {
             checked: false,
@@ -850,22 +911,33 @@ const halfState = (courseId: number, half: string) => {
     );
 };
 
-const setHalfChecked = (courseId: number, half: string, checked: boolean) => {
-    const key = halfKey(courseId, half);
+const setHalfChecked = (
+    courseId: number,
+    year: number,
+    half: string,
+    checked: boolean,
+) => {
+    const key = halfKey(courseId, year, half);
     const status = materialStatusByKey.value.get(key);
     if (checked && status && !status.can_charge) {
         return;
     }
-    const current = halfState(courseId, half);
+    const current = halfState(courseId, year, half);
+    materialManualKeys.value = new Set(materialManualKeys.value).add(key);
     materialHalfState.value = {
         ...materialHalfState.value,
         [key]: { ...current, checked },
     };
 };
 
-const setHalfAmount = (courseId: number, half: string, raw: string) => {
-    const key = halfKey(courseId, half);
-    const current = halfState(courseId, half);
+const setHalfAmount = (
+    courseId: number,
+    year: number,
+    half: string,
+    raw: string,
+) => {
+    const key = halfKey(courseId, year, half);
+    const current = halfState(courseId, year, half);
     const amount = Math.max(0, Math.floor(Number(raw) || 0));
     materialHalfState.value = {
         ...materialHalfState.value,
@@ -880,33 +952,52 @@ const toggleMaterialMaster = (event: Event) => {
 
 const onHalfCheckedChange = (
     courseId: number,
+    year: number,
     half: string,
     event: Event,
 ) => {
     const input = event.target as HTMLInputElement | null;
-    setHalfChecked(courseId, half, !!input?.checked);
+    setHalfChecked(courseId, year, half, !!input?.checked);
 };
 
 const onHalfAmountInput = (
     courseId: number,
+    year: number,
     half: string,
     value: string | number | null | undefined,
 ) => {
-    setHalfAmount(courseId, half, String(value ?? ''));
+    setHalfAmount(courseId, year, half, String(value ?? ''));
+};
+
+const checkedHalfAmount = (courseId: number, period: HalfPeriod) => {
+    const key = halfKey(courseId, period.year, period.half);
+    const status = materialStatusByKey.value.get(key);
+    if (status && !status.can_charge) {
+        return 0;
+    }
+    const st = halfState(courseId, period.year, period.half);
+    return st.checked ? Math.max(0, st.amount) : 0;
 };
 
 const courseHalfAmount = (courseId: number) => {
     if (!chargeMaterialMaster.value) {
         return 0;
     }
-    let sum = 0;
-    for (const half of ['H1', 'H2']) {
-        const st = halfState(courseId, half);
-        if (st.checked) {
-            sum += Math.max(0, st.amount);
-        }
-    }
-    return sum;
+    return materialPeriods.value.reduce(
+        (sum, period) => sum + checkedHalfAmount(courseId, period),
+        0,
+    );
+};
+
+/** 半年教材掛在帳期中第一個落在該半年的月份；帳期不含該半年則掛第一個月（與後端一致） */
+const halfTargetMonth = (period: HalfPeriod) => {
+    const months = billingMonths.value;
+    return (
+        months.find(
+            ({ y, m }) =>
+                y === period.year && (m <= 6 ? 'H1' : 'H2') === period.half,
+        ) ?? months[0]
+    );
 };
 
 const lineMaterial = (s: Subject) => {
@@ -918,7 +1009,7 @@ const lineMaterial = (s: Subject) => {
     return courseHalfAmount(s.id);
 };
 
-/** 半年教材合計掛在帳期第一個月；耗材仍按月 */
+/** 半年教材掛在對應月份（1 月／7 月或帳期首月）；耗材仍按月 */
 const lineMaterialForMonth = (s: Subject, y: number, m: number) => {
     if (!s.material || !chargeMaterialMaster.value) return 0;
     if (s.material_unit === 'class_day') {
@@ -928,11 +1019,13 @@ const lineMaterialForMonth = (s: Subject, y: number, m: number) => {
     if (billingMonths.value.length === 0) {
         return 0;
     }
-    const first = billingMonths.value[0];
-    if (first.y !== y || first.m !== m) {
-        return 0;
-    }
-    return courseHalfAmount(s.id);
+    return materialPeriods.value.reduce((sum, period) => {
+        const target = halfTargetMonth(period);
+        if (!target || target.y !== y || target.m !== m) {
+            return sum;
+        }
+        return sum + checkedHalfAmount(s.id, period);
+    }, 0);
 };
 
 const materialHint = (s: Subject): string => {
@@ -984,18 +1077,18 @@ const materialTermCourses = computed(() => {
             continue;
         }
         const semi = semiAnnualMaterialFee(s.material);
-        const halves = (['H1', 'H2'] as const).map((half) => {
-            const key = halfKey(id, half);
+        const halves = materialPeriods.value.map(({ year, half }) => {
+            const key = halfKey(id, year, half);
             const status = materialStatusByKey.value.get(key);
-            const st = halfState(id, half);
+            const st = halfState(id, year, half);
             return {
                 half,
-                periodYear: status?.period_year ?? materialPeriodYear.value,
+                periodYear: year,
                 monthsLabel:
                     status?.months_label ?? (half === 'H1' ? '1–6' : '7–12'),
                 periodLabel:
                     status?.period_label ??
-                    `${materialPeriodYear.value}${half === 'H1' ? '上半年（1–6）' : '下半年（7–12）'}`,
+                    `${year}${half === 'H1' ? '上半年（1–6）' : '下半年（7–12）'}`,
                 locked: !!(status && !status.can_charge),
                 note: status?.note ?? null,
                 checked: st.checked && !(status && !status.can_charge),
@@ -1292,6 +1385,13 @@ const clearStudent = () => {
 const gradeFilterValue = ref(props.grade_filter ? String(props.grade_filter) : '');
 const gradeListQuery = ref('');
 
+watch(
+    () => props.grade_filter,
+    (value) => {
+        gradeFilterValue.value = value ? String(value) : '';
+    },
+);
+
 const onGradeFilterChange = () => {
     gradeListQuery.value = '';
     router.get(
@@ -1328,7 +1428,6 @@ const submit = () => {
         form.charge_material_course_ids = chargeConsumableIds.value.filter((id) =>
             selected.value.includes(id),
         );
-        const year = materialPeriodYear.value;
         const charges: Array<{
             course_id: number;
             period_year: number;
@@ -1342,7 +1441,7 @@ const submit = () => {
                 }
                 charges.push({
                     course_id: course.id,
-                    period_year: half.periodYear || year,
+                    period_year: half.periodYear,
                     period_half: half.half,
                     amount: half.amount,
                 });
@@ -1387,7 +1486,13 @@ defineOptions({
                 :href="editBackHref"
                 class="text-base text-primary underline-offset-4 hover:underline"
             >
-                {{ isEditMode ? '← 返回收款明細' : '← 返回明細紀錄' }}
+                {{
+                    isEditMode
+                        ? '← 返回收款明細'
+                        : return_grade_level_id
+                          ? '← 返回年級名單'
+                          : '← 返回明細紀錄'
+                }}
             </Link>
         </div>
 
@@ -1562,7 +1667,7 @@ defineOptions({
                                 <Link :href="`/student-payments/${s.id}`">收款明細</Link>
                             </Button>
                             <Button size="sm" as-child>
-                                <Link :href="`/student-payments/create?student_id=${s.id}`">新增收款</Link>
+                                <Link :href="`/student-payments/create?student_id=${s.id}&return_grade=${grade_filter}`">新增收款</Link>
                             </Button>
                         </div>
                         <p
@@ -1909,7 +2014,7 @@ defineOptions({
                                     <ul class="mt-2 space-y-2">
                                         <li
                                             v-for="half in course.halves"
-                                            :key="`${course.id}-${half.half}`"
+                                            :key="`${course.id}-${half.periodYear}-${half.half}`"
                                             class="flex flex-wrap items-center gap-3 rounded-md border border-border/70 px-2.5 py-2"
                                             :class="
                                                 half.locked
@@ -1933,12 +2038,16 @@ defineOptions({
                                                     @change="
                                                         onHalfCheckedChange(
                                                             course.id,
+                                                            half.periodYear,
                                                             half.half,
                                                             $event,
                                                         )
                                                     "
                                                 />
-                                                {{ half.monthsLabel }}
+                                                {{ half.periodYear }}／{{
+                                                    half.monthsLabel
+                                                }}
+                                                月
                                             </label>
                                             <Input
                                                 type="number"
@@ -1952,6 +2061,7 @@ defineOptions({
                                                 @update:model-value="
                                                     onHalfAmountInput(
                                                         course.id,
+                                                        half.periodYear,
                                                         half.half,
                                                         $event,
                                                     )
