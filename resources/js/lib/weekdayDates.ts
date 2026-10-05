@@ -53,17 +53,17 @@ export function billingBaselineSessions(weekdays: number[] | null | undefined): 
     return Math.max(1, count * 4);
 }
 
-/** 單月學費精確值（未四捨五入）：min(1, 實際堂次 / 基準堂數) × 月費 */
+/** 單月學費：固定月費，該月有任一堂課即收整月，不依堂數比例計算 */
 export function proratedMonthTuitionExact(
     unitPrice: number,
     attended: number,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     baseline: number,
 ): number {
     if (unitPrice <= 0 || attended <= 0) {
         return 0;
     }
-    const base = Math.max(1, baseline);
-    return Math.min(unitPrice, (unitPrice * attended) / base);
+    return unitPrice;
 }
 
 /**

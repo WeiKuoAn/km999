@@ -131,6 +131,7 @@ class HolidayController extends Controller
 
             if ($isHeader && (strcasecmp($subject, 'Subject') === 0 || $subject === '主旨')) {
                 $isHeader = false;
+
                 continue;
             }
             $isHeader = false;
@@ -141,6 +142,7 @@ class HolidayController extends Controller
 
             if ($subject === '例假日') {
                 $skippedWeekend++;
+
                 continue;
             }
 

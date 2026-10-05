@@ -363,7 +363,7 @@ class StudentPaymentController extends Controller
             }
         }
 
-        $from = Carbon::today()->subMonths(1)->startOfDay();
+        $from = Carbon::today()->subMonths(6)->startOfDay();
         $to = Carbon::today()->addYear()->endOfDay();
         $holidays = Holiday::query()
             ->whereBetween('date', [$from->toDateString(), $to->toDateString()])

@@ -1129,19 +1129,6 @@ const monthBreakdown = computed(() => {
                 ? '含半年教材'
                 : null;
 
-        const prorateHints = selectedSubjects
-            .filter((s) => s.unit !== 'session_block')
-            .map((s) => {
-                const attended = countSessionsInMonth(s.id, month.y, month.m);
-                const baseline = billingBaselineSessions(s.weekdays);
-                if (attended <= 0 || attended >= baseline) {
-                    return null;
-                }
-                const exact = lineTuitionForMonthExact(s, month.y, month.m);
-                return `${s.name} ${attended}/${baseline}＝${Math.round(exact).toLocaleString()}`;
-            })
-            .filter((hint): hint is string => hint !== null);
-
         return {
             y: month.y,
             m: month.m,
@@ -1149,7 +1136,7 @@ const monthBreakdown = computed(() => {
             tuition,
             material,
             subtotal: tuition + material,
-            prorateHints,
+            prorateHints: [] as string[],
             materialHalfHint,
         };
     });
@@ -1754,9 +1741,7 @@ defineOptions({
                                     class="h-10"
                                 />
                                 <p class="text-xs text-muted-foreground">
-                                    決定第一個月從哪天開始計堂。例如 8
-                                    月底入班，只會算當月剩餘堂次（價 ×
-                                    堂數／基準堂數）。
+                                    決定從哪天開始排上課日。學費為固定月費，該月有上課就收整月；入班當月若不想收，取消勾選該月即可。
                                 </p>
                                 <InputError :message="form.errors.start_date" />
                             </div>
@@ -1785,9 +1770,7 @@ defineOptions({
                                 科目數寫入各科該月應收）。
                             </p>
                             <p v-else class="text-xs text-muted-foreground">
-                                依繳別預勾連續月，可自行增減。例：8
-                                月底入班可勾 8、9、10、11——8
-                                月按實際上課堂次比例計，9–11 收整月季繳價；同一筆收完。
+                                依繳別預勾連續月，可自行增減。每個勾選且有上課的月份都收整月月費。
                             </p>
                             <div class="flex flex-wrap gap-2">
                                 <label
@@ -1840,8 +1823,7 @@ defineOptions({
                         <div class="mt-3 rounded-lg border bg-muted/20 p-3">
                             <h3 class="text-sm font-medium">各科已選堂數</h3>
                             <p class="mt-1 text-xs text-muted-foreground">
-                                起算日前的上課日不計費。不足整月：學費＝該科月費 ×
-                                堂數／基準（雙天為 8，例：上 2 堂＝月費 × 2/8）。
+                                學費為固定月費，不論當月堂數多寡（放假、停課、補課都不影響）。
                             </p>
                             <ul class="mt-2 flex flex-col gap-1.5 text-sm">
                                 <li
@@ -2136,11 +2118,7 @@ defineOptions({
                                                 v-if="row.prorateHints.length"
                                                 class="mt-1 text-sm text-muted-foreground"
                                             >
-                                                {{
-                                                    isGrade9PackageMode
-                                                        ? '各科該月應收：'
-                                                        : '學費比例計價：'
-                                                }}{{
+                                                各科該月應收：{{
                                                     row.prorateHints.join('、')
                                                 }}
                                             </p>
@@ -2250,8 +2228,7 @@ defineOptions({
                             </div>
                         </dl>
                         <p class="mt-3 text-sm text-muted-foreground">
-                            僅學費按比例：基準堂數＝每週上課日數 × 4（例：雙天 8
-                            堂，上 3 堂則學費 × 3/8）。教材：先勾「教材費」，各科可分別勾 1–6／7–12（可同時收兩段），金額預設年費 ÷ 2 且可改；掛在帳期第一個月。
+                            學費：固定月費，該月有上課即收整月，不依堂數增減。教材：先勾「教材費」，各科可分別勾 1–6／7–12（可同時收兩段），金額預設年費 ÷ 2 且可改；掛在帳期第一個月。
                         </p>
                         <Button
                             class="mt-4 h-11 w-full text-base"

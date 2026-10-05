@@ -493,11 +493,6 @@ final class BillingRenewal
                     $noteParts = [
                         sprintf('報名計價｜%s｜單價 %s', $line['course_name'], number_format($line['unit_price'])),
                     ];
-                    $attended = (int) ($tuitionMonths[$key]['attended'] ?? 0);
-                    $baseline = (int) ($tuitionMonths[$key]['baseline'] ?? 0);
-                    if ($baseline > 0 && $attended > 0 && $attended < $baseline) {
-                        $noteParts[] = sprintf('比例 %d/%d', $attended, $baseline);
-                    }
                     if ($monthMaterial > 0) {
                         $days = (int) ($materialMonths[$key]['days'] ?? 0);
                         if (($line['material_unit'] ?? '') === 'class_day' && $days > 0) {

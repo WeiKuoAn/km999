@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\Holiday;
 use App\Models\ScheduleException;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -114,7 +115,7 @@ final class ScheduleCalendar
     }
 
     /**
-     * @return \Illuminate\Support\Collection<int, ScheduleException>
+     * @return Collection<int, ScheduleException>
      */
     private static function exceptionsOverlapping(?string $type, string $from, string $to)
     {

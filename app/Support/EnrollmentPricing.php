@@ -146,16 +146,15 @@ final class EnrollmentPricing
     }
 
     /**
-     * 單月學費精確值（未四捨五入）。
+     * 單月學費：固定月費，該月有任一堂課即收整月，不依堂數比例計算。
      */
     public static function proratedMonthTuitionExact(int $unitPrice, int $attended, int $baseline): float
     {
         if ($unitPrice <= 0 || $attended <= 0) {
             return 0.0;
         }
-        $baseline = max(1, $baseline);
 
-        return min((float) $unitPrice, $unitPrice * ($attended / $baseline));
+        return (float) $unitPrice;
     }
 
     /**
