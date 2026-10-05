@@ -7,6 +7,7 @@ use App\Models\GradeLevel;
 use App\Models\Holiday;
 use App\Models\Reconciliation;
 use App\Models\Student;
+use App\Models\StudentMaterialPayment;
 use App\Models\User;
 use App\Support\BillingRenewal;
 use App\Support\EnrollmentPricing;
@@ -14,10 +15,12 @@ use App\Support\Grade9AnnualPackage;
 use App\Support\MaterialHalfYear;
 use App\Support\PaymentRosterBuilder;
 use App\Support\PromotionCourses;
+use App\Support\ScheduleCalendar;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -180,7 +183,7 @@ class StudentPaymentController extends Controller
         $page = max(1, (int) $request->input('page', 1));
         $perPage = 50;
         $slice = array_slice($allRows, ($page - 1) * $perPage, $perPage);
-        $paginator = new \Illuminate\Pagination\LengthAwarePaginator(
+        $paginator = new LengthAwarePaginator(
             $slice,
             count($allRows),
             $perPage,
@@ -248,6 +251,7 @@ class StudentPaymentController extends Controller
             $name = trim((string) ($row['grade_name'] ?? ''));
             if ($name === '' || ! array_key_exists($name, $grouped)) {
                 $ungraded[] = $row;
+
                 continue;
             }
             $grouped[$name][] = $row;
@@ -280,9 +284,12 @@ class StudentPaymentController extends Controller
             'course_ids.*' => ['integer', 'exists:courses,id'],
             'pay_cycle' => ['nullable', 'string', 'in:monthly,quarterly,annual'],
             'as_of' => ['nullable', 'date'],
+            'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
+            'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
         ]);
 
         $studentPayload = null;
+        $edit = null;
         $subjects = [];
         $warnings = [];
         $hasPriorPayments = false;
@@ -335,6 +342,19 @@ class StudentPaymentController extends Controller
             if (! empty($validated['pay_cycle'])) {
                 $suggestedPayCycle = $validated['pay_cycle'];
             }
+
+            if (! empty($validated['edit_from']) && ! empty($validated['edit_to'])) {
+                $edit = $this->editContext($student, $validated['edit_from'], $validated['edit_to']);
+                if ($edit !== null) {
+                    $suggestedCourseIds = array_values(array_filter(
+                        $edit['course_ids'],
+                        fn (int $id) => in_array($id, $subjectIdSet, true)
+                    ));
+                    $suggestedPayCycle = $edit['pay_cycle'];
+                    $suggestedStartDate = $edit['start_date'];
+                    $hasPriorPayments = true;
+                }
+            }
         }
 
         $from = Carbon::today()->subMonths(1)->startOfDay();
@@ -353,7 +373,7 @@ class StudentPaymentController extends Controller
         $gradeLevelId = is_array($studentPayload) && ! empty($studentPayload['grade_level_id'])
             ? (int) $studentPayload['grade_level_id']
             : null;
-        $schedule = \App\Support\ScheduleCalendar::payloadForRange(
+        $schedule = ScheduleCalendar::payloadForRange(
             $from->toDateString(),
             $to->toDateString(),
             $gradeLevelId
@@ -374,9 +394,13 @@ class StudentPaymentController extends Controller
                 $asOf,
                 $subjectsById
             );
+            if ($edit !== null) {
+                $materialStatus = $this->releaseEditedMaterial($materialStatus, $edit['material_halves']);
+            }
         }
 
         return Inertia::render('StudentPayments/Create', [
+            'edit' => $edit,
             'student' => $studentPayload,
             'subjects' => $subjects,
             'warnings' => $warnings,
@@ -591,6 +615,183 @@ class StudentPaymentController extends Controller
         ]);
     }
 
+    /** 刪除整期收款（含本期所收教材紀錄） */
+    public function destroyPeriod(Request $request, Student $student): RedirectResponse
+    {
+        $this->authorizeTeacherCanViewStudent($student);
+
+        $validated = $request->validate([
+            'from' => ['required', 'regex:/^\d{4}-\d{1,2}$/'],
+            'to' => ['required', 'regex:/^\d{4}-\d{1,2}$/'],
+        ]);
+
+        [$fromYear, $fromMonth] = array_map('intval', explode('-', $validated['from']));
+        [$toYear, $toMonth] = array_map('intval', explode('-', $validated['to']));
+        $startKey = $fromYear * 12 + $fromMonth;
+        $endKey = $toYear * 12 + $toMonth;
+
+        $edit = $this->editContext($student, $validated['from'], $validated['to']);
+        $materialIds = $edit['material_payment_ids'] ?? [];
+
+        $deleted = DB::transaction(function () use ($student, $startKey, $endKey, $materialIds): int {
+            if ($materialIds !== []) {
+                StudentMaterialPayment::query()->whereIn('id', $materialIds)->delete();
+            }
+
+            return Reconciliation::query()
+                ->where('student_id', $student->id)
+                ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey])
+                ->delete();
+        });
+
+        if ($deleted === 0) {
+            return back()->withErrors(['delete' => '找不到要刪除的帳期，可能已被刪除。']);
+        }
+
+        $label = $startKey === $endKey
+            ? sprintf('%d/%d', $fromYear, $fromMonth)
+            : sprintf('%d/%d — %d/%d', $fromYear, $fromMonth, $toYear, $toMonth);
+
+        return back()->with('success', sprintf('已刪除 %s %s 的收款（%d 筆月份紀錄）。', $student->name, $label, $deleted));
+    }
+
+    /**
+     * 編輯既有帳期：以「新增收款」畫面重新試算，存檔時整期取代。
+     * 教材半年紀錄未綁定帳期，以「本期科目＋收取日落在本期月份內」認定為同一次收款。
+     *
+     * @return array{
+     *   from:string,
+     *   to:string,
+     *   period_label:string,
+     *   course_ids:list<int>,
+     *   pay_cycle:string,
+     *   start_date:string,
+     *   month_keys:list<string>,
+     *   receipt_no:?string,
+     *   fee_discount_id:?int,
+     *   allowance:int,
+     *   paid_date:?string,
+     *   settled_by_user_id:?int,
+     *   material_halves:list<array{course_id:int, period_year:int, period_half:string, amount:int}>,
+     *   reconciliation_ids:list<int>,
+     *   material_payment_ids:list<int>
+     * }|null
+     */
+    private function editContext(Student $student, string $from, string $to): ?array
+    {
+        [$fromYear, $fromMonth] = array_map('intval', explode('-', $from));
+        [$toYear, $toMonth] = array_map('intval', explode('-', $to));
+        if ($fromMonth < 1 || $fromMonth > 12 || $toMonth < 1 || $toMonth > 12) {
+            return null;
+        }
+        $startKey = $fromYear * 12 + $fromMonth;
+        $endKey = $toYear * 12 + $toMonth;
+        if ($startKey > $endKey) {
+            return null;
+        }
+
+        $rows = Reconciliation::query()
+            ->where('student_id', $student->id)
+            ->where('status', '!=', 'cancelled')
+            ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey])
+            ->orderBy('billing_year')
+            ->orderBy('billing_month')
+            ->orderBy('id')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return null;
+        }
+
+        $courseIds = $rows->pluck('course_id')->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
+
+        $payCycle = $rows->pluck('pay_cycle')
+            ->first(fn ($cycle) => in_array($cycle, ['monthly', 'quarterly', 'annual'], true))
+            ?? 'quarterly';
+
+        $allowance = 0;
+        foreach ($rows as $row) {
+            if (is_string($row->note) && preg_match('/折讓 ([\d,]+)/u', $row->note, $m)) {
+                $allowance += (int) str_replace(',', '', $m[1]);
+            }
+        }
+
+        $firstPaid = $rows->first(fn (Reconciliation $row) => $row->paid_date !== null);
+
+        $periodStart = Carbon::create($fromYear, $fromMonth, 1)->startOfMonth();
+        $periodEnd = Carbon::create($toYear, $toMonth, 1)->endOfMonth();
+        $materialRows = StudentMaterialPayment::query()
+            ->where('student_id', $student->id)
+            ->whereIn('course_id', $courseIds)
+            ->whereBetween('paid_at', [$periodStart->toDateString(), $periodEnd->toDateString()])
+            ->get(['id', 'course_id', 'period_year', 'period_half', 'amount']);
+
+        return [
+            'from' => $fromYear.'-'.$fromMonth,
+            'to' => $toYear.'-'.$toMonth,
+            'period_label' => $startKey === $endKey
+                ? sprintf('%d/%d', $fromYear, $fromMonth)
+                : sprintf('%d/%d — %d/%d', $fromYear, $fromMonth, $toYear, $toMonth),
+            'course_ids' => $courseIds,
+            'pay_cycle' => $payCycle,
+            'start_date' => $periodStart->toDateString(),
+            'month_keys' => $rows
+                ->map(fn (Reconciliation $row): string => $row->billing_year.'-'.$row->billing_month)
+                ->unique()
+                ->values()
+                ->all(),
+            'receipt_no' => $rows->pluck('receipt_no')->first(fn ($no) => is_string($no) && $no !== ''),
+            'fee_discount_id' => ($id = $rows->pluck('fee_discount_id')->first(fn ($v) => $v !== null)) !== null
+                ? (int) $id
+                : null,
+            'allowance' => $allowance,
+            'paid_date' => $firstPaid?->paid_date?->toDateString(),
+            'settled_by_user_id' => $firstPaid?->settled_by_user_id !== null
+                ? (int) $firstPaid->settled_by_user_id
+                : null,
+            'material_halves' => $materialRows
+                ->map(fn (StudentMaterialPayment $row): array => [
+                    'course_id' => (int) $row->course_id,
+                    'period_year' => (int) $row->period_year,
+                    'period_half' => (string) $row->period_half,
+                    'amount' => (int) $row->amount,
+                ])
+                ->values()
+                ->all(),
+            'reconciliation_ids' => $rows->pluck('id')->map(fn ($id) => (int) $id)->all(),
+            'material_payment_ids' => $materialRows->pluck('id')->map(fn ($id) => (int) $id)->all(),
+        ];
+    }
+
+    /**
+     * 編輯中的帳期所收的教材，在狀態上視為可重新勾選，並帶入原金額。
+     *
+     * @param  list<array<string, mixed>>  $status
+     * @param  list<array{course_id:int, period_year:int, period_half:string, amount:int}>  $released
+     * @return list<array<string, mixed>>
+     */
+    private function releaseEditedMaterial(array $status, array $released): array
+    {
+        $map = [];
+        foreach ($released as $row) {
+            $map[$row['course_id'].'-'.$row['period_year'].'-'.$row['period_half']] = $row;
+        }
+
+        return array_map(function (array $row) use ($map): array {
+            $key = $row['course_id'].'-'.$row['period_year'].'-'.$row['period_half'];
+            if (! isset($map[$key])) {
+                return $row;
+            }
+
+            return array_merge($row, [
+                'can_charge' => true,
+                'amount' => $map[$key]['amount'],
+                'paid_at' => null,
+                'note' => null,
+            ]);
+        }, $status);
+    }
+
     /** 報名計價（導回首頁並帶入學生） */
     public function quote(Student $student): RedirectResponse
     {
@@ -621,14 +822,21 @@ class StudentPaymentController extends Controller
             'material_half_charges.*.amount' => ['required', 'integer', 'min:1'],
             'fee_discount_id' => ['nullable', 'integer', 'exists:fee_discounts,id'],
             'receipt_no' => ['nullable', 'string', 'max:20'],
+            'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
+            'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
         ]);
 
-        $suggested = BillingRenewal::suggestedStartDate($student);
-        $startDate = $validated['start_date'] ?? null;
-        if ($suggested !== null) {
-            if ($startDate === null || Carbon::parse($startDate)->lt(Carbon::parse($suggested))) {
-                $startDate = $suggested;
+        $edit = null;
+        if (! empty($validated['edit_from']) && ! empty($validated['edit_to'])) {
+            $edit = $this->editContext($student, $validated['edit_from'], $validated['edit_to']);
+            if ($edit === null) {
+                return back()->withErrors(['edit' => '找不到要編輯的帳期，可能已被修改，請重新整理。']);
             }
+        }
+
+        $startDate = $validated['start_date'] ?? null;
+        if ($startDate === null && $edit === null) {
+            $startDate = BillingRenewal::suggestedStartDate($student);
         }
 
         $courseIdSet = array_fill_keys(array_map('intval', $validated['course_ids']), true);
@@ -683,6 +891,9 @@ class StudentPaymentController extends Controller
             $asOf,
             $subjectsById
         );
+        if ($edit !== null) {
+            $materialStatus = $this->releaseEditedMaterial($materialStatus, $edit['material_halves']);
+        }
         $statusKey = [];
         foreach ($materialStatus as $row) {
             $statusKey[$row['course_id'].'-'.$row['period_half'].'-'.$row['period_year']] = $row;
@@ -757,37 +968,99 @@ class StudentPaymentController extends Controller
         $allowance = min($subtotal, max(0, $allowance));
         $quote['grand_total'] = max(0, $subtotal - $allowance);
 
+        $quoteCourseIds = collect($quote['lines'])->pluck('course_id')->map(fn ($id) => (int) $id)->all();
+        $overlapQuery = Reconciliation::query()
+            ->where('student_id', $student->id)
+            ->whereIn('course_id', $quoteCourseIds)
+            ->where('status', '!=', 'cancelled')
+            ->where(function ($q) use ($months): void {
+                foreach ($months as $month) {
+                    $q->orWhere(fn ($w) => $w
+                        ->where('billing_year', (int) $month['y'])
+                        ->where('billing_month', (int) $month['m']));
+                }
+            });
+        if ($edit !== null) {
+            $overlapQuery->whereNotIn('id', $edit['reconciliation_ids']);
+        }
+        $overlap = $overlapQuery
+            ->orderBy('billing_year')
+            ->orderBy('billing_month')
+            ->get(['billing_year', 'billing_month'])
+            ->map(fn (Reconciliation $r): string => $r->billing_year.'/'.$r->billing_month)
+            ->unique()
+            ->values()
+            ->all();
+        if ($overlap !== []) {
+            return back()->withErrors([
+                'sessions' => '以下月份已有收款紀錄：'.implode('、', $overlap).'。請改從收款明細按「編輯」修改。',
+            ]);
+        }
+
         $manualReceiptNo = isset($validated['receipt_no'])
             ? trim((string) $validated['receipt_no'])
             : '';
         $manualReceiptNo = $manualReceiptNo === '' ? null : $manualReceiptNo;
 
-        $receiptNo = BillingRenewal::persistQuote(
+        $receiptNo = DB::transaction(function () use (
             $student,
-            $validated['pay_cycle'],
+            $validated,
             $quote,
             $allowance,
-            $feeDiscount?->id,
-            $feeDiscount?->label(),
+            $feeDiscount,
             $manualReceiptNo,
-        );
-
-        MaterialHalfYear::recordCharges(
-            $student,
             $materialHalfCharges,
             $asOf,
-            auth()->id(),
-        );
+            $edit,
+        ): ?string {
+            if ($edit !== null) {
+                Reconciliation::query()->whereIn('id', $edit['reconciliation_ids'])->delete();
+                if ($edit['material_payment_ids'] !== []) {
+                    StudentMaterialPayment::query()->whereIn('id', $edit['material_payment_ids'])->delete();
+                }
+            }
 
-        $message = $useGrade9Package
-            ? '已確認國三全科年繳方案（7–12 月共 6 期，合計 120,000，含教材）。'
-            : '已確認收款並產生帳期。';
+            $receiptNo = BillingRenewal::persistQuote(
+                $student,
+                $validated['pay_cycle'],
+                $quote,
+                $allowance,
+                $feeDiscount?->id,
+                $feeDiscount?->label(),
+                $manualReceiptNo,
+                $edit['paid_date'] ?? null,
+                $edit['settled_by_user_id'] ?? null,
+            );
+
+            MaterialHalfYear::recordCharges(
+                $student,
+                $materialHalfCharges,
+                $asOf,
+                auth()->id(),
+            );
+
+            return $receiptNo;
+        });
+
+        $message = match (true) {
+            $edit !== null => '已更新收款資料。',
+            $useGrade9Package => '已確認國三全科年繳方案（7–12 月共 6 期，合計 120,000，含教材）。',
+            default => '已確認收款並產生帳期。',
+        };
         if (is_string($receiptNo) && $receiptNo !== '') {
             $message .= '單據編號：'.$receiptNo;
         }
 
-        return to_route('student-payments.show', $student)
-            ->with('success', $message);
+        $first = $months[0];
+        $last = $months[count($months) - 1];
+
+        return to_route('student-payments.show', [
+            'student' => $student,
+            'from_year' => (int) $first['y'],
+            'from_month' => (int) $first['m'],
+            'to_year' => (int) $last['y'],
+            'to_month' => (int) $last['m'],
+        ])->with('success', $message);
     }
 
     /** 一鍵依最近一次科目＋繳別產生下一期帳 */

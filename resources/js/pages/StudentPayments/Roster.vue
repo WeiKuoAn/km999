@@ -161,7 +161,7 @@ defineOptions({
                 <template #actions>
                     <div class="mobile-card-actions">
                         <Button variant="outline" size="sm" as-child>
-                            <Link :href="detailHref(row)">去收款</Link>
+                            <Link :href="detailHref(row)">確認收款</Link>
                         </Button>
                     </div>
                 </template>
@@ -222,7 +222,7 @@ defineOptions({
                                 :href="detailHref(row)"
                                 class="text-primary underline-offset-4 hover:underline"
                             >
-                                去收款
+                                確認收款
                             </Link>
                         </td>
                     </tr>

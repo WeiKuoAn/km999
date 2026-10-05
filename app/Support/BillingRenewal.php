@@ -5,7 +5,6 @@ namespace App\Support;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\StudentCourseDrop;
-use App\Support\ScheduleCalendar;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -399,6 +398,8 @@ final class BillingRenewal
         ?int $feeDiscountId = null,
         ?string $feeDiscountLabel = null,
         ?string $receiptNo = null,
+        ?string $paidDate = null,
+        ?int $settledByUserId = null,
     ): ?string {
         $months = $quote['months'] ?? [];
         if ($months === [] || ($quote['lines'] ?? []) === []) {
@@ -419,10 +420,12 @@ final class BillingRenewal
             $feeDiscountId,
             $feeDiscountLabel,
             $receiptNo,
+            $paidDate,
+            $settledByUserId,
         ): ?string {
             $allowanceLeft = $allowance;
-            $paidDate = now()->toDateString();
-            $settledByUserId = auth()->id();
+            $paidDate ??= now()->toDateString();
+            $settledByUserId ??= auth()->id();
 
             $courseIds = collect($quote['lines'] ?? [])
                 ->pluck('course_id')

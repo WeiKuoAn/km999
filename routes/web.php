@@ -77,6 +77,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('student-payments/{student}/quote', [StudentPaymentController::class, 'store'])->name('student-payments.store');
         Route::post('student-payments/{student}/renew-next', [StudentPaymentController::class, 'renewNext'])->name('student-payments.renew-next');
         Route::get('student-payments/{student}', [StudentPaymentController::class, 'show'])->name('student-payments.show');
+        Route::delete('student-payments/{student}/period', [StudentPaymentController::class, 'destroyPeriod'])->name('student-payments.destroy-period');
     });
 
     Route::middleware('role:super_admin')->group(function () {

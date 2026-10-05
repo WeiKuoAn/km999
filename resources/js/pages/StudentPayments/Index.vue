@@ -69,6 +69,38 @@ const formatMoney = (n: number) => n.toLocaleString('zh-TW');
 const detailHref = (row: Row) =>
     `/student-payments/${row.student_id}?from_year=${row.start_year}&from_month=${row.start_month}&to_year=${row.end_year}&to_month=${row.end_month}`;
 
+const editHref = (row: Row) =>
+    `/student-payments/create?student_id=${row.student_id}&edit_from=${row.start_year}-${row.start_month}&edit_to=${row.end_year}-${row.end_month}`;
+
+const deleteError = computed(
+    () => (page.props.errors as { delete?: string } | undefined)?.delete ?? '',
+);
+
+const deletingId = ref<number | null>(null);
+
+const confirmDelete = (row: Row) => {
+    if (deletingId.value !== null) {
+        return;
+    }
+    const ok = window.confirm(
+        `確定要刪除 ${row.student_code ?? ''} ${row.student_name}「${row.period_label}」的收款？\n\n總金額 ${formatMoney(row.expected_total)}，這一期各月各科的紀錄與本期收的教材費都會一併刪除，無法復原。`,
+    );
+    if (!ok) {
+        return;
+    }
+    deletingId.value = row.id;
+    router.delete(`/student-payments/${row.student_id}/period`, {
+        data: {
+            from: `${row.start_year}-${row.start_month}`,
+            to: `${row.end_year}-${row.end_month}`,
+        },
+        preserveScroll: true,
+        onFinish: () => {
+            deletingId.value = null;
+        },
+    });
+};
+
 const applyFilters = () => {
     router.get(
         '/student-payments',
@@ -109,6 +141,13 @@ defineOptions({
             class="mb-4 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700"
         >
             {{ successMessage }}
+        </div>
+
+        <div
+            v-if="deleteError"
+            class="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm font-medium text-destructive"
+        >
+            {{ deleteError }}
         </div>
 
         <div class="mb-4 grid gap-3 sm:grid-cols-2">
@@ -183,6 +222,23 @@ defineOptions({
                         <Button variant="outline" size="sm" as-child>
                             <Link :href="detailHref(row)">明細</Link>
                         </Button>
+                        <Button
+                            v-if="row.status !== 'cancelled'"
+                            variant="outline"
+                            size="sm"
+                            as-child
+                        >
+                            <Link :href="editHref(row)">編輯</Link>
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            class="text-destructive"
+                            :disabled="deletingId !== null"
+                            @click="confirmDelete(row)"
+                        >
+                            刪除
+                        </Button>
                     </div>
                 </template>
             </MobileRecordCard>
@@ -207,7 +263,7 @@ defineOptions({
                         <th class="px-3 py-2 text-left">收款日</th>
                         <th class="px-3 py-2 text-left">收款人</th>
                         <th class="px-3 py-2 text-right">課程數</th>
-                        <th class="px-3 py-2 text-left">明細</th>
+                        <th class="px-3 py-2 text-left">操作</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -237,13 +293,30 @@ defineOptions({
                         <td class="px-3 py-2.5 text-right tabular-nums">
                             {{ row.course_count }}
                         </td>
-                        <td class="px-3 py-2.5">
-                            <Link
-                                :href="detailHref(row)"
-                                class="text-primary underline-offset-4 hover:underline"
-                            >
-                                明細
-                            </Link>
+                        <td class="px-3 py-2.5 whitespace-nowrap">
+                            <div class="flex items-center gap-3">
+                                <Link
+                                    :href="detailHref(row)"
+                                    class="text-primary underline-offset-4 hover:underline"
+                                >
+                                    明細
+                                </Link>
+                                <Link
+                                    v-if="row.status !== 'cancelled'"
+                                    :href="editHref(row)"
+                                    class="text-primary underline-offset-4 hover:underline"
+                                >
+                                    編輯
+                                </Link>
+                                <button
+                                    type="button"
+                                    class="text-destructive underline-offset-4 hover:underline disabled:opacity-50"
+                                    :disabled="deletingId !== null"
+                                    @click="confirmDelete(row)"
+                                >
+                                    {{ deletingId === row.id ? '刪除中…' : '刪除' }}
+                                </button>
+                            </div>
                         </td>
                     </tr>
                     <tr v-if="rows.data.length === 0">

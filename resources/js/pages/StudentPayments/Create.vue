@@ -65,7 +65,24 @@ type StudentOption = {
     status: string;
 };
 
+type EditContext = {
+    from: string;
+    to: string;
+    period_label: string;
+    month_keys: string[];
+    receipt_no: string | null;
+    fee_discount_id: number | null;
+    allowance: number;
+    material_halves: Array<{
+        course_id: number;
+        period_year: number;
+        period_half: string;
+        amount: number;
+    }>;
+};
+
 const props = defineProps<{
+    edit?: EditContext | null;
     student: StudentInfo | null;
     subjects: Subject[];
     warnings: string[];
@@ -168,9 +185,32 @@ let abortController: AbortController | null = null;
 
 const selected = ref<number[]>(defaultCourseIds());
 const payCycle = ref<'monthly' | 'quarterly' | 'annual'>(defaultPayCycle());
-const allowance = ref(0);
-const selectedDiscountId = ref<number | null>(null);
-const receiptNo = ref('');
+const editContext = computed(() => props.edit ?? null);
+const isEditMode = computed(() => editContext.value !== null);
+
+const editBackHref = computed(() => {
+    const edit = editContext.value;
+    if (!edit || !props.student) {
+        return '/student-payments';
+    }
+    const from = parseMonthKey(edit.from);
+    const to = parseMonthKey(edit.to);
+    if (!from || !to) {
+        return `/student-payments/${props.student.id}`;
+    }
+    return `/student-payments/${props.student.id}?from_year=${from.y}&from_month=${from.m}&to_year=${to.y}&to_month=${to.m}`;
+});
+
+const initialDiscountId = (): number | null => {
+    const id = props.edit?.fee_discount_id ?? null;
+    return id !== null && (props.fee_discounts ?? []).some((d) => d.id === id)
+        ? id
+        : null;
+};
+
+const allowance = ref(props.edit?.allowance ?? 0);
+const selectedDiscountId = ref<number | null>(initialDiscountId());
+const receiptNo = ref(props.edit?.receipt_no ?? '');
 const startDate = ref(
     hasPriorPayments.value && suggestedStartDate.value
         ? suggestedStartDate.value
@@ -418,11 +458,18 @@ const selectedMonths = computed((): YearMonth[] =>
         .sort((a, b) => a.y - b.y || a.m - b.m),
 );
 
+/** 暫時開放補登：帳期月份最早可選到此日所在月份 */
+const BACKFILL_FROM = '2026-07-01';
+
 const monthCheckboxOptions = computed(() => {
     if (!startDate.value) {
         return [];
     }
-    return billingMonthOptions(startDate.value, 12).map((m) => ({
+    const from = startDate.value < BACKFILL_FROM ? startDate.value : BACKFILL_FROM;
+    const extra =
+        (Number(startDate.value.slice(0, 4)) - Number(from.slice(0, 4))) * 12 +
+        (Number(startDate.value.slice(5, 7)) - Number(from.slice(5, 7)));
+    return billingMonthOptions(from, 12 + extra).map((m) => ({
         key: monthKey(m.y, m.m),
         label: `${m.m}月`,
         yearLabel: `${m.y}/${m.m}`,
@@ -449,9 +496,17 @@ const calendarMonthSpan = computed(() => {
     );
 });
 
+/** 勾選早於起算日的月份時，起算日會前移；前移後保留使用者勾選的月份 */
+let pendingMonthKeys: string[] | null = null;
+
 const syncSuggestedMonths = () => {
     if (!startDate.value) {
         selectedMonthKeys.value = [];
+        return;
+    }
+    if (pendingMonthKeys !== null) {
+        selectedMonthKeys.value = pendingMonthKeys;
+        pendingMonthKeys = null;
         return;
     }
     if (isGrade9PackageMode.value) {
@@ -475,7 +530,15 @@ const toggleBillingMonth = (key: string) => {
         }
         selectedMonthKeys.value = selectedMonthKeys.value.filter((k) => k !== key);
     } else {
-        selectedMonthKeys.value = [...selectedMonthKeys.value, key];
+        const next = [...selectedMonthKeys.value, key];
+        const ym = parseMonthKey(key);
+        const monthStart = ym ? `${ym.y}-${String(ym.m).padStart(2, '0')}-01` : '';
+        if (monthStart !== '' && startDate.value && monthStart < startDate.value.slice(0, 7) + '-01') {
+            pendingMonthKeys = next;
+            startDate.value = monthStart;
+            return;
+        }
+        selectedMonthKeys.value = next;
     }
     refillSessionDates();
 };
@@ -611,6 +674,23 @@ watch(
     },
 );
 
+if (props.student && props.edit) {
+    pendingMonthKeys = [...props.edit.month_keys];
+    const seeded: Record<string, { checked: boolean; amount: number }> = {};
+    for (const id of selected.value) {
+        for (const half of ['H1', 'H2'] as const) {
+            seeded[halfKey(id, half)] = { checked: false, amount: 0 };
+        }
+    }
+    for (const row of props.edit.material_halves) {
+        seeded[halfKey(row.course_id, row.period_half)] = {
+            checked: true,
+            amount: row.amount,
+        };
+    }
+    materialHalfState.value = seeded;
+}
+
 if (props.student) {
     syncSuggestedMonths();
     refillSessionDates();
@@ -636,6 +716,9 @@ watch(startDate, (value, oldValue) => {
                 as_of: value,
                 course_ids: selected.value,
                 pay_cycle: payCycle.value,
+                ...(props.edit
+                    ? { edit_from: props.edit.from, edit_to: props.edit.to }
+                    : {}),
             },
             {
                 preserveState: true,
@@ -669,6 +752,8 @@ const form = useForm({
     }>,
     fee_discount_id: null as number | null,
     receipt_no: null as string | null,
+    edit_from: props.edit?.from ?? null,
+    edit_to: props.edit?.to ?? null,
 });
 
 const coreCount = computed(
@@ -1271,22 +1356,35 @@ defineOptions({
 </script>
 
 <template>
-    <Head title="新增收款" />
+    <Head :title="isEditMode ? '編輯收款' : '新增收款'" />
 
     <div class="page-shell w-full text-base [&_.text-xs]:text-sm [&_.text-sm]:text-base">
         <div class="mb-2">
             <Link
-                href="/student-payments"
+                :href="editBackHref"
                 class="text-base text-primary underline-offset-4 hover:underline"
             >
-                ← 返回明細紀錄
+                {{ isEditMode ? '← 返回收款明細' : '← 返回明細紀錄' }}
             </Link>
         </div>
 
         <PageHeader
-            title="新增收款／報名計價"
-            description="先輸入學生，系統依年級自動帶入可報名科目與價目；以行事曆選上課日後確認收款並產生帳期。"
+            :title="isEditMode ? `編輯收款｜${editContext?.period_label}` : '新增收款／報名計價'"
+            :description="
+                isEditMode
+                    ? '可重新選擇科目、繳別、月份、上課日、教材與優惠；儲存後會取代原本這一期的收款紀錄（收款日與收款人保留）。'
+                    : '先輸入學生，系統依年級自動帶入可報名科目與價目；以行事曆選上課日後確認收款並產生帳期。'
+            "
         />
+
+        <div
+            v-if="isEditMode"
+            class="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+            正在編輯 {{ editContext?.period_label }} 的收款。起算日預設為該期第一個月的 1 號，若原本是月中入班請調整起算日。
+        </div>
+
+        <InputError :message="(page.props.errors as Record<string, string>)?.edit" />
 
         <div
             v-if="successMessage"
@@ -2058,8 +2156,9 @@ defineOptions({
                             "
                             @click="submit"
                         >
-                            確認收款並產生帳期
+                            {{ isEditMode ? '儲存修改（取代原本這一期）' : '確認收款並產生帳期' }}
                         </Button>
+                        <InputError class="mt-2" :message="form.errors.sessions" />
                         <p class="mt-2 text-sm text-muted-foreground">
                             產生後即視為已收款，可至
                             <Link

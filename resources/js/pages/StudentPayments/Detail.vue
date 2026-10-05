@@ -86,6 +86,14 @@ const renewalError = computed(
         (page.props.errors as { renewal?: string } | undefined)?.renewal ?? '',
 );
 
+const editHref = computed(() => {
+    const p = props.period;
+    if (!p || p.start_year == null || p.start_month == null || p.end_year == null || p.end_month == null) {
+        return null;
+    }
+    return `/student-payments/create?student_id=${props.student.id}&edit_from=${p.start_year}-${p.start_month}&edit_to=${p.end_year}-${p.end_month}`;
+});
+
 const renewSubmitting = ref(false);
 const noteDialogOpen = ref(false);
 const activeNoteRow = ref<Row | null>(null);
@@ -194,6 +202,9 @@ defineOptions({
         <PageHeader :title="pageTitle" :description="pageDescription">
             <template #actions>
                 <div class="flex flex-wrap gap-2">
+                    <Button v-if="editHref" variant="outline" as-child>
+                        <Link :href="editHref">編輯</Link>
+                    </Button>
                     <Button
                         v-if="renewal?.available"
                         variant="outline"
