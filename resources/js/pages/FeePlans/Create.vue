@@ -20,7 +20,7 @@ const form = useForm<FeePlanFormData>({
     course_ids: [],
     group_name: '',
     pricing_group: 'other',
-    unit: 'month',
+    billing_kind: 'month',
     session_block_size: 4,
     list_price: 0,
     quarter_price: '',

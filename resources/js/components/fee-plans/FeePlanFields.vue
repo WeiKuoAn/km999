@@ -10,10 +10,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type {
+    FeePlanBillingKind,
     FeePlanBundleRow,
     FeePlanCourseOption,
     FeePlanFormData,
 } from '@/lib/feePlanForm';
+import { periodMonths } from '@/lib/feePlanForm';
 
 const props = defineProps<{
     form: InertiaForm<FeePlanFormData>;
@@ -29,7 +31,39 @@ const selectedCourses = computed(() =>
         .filter((c): c is FeePlanCourseOption => !!c),
 );
 
-const isPeriodUnit = computed(() => props.form.unit === 'session_block');
+const months = computed(() =>
+    periodMonths(props.form.billing_kind, props.form.session_block_size),
+);
+
+const isPeriodBilling = computed(() => props.form.billing_kind !== 'month');
+
+const periodListTotal = computed(() =>
+    Math.round(Number(props.form.list_price || 0) * months.value),
+);
+
+const periodQuarterTotal = computed(() => {
+    if (
+        props.form.quarter_price === '' ||
+        props.form.quarter_price === null ||
+        props.form.quarter_price === undefined
+    ) {
+        return null;
+    }
+
+    return Math.round(Number(props.form.quarter_price) * months.value);
+});
+
+const onBillingKindChange = (kind: FeePlanBillingKind) => {
+    props.form.billing_kind = kind;
+    if (kind === 'quarter') {
+        props.form.session_block_size = 3;
+    } else if (
+        kind === 'other' &&
+        (!props.form.session_block_size || Number(props.form.session_block_size) < 2)
+    ) {
+        props.form.session_block_size = 4;
+    }
+};
 
 // 收費組別跟著課程走（計價看的是課程上的組別）
 watch(
@@ -38,15 +72,6 @@ watch(
         props.form.pricing_group = courses[0]?.pricing_group ?? 'other';
     },
     { immediate: true },
-);
-
-watch(
-    () => props.form.unit,
-    (unit) => {
-        if (unit === 'session_block') {
-            props.form.session_block_size ||= 4;
-        }
-    },
 );
 
 const planCourseIds = computed(
@@ -170,18 +195,53 @@ if (props.form.material_unit === 'subject') {
     </div>
 
     <div class="grid gap-2">
-        <Label for="unit">收費方式</Label>
-        <select id="unit" v-model="form.unit" class="h-9 rounded-md border px-3">
-            <option value="month">按月（每個月收一次，如英／數／理）</option>
-            <option value="session_block">
-                按期（每 3 個月收一次，如理化科研）
-            </option>
+        <Label for="billing_kind">收費方式</Label>
+        <select
+            id="billing_kind"
+            class="h-9 rounded-md border px-3"
+            :value="form.billing_kind"
+            @change="
+                onBillingKindChange(
+                    ($event.target as HTMLSelectElement)
+                        .value as FeePlanBillingKind,
+                )
+            "
+        >
+            <option value="month">按月</option>
+            <option value="quarter">按季（一次繳 3 個月）</option>
+            <option value="other">其他（自訂月份）</option>
         </select>
+        <p class="text-xs text-muted-foreground">
+            <template v-if="form.billing_kind === 'month'">
+                每月收一次。請填一個月的原價與優惠價。
+            </template>
+            <template v-else-if="form.billing_kind === 'quarter'">
+                一次繳 3 個月。請填「一個月」的原價與優惠價，下方會自動顯示 ×3。
+            </template>
+            <template v-else>
+                一次繳自訂月數。請填「一個月」的原價與優惠價，下方會自動顯示 ×月數。
+            </template>
+        </p>
+    </div>
+
+    <div v-if="form.billing_kind === 'other'" class="grid max-w-xs gap-2">
+        <Label for="session_block_size">一期幾個月</Label>
+        <Input
+            id="session_block_size"
+            v-model.number="form.session_block_size"
+            type="number"
+            min="2"
+            max="12"
+            required
+        />
+        <InputError :message="form.errors.session_block_size" />
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2">
         <div class="grid gap-2">
-            <Label for="list_price">月繳價</Label>
+            <Label for="list_price">{{
+                isPeriodBilling ? '一個月原價' : '原價'
+            }}</Label>
             <Input
                 id="list_price"
                 v-model.number="form.list_price"
@@ -189,29 +249,45 @@ if (props.form.material_unit === 'subject') {
                 min="0"
                 required
             />
-            <p class="text-xs text-muted-foreground">
-                {{
-                    isPeriodUnit
-                        ? '學生選月繳時，每期收這個金額。'
-                        : '學生選月繳時，每個月收這個金額。'
-                }}
-            </p>
             <InputError :message="form.errors.list_price" />
         </div>
         <div class="grid gap-2">
-            <Label for="quarter_price">季繳價（單科）</Label>
+            <Label for="quarter_price">{{
+                isPeriodBilling ? '一個月優惠價' : '優惠價'
+            }}</Label>
             <Input
                 id="quarter_price"
                 v-model.number="form.quarter_price"
                 type="number"
                 min="0"
             />
+            <InputError :message="form.errors.quarter_price" />
+        </div>
+    </div>
+
+    <div
+        v-if="isPeriodBilling"
+        class="grid gap-4 rounded-lg border bg-muted/30 p-3 sm:grid-cols-2"
+    >
+        <div>
             <p class="text-xs text-muted-foreground">
-                {{
-                    isPeriodUnit
-                        ? '學生選季繳時，3 個月收一次這個金額。'
-                        : '學生選季繳時，每個月收這個金額。'
-                }}留白則用月繳價。
+                一期總額（原價 × {{ months }}）
+            </p>
+            <p class="mt-0.5 text-lg font-semibold tabular-nums">
+                ${{ periodListTotal.toLocaleString('zh-TW') }}
+            </p>
+        </div>
+        <div>
+            <p class="text-xs text-muted-foreground">
+                一期總額（優惠價 × {{ months }}）
+            </p>
+            <p class="mt-0.5 text-lg font-semibold tabular-nums">
+                <template v-if="periodQuarterTotal !== null">
+                    ${{ periodQuarterTotal.toLocaleString('zh-TW') }}
+                </template>
+                <span v-else class="text-sm font-normal text-muted-foreground"
+                    >同原價一期總額</span
+                >
             </p>
         </div>
     </div>
@@ -220,7 +296,7 @@ if (props.form.material_unit === 'subject') {
             <div>
                 <p class="text-sm font-medium">雙科／多科優惠</p>
                 <p class="text-xs text-muted-foreground">
-                    上面是單科價。學生同時報了優惠裡的課，季繳／年繳時每科每月改收優惠價；月繳仍收月繳價。沒有優惠就不用加。
+                    上面是單科價。學生同時報了優惠裡的課，會改收這裡的優惠價。沒有優惠就不用加。
                 </p>
             </div>
             <Button type="button" variant="outline" size="sm" @click="addBundle">
@@ -279,7 +355,11 @@ if (props.form.material_unit === 'subject') {
                     />
                 </div>
                 <div class="grid gap-1.5">
-                    <Label :for="`bundle-price-${i}`">優惠價（每科每月）</Label>
+                    <Label :for="`bundle-price-${i}`">{{
+                        isPeriodBilling
+                            ? `優惠價（每科每 ${months} 個月）`
+                            : '優惠價（每科每月）'
+                    }}</Label>
                     <Input
                         :id="`bundle-price-${i}`"
                         v-model.number="bundle.price"

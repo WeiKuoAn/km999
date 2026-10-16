@@ -116,10 +116,10 @@ const destroyPlan = (id: number) => {
                             : '尚未設定'
                     }}
                 </MobileRecordField>
-                <MobileRecordField label="定價">{{
+                <MobileRecordField label="原價">{{
                     plan.list_label
                 }}</MobileRecordField>
-                <MobileRecordField label="季繳（單科）">{{
+                <MobileRecordField label="優惠價">{{
                     plan.quarter_label
                 }}</MobileRecordField>
                 <MobileRecordField
@@ -160,8 +160,8 @@ const destroyPlan = (id: number) => {
                         <th class="py-2 text-left">年級</th>
                         <th class="py-2 text-left">科目組</th>
                         <th class="py-2 text-left">適用課目</th>
-                        <th class="py-2 text-left">定價</th>
-                        <th class="py-2 text-left">季繳（單科）</th>
+                        <th class="py-2 text-left">原價</th>
+                        <th class="py-2 text-left">優惠價</th>
                         <th class="py-2 text-left">雙科／多科優惠</th>
                         <th class="py-2 text-left">教材費</th>
                         <th class="py-2 text-left">單位</th>

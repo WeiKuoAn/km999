@@ -118,6 +118,9 @@ final class EnrollmentPricing
                 'pricing_group' => $course->pricing_group,
                 'pricing_group_label' => PricingGroup::label($course->pricing_group),
                 'unit' => $plan?->unit ?? 'month',
+                'session_block_size' => $plan?->unit === 'session_block'
+                    ? max(1, (int) ($plan->session_block_size ?? 3))
+                    : null,
                 'list' => $list,
                 'q_single' => $qSingle,
                 'material' => $material,
@@ -365,9 +368,10 @@ final class EnrollmentPricing
             /** @var array<string, array{amount:int, attended:int, baseline:int}> $tuitionMonths */
             $tuitionMonths = [];
             $isBlock = ($subject['unit'] ?? 'month') === 'session_block';
+            $blockSize = max(1, (int) ($subject['session_block_size'] ?? 3));
 
             if ($isBlock) {
-                $blocks = max(1, (int) ceil(max(1, $monthCount) / 3));
+                $blocks = max(1, (int) ceil(max(1, $monthCount) / $blockSize));
                 $tuition = $unitPrice * $blocks;
                 $monthsUsed = $blocks;
                 if ($subjectMonths !== []) {
@@ -435,7 +439,7 @@ final class EnrollmentPricing
                 'course_name' => (string) $subject['name'],
                 'unit_price' => $unitPrice,
                 'months' => $monthsUsed,
-                'tuition' => $isBlock ? ($unitPrice * max(1, (int) ceil(max(1, $monthCount) / 3))) : 0,
+                'tuition' => $isBlock ? ($unitPrice * max(1, (int) ceil(max(1, $monthCount) / $blockSize))) : 0,
                 'material' => $material,
                 'material_unit' => (string) ($subject['material_unit'] ?? 'term'),
                 'material_months' => $materialMonths,

@@ -359,7 +359,11 @@ class FeePlanController extends Controller
             'list_label' => $plan->listPriceLabel(),
             'quarter_label' => $plan->quarterLabel(),
             'material_label' => $plan->materialLabel(),
-            'unit_label' => $plan->unit === 'session_block' ? '按期' : '月',
+            'unit_label' => match (true) {
+                $plan->unit === 'month' => '按月',
+                (int) ($plan->session_block_size ?? 3) === 3 => '按季',
+                default => '每 '.(int) ($plan->session_block_size ?? 4).' 個月',
+            },
         ];
     }
 

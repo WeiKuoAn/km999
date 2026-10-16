@@ -56,10 +56,13 @@ class FeePlan extends Model
 
     public function unitLabel(): string
     {
-        return match ($this->unit) {
-            'session_block' => '期',
-            default => '月',
-        };
+        if ($this->unit !== 'session_block') {
+            return '月';
+        }
+
+        $size = (int) ($this->session_block_size ?? 3);
+
+        return $size === 3 ? '季' : $size.'個月';
     }
 
     public function listPriceLabel(): string
@@ -72,12 +75,7 @@ class FeePlan extends Model
         $quarterPrice = $this->quarter_single_price ?? $this->quarter_price;
 
         if ($quarterPrice !== null) {
-            $price = number_format($quarterPrice);
-
-            return match ($this->unit) {
-                'session_block' => $price.'／季',
-                default => $price.'／月',
-            };
+            return number_format($quarterPrice).'／'.$this->unitLabel();
         }
 
         return '—';

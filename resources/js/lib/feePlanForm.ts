@@ -18,15 +18,22 @@ export type FeePlanBundleRow = {
     price: number | '';
 };
 
+/** 表單上的收費方式（存檔時 quarter／other → session_block） */
+export type FeePlanBillingKind = 'month' | 'quarter' | 'other';
+
 export type FeePlanFormData = {
     academic_year_id: string;
     grade_level_id: string;
     course_ids: number[];
     group_name: string;
     pricing_group: string;
-    unit: 'month' | 'session_block';
+    /** UI：按月／按季／其他 */
+    billing_kind: FeePlanBillingKind;
+    /** 其他：一期幾個月份；按季固定 3 */
     session_block_size: number | '';
+    /** 一個月原價（按季／其他存檔時會 × 月數） */
     list_price: number;
+    /** 一個月優惠價（按季／其他存檔時會 × 月數；留白＝用原價） */
     quarter_price: number | '';
     material_fee: number;
     material_unit: 'term' | 'subject' | 'class_day';
@@ -38,7 +45,46 @@ export type FeePlanFormData = {
 const emptyToNull = (v: number | string | undefined) =>
     v === '' || v === undefined || Number.isNaN(Number(v)) ? null : Number(v);
 
+export function billingKindFromPlan(
+    unit: 'month' | 'session_block',
+    sessionBlockSize: number | null,
+): FeePlanBillingKind {
+    if (unit !== 'session_block') {
+        return 'month';
+    }
+
+    return (sessionBlockSize ?? 3) === 3 ? 'quarter' : 'other';
+}
+
+/** 後端存的是一期總額時，轉回表單用的「一個月」 */
+export function periodToMonthly(
+    periodPrice: number,
+    kind: FeePlanBillingKind,
+    months: number,
+): number {
+    if (kind === 'month' || months <= 1) {
+        return periodPrice;
+    }
+
+    return Math.round(periodPrice / months);
+}
+
+export function periodMonths(kind: FeePlanBillingKind, blockSize: number | ''): number {
+    if (kind === 'month') {
+        return 1;
+    }
+    if (kind === 'quarter') {
+        return 3;
+    }
+
+    return Math.max(1, Number(blockSize) || 4);
+}
+
 export function feePlanPayload(data: FeePlanFormData) {
+    const months = periodMonths(data.billing_kind, data.session_block_size);
+    const monthlyList = Number(data.list_price || 0);
+    const monthlyQuarter = emptyToNull(data.quarter_price);
+
     return {
         academic_year_id:
             data.academic_year_id === '' ? null : Number(data.academic_year_id),
@@ -49,13 +95,12 @@ export function feePlanPayload(data: FeePlanFormData) {
         course_ids: data.course_ids.map(Number),
         group_name: data.group_name,
         pricing_group: data.pricing_group,
-        unit: data.unit,
+        unit: data.billing_kind === 'month' ? 'month' : 'session_block',
         session_block_size:
-            data.unit === 'session_block'
-                ? Number(data.session_block_size || 4)
-                : null,
-        list_price: Number(data.list_price || 0),
-        quarter_price: emptyToNull(data.quarter_price),
+            data.billing_kind === 'month' ? null : months,
+        list_price: monthlyList * months,
+        quarter_price:
+            monthlyQuarter === null ? null : monthlyQuarter * months,
         quarter_single_price: null,
         quarter_double_price: null,
         material_fee: Number(data.material_fee || 0),

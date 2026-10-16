@@ -36,6 +36,7 @@ type Subject = {
     pricing_group: string;
     pricing_group_label: string;
     unit: string;
+    session_block_size?: number | null;
     list: number;
     q_single: number;
     material: number;
@@ -1133,9 +1134,17 @@ const isCourseMonth = (courseId: number, y: number, m: number) =>
     !isSplitMode.value ||
     (courseMonthKeys.value[courseId] ?? []).includes(monthKey(y, m));
 
-const blockTuition = (s: Subject) =>
-    unitPrice(s) *
-    Math.max(1, Math.ceil(Math.max(1, courseBillingMonths(s.id).length) / 3));
+const blockTuition = (s: Subject) => {
+    const blockSize = Math.max(1, Number(s.session_block_size) || 3);
+
+    return (
+        unitPrice(s) *
+        Math.max(
+            1,
+            Math.ceil(Math.max(1, courseBillingMonths(s.id).length) / blockSize),
+        )
+    );
+};
 
 const countSessionsInMonth = (courseId: number, y: number, m: number) =>
     sessions.value.filter((entry) => {
