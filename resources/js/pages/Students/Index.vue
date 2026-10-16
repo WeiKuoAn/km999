@@ -404,19 +404,18 @@ const resetFilters = () => {
                             <li>
                                 表頭有
                                 <span class="text-foreground">*</span>
-                                的是必填：*姓名、*年級（{{
-                                    importMeta.gradeNames.join('／') ||
-                                    '依系統年級'
-                                }}）
+                                的是必填：*學年、*年級、*姓名
                             </li>
                             <li>
-                                學年可留白，預設目前學年
+                                年級請填{{
+                                    importMeta.gradeNames.join('／') ||
+                                    '系統已設定的年級'
+                                }}；學年請填學年代碼
                                 <template
                                     v-if="importMeta.currentAcademicYear"
                                 >
-                                    （{{
-                                        importMeta.currentAcademicYear.name
-                                    }}／{{
+                                    （目前為
+                                    {{
                                         importMeta.currentAcademicYear
                                             .year_code
                                     }}）

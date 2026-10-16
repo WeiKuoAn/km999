@@ -17,7 +17,7 @@ class StudentImport
 {
     /** @var list<string> * 開頭＝必填 */
     public const HEADERS = [
-        '學年',
+        '*學年',
         '*年級',
         '*姓名',
         '性別',
@@ -77,11 +77,11 @@ class StudentImport
             is_array($headerRow) ? $headerRow : []
         ));
 
-        if (! isset($map['姓名'], $map['年級'])) {
+        if (! isset($map['姓名'], $map['年級'], $map['學年'])) {
             return [
                 'created' => 0,
                 'skipped' => 0,
-                'errors' => ['表頭必須包含「*姓名」「*年級」。請先下載範本再填寫。'],
+                'errors' => ['表頭必須包含「*學年」「*年級」「*姓名」。請先下載範本再填寫。'],
             ];
         }
 
@@ -130,20 +130,20 @@ class StudentImport
             }
 
             $yearLabel = $cell('學年');
-            $year = $defaultYear;
-            if ($yearLabel !== '') {
-                $year = $years->get($yearLabel)
-                    ?? $yearsByName->get($yearLabel)
-                    ?? null;
-                if ($year === null) {
-                    $errors[] = "第 {$line} 列（{$name}）：找不到學年「{$yearLabel}」。可填學年代碼（如 115）或留白用目前學年。";
-                    $skipped++;
+            if ($yearLabel === '') {
+                $errors[] = "第 {$line} 列（{$name}）：缺少學年。請填學年代碼（如 115）。";
+                $skipped++;
 
-                    continue;
-                }
+                continue;
             }
+            $year = $years->get($yearLabel)
+                ?? $yearsByName->get($yearLabel)
+                ?? null;
             if ($year === null) {
-                $errors[] = "第 {$line} 列（{$name}）：系統尚未設定學年。";
+                $hint = $defaultYear !== null
+                    ? "目前學年為 {$defaultYear->year_code}。"
+                    : '';
+                $errors[] = "第 {$line} 列（{$name}）：找不到學年「{$yearLabel}」。請填學年代碼（如 115）。{$hint}";
                 $skipped++;
 
                 continue;
