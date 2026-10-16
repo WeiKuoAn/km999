@@ -12,6 +12,7 @@ use App\Support\BillingRenewal;
 use App\Support\EnrollmentPricing;
 use App\Support\Grade9AnnualPackage;
 use App\Support\MaterialHalfYear;
+use App\Support\PaymentNoticePng;
 use App\Support\PaymentRosterBuilder;
 use App\Support\PromotionCourses;
 use Carbon\Carbon;
@@ -220,6 +221,69 @@ class StudentPaymentController extends Controller
             'generatedAt' => now()->format('Y-m-d H:i'),
             'yearLabel' => $year === null ? '全部' : (string) $year,
             'q' => $q,
+        ]);
+    }
+
+    /** 繳費通知條 PNG（6×14cm，多筆打包 ZIP） */
+    public function rosterNoticePng(Request $request)
+    {
+        $validated = $request->validate([
+            'q' => ['nullable', 'string', 'max:255'],
+            'year' => ['nullable', 'integer', 'between:2000,2100'],
+            'student_id' => ['nullable', 'integer', 'exists:students,id'],
+        ]);
+
+        $q = trim((string) ($validated['q'] ?? ''));
+        $year = isset($validated['year']) ? (int) $validated['year'] : null;
+        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year);
+        $rows = $this->filterRosterRowsForTeacher($rows);
+
+        if (isset($validated['student_id'])) {
+            $sid = (int) $validated['student_id'];
+            $rows = array_values(array_filter(
+                $rows,
+                fn (array $row): bool => (int) $row['student_id'] === $sid
+            ));
+        }
+
+        if ($rows === []) {
+            abort(404, '目前沒有可匯出的繳費條。');
+        }
+
+        $items = [];
+        foreach ($rows as $row) {
+            $notice = $row['notice'] ?? null;
+            if (! is_array($notice)) {
+                continue;
+            }
+            $code = trim((string) ($row['student_code'] ?? ''));
+            $name = (string) $row['student_name'];
+            $items[] = [
+                'filename' => ($code !== '' ? $code.'_' : '').$name.'_'.$notice['plan_label'],
+                'notice' => $notice,
+            ];
+        }
+
+        if ($items === []) {
+            abort(404, '繳費條資料不完整，無法匯出。');
+        }
+
+        if (count($items) === 1) {
+            $png = PaymentNoticePng::render($items[0]['notice']);
+            $filename = $items[0]['filename'].'.png';
+
+            return response($png, 200, [
+                'Content-Type' => 'image/png',
+                'Content-Disposition' => 'attachment; filename="'.rawurlencode($filename).'"; filename*=UTF-8\'\''.rawurlencode($filename),
+            ]);
+        }
+
+        $zip = PaymentNoticePng::zip($items);
+        $zipName = 'payment-notices_'.now()->format('Ymd_His').'.zip';
+
+        return response($zip, 200, [
+            'Content-Type' => 'application/zip',
+            'Content-Disposition' => 'attachment; filename="'.$zipName.'"',
         ]);
     }
 

@@ -73,6 +73,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('student-payments', [StudentPaymentController::class, 'index'])->name('student-payments.index');
         Route::get('payment-lists', [StudentPaymentController::class, 'roster'])->name('payment-lists.index');
         Route::get('payment-lists/pdf', [StudentPaymentController::class, 'rosterPdf'])->name('payment-lists.pdf');
+        Route::get('payment-lists/notices.png', [StudentPaymentController::class, 'rosterNoticePng'])->name('payment-lists.notices');
         Route::get('student-payments/create', [StudentPaymentController::class, 'create'])->name('student-payments.create');
         Route::get('student-payments/search', [StudentPaymentController::class, 'search'])->name('student-payments.search');
         Route::get('student-payments/{student}/quote', [StudentPaymentController::class, 'quote'])->name('student-payments.quote');

@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\Course;
 use App\Models\Reconciliation;
 use App\Models\Student;
+use Carbon\Carbon;
 
 final class PaymentRosterBuilder
 {
@@ -139,6 +140,8 @@ final class PaymentRosterBuilder
 
             $feeSource = 'estimate';
             $note = '';
+            $quote = null;
+            $subjectsById = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id')->all();
             if ($existing->isNotEmpty()) {
                 $unpaid = $existing->where('status', 'unpaid');
                 if ($unpaid->isEmpty()) {
@@ -152,7 +155,6 @@ final class PaymentRosterBuilder
                 if ($sessions === []) {
                     continue;
                 }
-                $subjectsById = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id')->all();
                 $materialCharges = MaterialHalfYear::autoChargesForCourseMonths($student, $plan['course_months'], $subjectsById);
                 $quote = EnrollmentPricing::quote(
                     $student,
@@ -203,6 +205,21 @@ final class PaymentRosterBuilder
                 'pay_cycle_label' => BillingRenewal::payCycleLabel($payCycle),
                 'fee_source' => $feeSource,
                 'course_ids' => $courseIds,
+                'notice' => self::buildNotice(
+                    $student->name,
+                    $subjects,
+                    $payCycle,
+                    $startYear,
+                    $startMonth,
+                    $endYear,
+                    $endMonth,
+                    $fee,
+                    $note,
+                    $subjectsById,
+                    $courseIds,
+                    $quote,
+                    count($months),
+                ),
             ];
         }
 
@@ -272,5 +289,111 @@ final class PaymentRosterBuilder
         }
 
         return sprintf('%d/%d—%d/%d', $startYear, $startMonth, $endYear, $endMonth);
+    }
+
+    /**
+     * 6×14cm 繳費條用欄位。
+     *
+     * @param  list<string>  $subjects
+     * @param  array<int, array<string, mixed>>  $subjectsById
+     * @param  list<int>  $courseIds
+     * @param  array<string, mixed>|null  $quote
+     * @return array{
+     *   student_name:string,
+     *   plan_label:string,
+     *   list_price:int,
+     *   start_year:int,
+     *   start_month:int,
+     *   end_year:int,
+     *   end_month:int,
+     *   tuition_unit:int,
+     *   month_count:int,
+     *   tuition_total:int,
+     *   material_label:string,
+     *   grand_total:int,
+     *   deadline_month:int,
+     *   deadline_day:int
+     * }
+     */
+    private static function buildNotice(
+        string $studentName,
+        array $subjects,
+        string $payCycle,
+        int $startYear,
+        int $startMonth,
+        int $endYear,
+        int $endMonth,
+        int $fee,
+        string $note,
+        array $subjectsById,
+        array $courseIds,
+        ?array $quote,
+        int $monthCount,
+    ): array {
+        $monthCount = max(1, $monthCount);
+        $cycleShort = match ($payCycle) {
+            'monthly' => '月繳',
+            'annual' => '年繳',
+            default => '季繳',
+        };
+        $subjectShort = implode('', array_map(
+            fn (string $name): string => mb_substr($name, 0, 1),
+            $subjects
+        ));
+        if ($subjectShort === '') {
+            $subjectShort = '課';
+        }
+
+        $listPrices = [];
+        foreach ($courseIds as $cid) {
+            $list = (int) ($subjectsById[$cid]['list'] ?? 0);
+            if ($list > 0) {
+                $listPrices[] = $list;
+            }
+        }
+        $listPrice = 0;
+        if ($listPrices !== []) {
+            $counts = array_count_values($listPrices);
+            arsort($counts);
+            $listPrice = (int) array_key_first($counts);
+        }
+
+        $tuitionTotal = $fee;
+        $materialTotal = 0;
+        if (is_array($quote)) {
+            $tuitionTotal = (int) array_sum(array_column($quote['lines'] ?? [], 'tuition'));
+            $materialTotal = (int) ($quote['material_total'] ?? 0);
+            if ($tuitionTotal <= 0) {
+                $tuitionTotal = max(0, $fee - $materialTotal);
+            }
+        } elseif (preg_match('/含教材\s*([\d,]+)/u', $note, $m)) {
+            $materialTotal = (int) str_replace(',', '', $m[1]);
+            $tuitionTotal = max(0, $fee - $materialTotal);
+        }
+
+        $tuitionUnit = (int) round($tuitionTotal / $monthCount);
+
+        // 繳費期限：開課月前一個月的 20 日（例：10 月開課 → 9/20）
+        $deadline = Carbon::create($startYear, $startMonth, 1)->subMonth();
+        $materialLabel = $materialTotal > 0
+            ? number_format($materialTotal).' 元'
+            : '無須繳納';
+
+        return [
+            'student_name' => $studentName,
+            'plan_label' => $subjectShort.$cycleShort,
+            'list_price' => $listPrice,
+            'start_year' => $startYear,
+            'start_month' => $startMonth,
+            'end_year' => $endYear,
+            'end_month' => $endMonth,
+            'tuition_unit' => $tuitionUnit,
+            'month_count' => $monthCount,
+            'tuition_total' => $tuitionTotal,
+            'material_label' => $materialLabel,
+            'grand_total' => $fee,
+            'deadline_month' => (int) $deadline->month,
+            'deadline_day' => 20,
+        ];
     }
 }
