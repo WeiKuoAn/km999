@@ -160,7 +160,8 @@ class FeePlanController extends Controller
                 // 摘要：有填優惠的科最低價（相容舊欄位／列表）
                 'price' => $priced === [] ? 0 : min($priced),
                 'is_active' => true,
-                'sort_order' => $plan->sort_order,
+                // 收費設定建立的專屬組合優先於 seed 通用雙科（sort 10+）
+                'sort_order' => 0,
             ];
 
             $bundle = ! empty($row['id']) ? CourseBundle::query()->find((int) $row['id']) : null;

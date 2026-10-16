@@ -543,9 +543,11 @@ final class EnrollmentPricing
 
     /**
      * 各科適用的組合優惠價。
-     * 是否符合組合看「報名中」的科目（本次收款＋報名科目）。
-     * 多個組合同時符合時：符合科數較多 → 全部組合課都有報（精準）→ 組合較小（較專）優先；
-     * 同順位若該組合將此科設為「原價」（未填價），則不套其他組合折扣。
+     * 是否「符合門檻」仍看報名中科目（本次＋已報），以便分科繳費維持雙科價。
+     * 多個組合同時符合時優先序：
+     * 1) 本次勾選命中科數較多（專屬組合優於「已報其他科」觸發的通用雙科）
+     * 2) 報名中命中科數較多 → 組合課全報齊 → 組合較小 → sort_order
+     * 該組合若將此科留白，則維持原價。
      *
      * @param  array<int, array<string, mixed>>  $subjectsById
      * @param  list<int>  $selectedIds
@@ -553,15 +555,20 @@ final class EnrollmentPricing
      */
     public static function bundlePrices(Student $student, array $subjectsById, array $selectedIds): array
     {
-        $enrolled = [];
-        foreach (array_merge($selectedIds, PromotionCourses::intendedOrSnapshotCourseIds($student)) as $id) {
+        $selectedSet = [];
+        foreach ($selectedIds as $id) {
+            $selectedSet[(int) $id] = true;
+        }
+
+        $enrolled = $selectedSet;
+        foreach (PromotionCourses::intendedOrSnapshotCourseIds($student) as $id) {
             $subject = $subjectsById[(int) $id] ?? null;
             if (is_array($subject) && ! empty($subject['fee_plan_id'])) {
                 $enrolled[(int) $id] = true;
             }
         }
 
-        /** @var list<array{bundle:array<string, mixed>, matched:int, exact:bool, size:int}> $qualified */
+        /** @var list<array{bundle:array<string, mixed>, selected_matched:int, matched:int, exact:bool, size:int}> $qualified */
         $qualified = [];
         foreach (self::bundlesForStudent($student) as $bundle) {
             $matchedIds = array_values(array_filter(
@@ -572,9 +579,14 @@ final class EnrollmentPricing
             if ($matched < max(1, (int) $bundle['min_courses'])) {
                 continue;
             }
+            $selectedMatched = count(array_filter(
+                $bundle['course_ids'],
+                fn (int $id): bool => isset($selectedSet[$id])
+            ));
             $size = count($bundle['course_ids']);
             $qualified[] = [
                 'bundle' => $bundle,
+                'selected_matched' => $selectedMatched,
                 'matched' => $matched,
                 'exact' => $matched === $size,
                 'size' => $size,
@@ -593,6 +605,10 @@ final class EnrollmentPricing
             }
 
             usort($candidates, function (array $a, array $b): int {
+                // 本次收款勾到的科數最重要：避免已報數學讓「英數雙科」蓋過「高瞻＋英文」
+                if ($a['selected_matched'] !== $b['selected_matched']) {
+                    return $b['selected_matched'] <=> $a['selected_matched'];
+                }
                 if ($a['matched'] !== $b['matched']) {
                     return $b['matched'] <=> $a['matched'];
                 }
@@ -611,9 +627,10 @@ final class EnrollmentPricing
                 return ((int) $a['bundle']['id']) <=> ((int) $b['bundle']['id']);
             });
 
-            // 排序後只套用最適合的那一組（避免通用雙科搶過專屬組合）
             $best = $candidates[0]['bundle'];
-            $price = $best['course_prices'][$courseId] ?? null;
+            $price = $best['course_prices'][$courseId]
+                ?? $best['course_prices'][(string) $courseId]
+                ?? null;
             if ($price === null) {
                 continue;
             }

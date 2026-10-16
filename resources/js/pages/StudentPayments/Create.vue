@@ -1047,10 +1047,11 @@ const form = useForm({
 });
 
 /**
- * 組合優惠：符合科數較多 → 組合課全報齊 → 組合較小 優先。
- * 同順位若該科留白（原價），不改吃其他組合的較低價。
+ * 組合優惠：先比「本次勾選」命中科數（避免已報其他科觸發的通用雙科蓋過專屬組合），
+ * 再比報名中命中、全報齊、組合較小。留白＝原價。
  */
 const bundleByCourse = computed(() => {
+    const selectedSet = new Set(selected.value);
     const enrolled = new Set(
         [...selected.value, ...(props.enrolled_course_ids ?? [])].filter(
             (id) =>
@@ -1060,6 +1061,7 @@ const bundleByCourse = computed(() => {
 
     type Qualified = {
         bundle: NonNullable<typeof props.bundles>[number];
+        selectedMatched: number;
         matched: number;
         exact: boolean;
         size: number;
@@ -1072,9 +1074,13 @@ const bundleByCourse = computed(() => {
         if (matched < Math.max(1, bundle.min_courses)) {
             continue;
         }
+        const selectedMatched = bundle.course_ids.filter((id) =>
+            selectedSet.has(id),
+        ).length;
         const size = bundle.course_ids.length;
         qualified.push({
             bundle,
+            selectedMatched,
             matched,
             exact: matched === size,
             size,
@@ -1100,6 +1106,9 @@ const bundleByCourse = computed(() => {
         }
 
         candidates.sort((a, b) => {
+            if (a.selectedMatched !== b.selectedMatched) {
+                return b.selectedMatched - a.selectedMatched;
+            }
             if (a.matched !== b.matched) {
                 return b.matched - a.matched;
             }
