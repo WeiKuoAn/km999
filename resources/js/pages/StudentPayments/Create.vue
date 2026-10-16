@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import SessionDateCalendar from '@/components/SessionDateCalendar.vue';
 import InputError from '@/components/InputError.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+    classroomCalendarSurface,
+    normalizeClassroomHex,
+} from '@/lib/classroomColor';
+import { studentStatusLabel, studentStatusPillClass } from '@/lib/studentStatus';
 import {
     billingBaselineSessions,
     billingMonthOptions,
@@ -18,15 +22,11 @@ import {
     monthsFromDates,
     parseMonthKey,
     proratedMonthTuitionExact,
-    uniqueDatesFromSessions,
-    type SessionEntry,
-    type YearMonth,
+    uniqueDatesFromSessions
+    
+    
 } from '@/lib/weekdayDates';
-import {
-    classroomCalendarSurface,
-    normalizeClassroomHex,
-} from '@/lib/classroomColor';
-import { studentStatusLabel, studentStatusPillClass } from '@/lib/studentStatus';
+import type {SessionEntry, YearMonth} from '@/lib/weekdayDates';
 
 type Subject = {
     id: number;
@@ -153,6 +153,7 @@ const defaultCourseIds = (): number[] => {
     const suggested = (props.suggested_course_ids ?? []).filter((id) =>
         props.subjects.some((s) => s.id === id),
     );
+
     if (suggested.length > 0) {
         return [...suggested];
     }
@@ -166,9 +167,11 @@ const defaultCourseIds = (): number[] => {
 
 const defaultPayCycle = (): 'monthly' | 'quarterly' | 'annual' => {
     const cycle = props.suggested_pay_cycle;
+
     if (cycle === 'monthly' || cycle === 'quarterly' || cycle === 'annual') {
         return cycle;
     }
+
     return 'quarterly';
 };
 
@@ -191,22 +194,28 @@ const isEditMode = computed(() => editContext.value !== null);
 
 const editBackHref = computed(() => {
     const edit = editContext.value;
+
     if (!edit && props.return_grade_level_id) {
         return `/student-payments/create?grade_level_id=${props.return_grade_level_id}`;
     }
+
     if (!edit || !props.student) {
         return '/student-payments';
     }
+
     const from = parseMonthKey(edit.from);
     const to = parseMonthKey(edit.to);
+
     if (!from || !to) {
         return `/student-payments/${props.student.id}`;
     }
+
     return `/student-payments/${props.student.id}?from_year=${from.y}&from_month=${from.m}&to_year=${to.y}&to_month=${to.m}`;
 });
 
 const initialDiscountId = (): number | null => {
     const id = props.edit?.fee_discount_id ?? null;
+
     return id !== null && (props.fee_discounts ?? []).some((d) => d.id === id)
         ? id
         : null;
@@ -247,9 +256,11 @@ const halfKey = (courseId: number, year: number, half: string) =>
 
 const materialStatusByKey = computed(() => {
     const map = new Map<string, MaterialStatusRow>();
+
     for (const row of materialStatusRows.value) {
         map.set(halfKey(row.course_id, row.period_year, row.period_half), row);
     }
+
     return map;
 });
 
@@ -257,6 +268,7 @@ const materialPeriodYear = computed(() => {
     if (startDate.value && startDate.value.length >= 4) {
         return Number(startDate.value.slice(0, 4));
     }
+
     return new Date().getFullYear();
 });
 
@@ -264,7 +276,9 @@ const suggestedHalfFromStart = computed(() => {
     if (!startDate.value || startDate.value.length < 7) {
         return 'H2';
     }
+
     const month = Number(startDate.value.slice(5, 7));
+
     return month <= 6 ? 'H1' : 'H2';
 });
 
@@ -283,12 +297,15 @@ const materialPeriods = computed<HalfPeriod[]>(() => {
         { year, half: 'H1' },
         { year, half: 'H2' },
     ];
+
     for (const { y, m } of selectedYearMonths.value) {
         const half = m <= 6 ? 'H1' : 'H2';
+
         if (!periods.some((p) => p.year === y && p.half === half)) {
             periods.push({ year: y, half });
         }
     }
+
     return periods.sort(
         (a, b) => a.year * 2 + (a.half === 'H1' ? 0 : 1) - (b.year * 2 + (b.half === 'H1' ? 0 : 1)),
     );
@@ -305,6 +322,7 @@ const courseYearMonths = (courseId: number) =>
 /** 該科帳期含 1 月或 7 月，或為起算月所屬半年 → 預設要收 */
 const isHalfSuggested = (period: HalfPeriod, courseId: number) => {
     const startMonth = period.half === 'H1' ? 1 : 7;
+
     if (
         courseYearMonths(courseId).some(
             ({ y, m }) => y === period.year && m === startMonth,
@@ -312,6 +330,7 @@ const isHalfSuggested = (period: HalfPeriod, courseId: number) => {
     ) {
         return true;
     }
+
     return (
         period.year === materialPeriodYear.value &&
         period.half === suggestedHalfFromStart.value
@@ -327,6 +346,7 @@ const syncDefaultMaterialChecks = () => {
         chargeMaterialMaster.value = false;
         chargeConsumableIds.value = [];
         materialHalfState.value = {};
+
         return;
     }
 
@@ -338,14 +358,18 @@ const syncDefaultMaterialChecks = () => {
 
     for (const id of selected.value) {
         const s = props.subjects.find((x) => x.id === id);
+
         if (!s || !s.material) {
             continue;
         }
+
         if (s.material_unit === 'class_day') {
             consumables.push(id);
             continue;
         }
+
         const semi = semiAnnualMaterialFee(s.material);
+
         for (const period of materialPeriods.value) {
             const key = halfKey(id, period.year, period.half);
             const status = materialStatusByKey.value.get(key);
@@ -356,9 +380,11 @@ const syncDefaultMaterialChecks = () => {
                 : props.edit || materialManualKeys.value.has(key)
                   ? !!prev?.checked
                   : isHalfSuggested(period, id);
+
             if (checked && !prev?.checked) {
                 autoAdded = true;
             }
+
             nextHalf[key] = {
                 checked,
                 amount:
@@ -372,6 +398,7 @@ const syncDefaultMaterialChecks = () => {
     // 清掉已不在選課或已不在帳期內的半年
     for (const key of Object.keys(nextHalf)) {
         const [courseId, year, half] = key.split('-');
+
         if (
             !selected.value.includes(Number(courseId)) ||
             !materialPeriods.value.some(
@@ -384,6 +411,7 @@ const syncDefaultMaterialChecks = () => {
 
     chargeConsumableIds.value = consumables;
     materialHalfState.value = nextHalf;
+
     if (autoAdded) {
         chargeMaterialMaster.value = true;
     }
@@ -394,6 +422,7 @@ const sessionMonthSpan = computed(() => {
     if (isGrade9PackageMode.value) {
         return 6;
     }
+
     switch (payCycle.value) {
         case 'monthly':
             return 1;
@@ -412,18 +441,24 @@ const packageRequiredIds = computed(
 
 const isGrade9PackageMode = computed(() => {
     const meta = grade9Package.value;
+
     if (!meta?.eligible || payCycle.value !== 'annual') {
         return false;
     }
+
     if (!startDate.value || startDate.value.length < 7) {
         return false;
     }
+
     const month = Number(startDate.value.slice(5, 7));
+
     if (month !== 7) {
         return false;
     }
+
     const required = [...meta.required_course_ids].sort((a, b) => a - b);
     const sel = [...selected.value].sort((a, b) => a - b);
+
     return (
         required.length > 0 &&
         required.length === sel.length &&
@@ -433,9 +468,11 @@ const isGrade9PackageMode = computed(() => {
 
 const packageAlmostReady = computed(() => {
     const meta = grade9Package.value;
+
     if (!meta?.eligible) {
         return false;
     }
+
     return !isGrade9PackageMode.value;
 });
 
@@ -444,24 +481,31 @@ const canApplyGrade9Package = computed(() => {
     if (!grade9Package.value?.eligible) {
         return false;
     }
+
     if (!hasPriorPayments.value) {
         return true;
     }
+
     const suggested = suggestedStartDate.value;
+
     if (!suggested || suggested.length < 7) {
         return true;
     }
+
     return Number(suggested.slice(5, 7)) === 7;
 });
 
 const applyGrade9Package = () => {
     const meta = grade9Package.value;
+
     if (!meta?.eligible || meta.required_course_ids.length === 0) {
         return;
     }
+
     if (!canApplyGrade9Package.value) {
         return;
     }
+
     const year =
         hasPriorPayments.value && suggestedStartDate.value
             ? Number(suggestedStartDate.value.slice(0, 4))
@@ -488,6 +532,7 @@ const packageShareForCourse = (index: number, count: number) => {
     const monthly = grade9Package.value?.monthly_total ?? 20000;
     const base = Math.floor(monthly / count);
     const rem = monthly % count;
+
     return base + (index < rem ? 1 : 0);
 };
 
@@ -504,10 +549,12 @@ const packageMonthBreakdown = computed(() => {
             materialHalfHint: string | null;
         }>;
     }
+
     const year = Number(startDate.value.slice(0, 4));
     const ids = [...selected.value];
     const n = ids.length;
     const monthly = grade9Package.value?.monthly_total ?? 20000;
+
     return [7, 8, 9, 10, 11, 12].map((m) => ({
         y: year,
         m,
@@ -517,6 +564,7 @@ const packageMonthBreakdown = computed(() => {
         subtotal: monthly,
         prorateHints: ids.map((id, index) => {
             const s = props.subjects.find((x) => x.id === id);
+
             return `${s?.name ?? id} ${packageShareForCourse(index, n).toLocaleString()}`;
         }),
         materialHalfHint: null,
@@ -537,10 +585,12 @@ const monthCheckboxOptions = computed(() => {
     if (!startDate.value) {
         return [];
     }
+
     const from = startDate.value < BACKFILL_FROM ? startDate.value : BACKFILL_FROM;
     const extra =
         (Number(startDate.value.slice(0, 4)) - Number(from.slice(0, 4))) * 12 +
         (Number(startDate.value.slice(5, 7)) - Number(from.slice(5, 7)));
+
     return billingMonthOptions(from, 12 + extra).map((m) => ({
         key: monthKey(m.y, m.m),
         label: `${m.m}月`,
@@ -550,30 +600,13 @@ const monthCheckboxOptions = computed(() => {
     }));
 });
 
-/** 行事曆可瀏覽月數：至少涵蓋已勾選月份 */
-const calendarMonthSpan = computed(() => {
-    if (selectedMonths.value.length === 0) {
-        return sessionMonthSpan.value;
-    }
-    const start = startDate.value
-        ? new Date(`${startDate.value.slice(0, 10)}T12:00:00`)
-        : new Date();
-    const last = selectedMonths.value[selectedMonths.value.length - 1];
-    const end = new Date(last.y, last.m - 1, 1);
-    return Math.max(
-        sessionMonthSpan.value,
-        (end.getFullYear() - start.getFullYear()) * 12 +
-            (end.getMonth() - start.getMonth()) +
-            1,
-    );
-});
-
 /** 勾選早於起算日的月份時，起算日會前移；前移後保留使用者勾選的月份 */
 let pendingMonthKeys: string[] | null = null;
 let pendingCourseMonths: Record<number, string[]> | null = null;
 
 const monthKeyIndex = (key: string) => {
     const ym = parseMonthKey(key);
+
     return ym ? ym.y * 12 + ym.m : 0;
 };
 
@@ -585,12 +618,15 @@ const sortMonthKeys = (keys: string[]) =>
 /** 寫入各科月份，並把聯集同步到 selectedMonthKeys；新加入的科目沿用目前全部月份 */
 const applyCourseMonths = (next: Record<number, string[]>) => {
     const cleaned: Record<number, string[]> = {};
+
     for (const id of selected.value) {
         const keys = sortMonthKeys(next[id] ?? selectedMonthKeys.value);
+
         if (keys.length > 0) {
             cleaned[id] = keys;
         }
     }
+
     courseMonthKeys.value = cleaned;
     selectedMonthKeys.value = sortMonthKeys(Object.values(cleaned).flat());
 };
@@ -598,37 +634,48 @@ const applyCourseMonths = (next: Record<number, string[]>) => {
 /** 編輯或建議帶入的各科月份不一致時，自動開啟分科模式 */
 const splitSource = (): Record<number, string[]> | null => {
     const source = props.edit?.course_months ?? props.suggested_course_months;
+
     if (!source) {
         return null;
     }
+
     const entries = Object.entries(source)
         .map(([id, keys]) => [Number(id), sortMonthKeys(keys)] as const)
         .filter(([id, keys]) => selected.value.includes(id) && keys.length > 0);
+
     if (entries.length < 2) {
         return null;
     }
+
     const first = entries[0][1].join(',');
+
     if (entries.every(([, keys]) => keys.join(',') === first)) {
         return null;
     }
+
     return Object.fromEntries(entries);
 };
 
 const syncSuggestedMonths = () => {
     if (!startDate.value) {
         selectedMonthKeys.value = [];
+
         return;
     }
+
     if (splitByCourse.value && !isGrade9PackageMode.value) {
         if (pendingCourseMonths !== null) {
             const next = pendingCourseMonths;
             pendingCourseMonths = null;
             applyCourseMonths(next);
+
             return;
         }
+
         // 起算日或繳別變動：各科從自己的第一個月（不早於起算月）重排一個週期
         const startIndex = monthKeyIndex(startDate.value.slice(0, 7));
         const next: Record<number, string[]> = {};
+
         for (const id of selected.value) {
             const first = sortMonthKeys(courseMonthKeys.value[id] ?? [])[0];
             const from =
@@ -639,21 +686,28 @@ const syncSuggestedMonths = () => {
                 (m) => monthKey(m.y, m.m),
             );
         }
+
         applyCourseMonths(next);
+
         return;
     }
+
     if (pendingMonthKeys !== null) {
         selectedMonthKeys.value = pendingMonthKeys;
         pendingMonthKeys = null;
+
         return;
     }
+
     if (isGrade9PackageMode.value) {
         const year = Number(startDate.value.slice(0, 4));
         selectedMonthKeys.value = [7, 8, 9, 10, 11, 12].map((m) =>
             monthKey(year, m),
         );
+
         return;
     }
+
     selectedMonthKeys.value = defaultBillingMonths(
         startDate.value,
         sessionMonthSpan.value,
@@ -662,22 +716,28 @@ const syncSuggestedMonths = () => {
 
 const toggleBillingMonth = (key: string) => {
     const idx = selectedMonthKeys.value.indexOf(key);
+
     if (idx >= 0) {
         if (selectedMonthKeys.value.length <= 1) {
             return;
         }
+
         selectedMonthKeys.value = selectedMonthKeys.value.filter((k) => k !== key);
     } else {
         const next = [...selectedMonthKeys.value, key];
         const ym = parseMonthKey(key);
         const monthStart = ym ? `${ym.y}-${String(ym.m).padStart(2, '0')}-01` : '';
+
         if (monthStart !== '' && startDate.value && monthStart < startDate.value.slice(0, 7) + '-01') {
             pendingMonthKeys = next;
             startDate.value = monthStart;
+
             return;
         }
+
         selectedMonthKeys.value = next;
     }
+
     refillSessionDates();
 };
 
@@ -686,6 +746,7 @@ const initSplitFromProps = () => {
     splitByCourse.value = source !== null;
     courseMonthKeys.value = {};
     pendingCourseMonths = source;
+
     if (source !== null) {
         pendingMonthKeys = null;
     }
@@ -694,21 +755,26 @@ const initSplitFromProps = () => {
 const toggleCourseMonth = (courseId: number, key: string) => {
     const current = courseMonthKeys.value[courseId] ?? [];
     let next: string[];
+
     if (current.includes(key)) {
         if (current.length <= 1) {
             return;
         }
+
         next = current.filter((k) => k !== key);
     } else {
         next = [...current, key];
         const ym = parseMonthKey(key);
         const monthStart = ym ? `${ym.y}-${String(ym.m).padStart(2, '0')}-01` : '';
+
         if (monthStart !== '' && startDate.value && monthStart < startDate.value.slice(0, 7) + '-01') {
             pendingCourseMonths = { ...courseMonthKeys.value, [courseId]: next };
             startDate.value = monthStart;
+
             return;
         }
     }
+
     applyCourseMonths({ ...courseMonthKeys.value, [courseId]: next });
     refillSessionDates();
 };
@@ -725,23 +791,13 @@ const setSplitByCourse = (on: boolean) => {
         splitByCourse.value = false;
         courseMonthKeys.value = {};
     }
+
     refillSessionDates();
 };
 
 const onSplitToggle = (event: Event) => {
     setSplitByCourse(!!(event.target as HTMLInputElement | null)?.checked);
 };
-
-const selectedWeekdays = computed(() => {
-    const set = new Set<number>();
-    for (const id of selected.value) {
-        const s = props.subjects.find((x) => x.id === id);
-        for (const d of s?.weekdays ?? []) {
-            set.add(d);
-        }
-    }
-    return [...set].sort((a, b) => a - b);
-});
 
 const calendarCourses = computed(() =>
     selected.value
@@ -757,17 +813,11 @@ const calendarCourses = computed(() =>
         })),
 );
 
-const sessionCourseSummary = computed(() =>
-    calendarCourses.value.map((course) => ({
-        ...course,
-        count: countSessionsForCourse(sessions.value, course.id),
-    })),
-);
-
 const subjectCardStyle = (s: Subject, isSelected: boolean) => {
     if (!isSelected) {
         return undefined;
     }
+
     return classroomCalendarSurface(s.color);
 };
 
@@ -778,22 +828,29 @@ const subjectSwatchStyle = (s: Subject) => ({
 const refillSessionDates = () => {
     if (!startDate.value) {
         sessions.value = [];
+
         return;
     }
+
     if (splitByCourse.value && !isGrade9PackageMode.value) {
         const ids = Object.keys(courseMonthKeys.value).map(Number).sort();
         const sel = [...selected.value].sort();
+
         if (ids.join(',') !== sel.join(',')) {
             applyCourseMonths(courseMonthKeys.value);
         }
+
         const merged: SessionEntry[] = [];
+
         for (const course of calendarCourses.value) {
             const months = (courseMonthKeys.value[course.id] ?? [])
                 .map((key) => parseMonthKey(key))
                 .filter((m): m is YearMonth => m !== null);
+
             if (months.length === 0) {
                 continue;
             }
+
             merged.push(
                 ...buildDefaultSessionEntries(
                     startDate.value,
@@ -804,14 +861,18 @@ const refillSessionDates = () => {
                 ),
             );
         }
+
         sessions.value = merged.sort(
             (a, b) => a.date.localeCompare(b.date) || a.course_id - b.course_id,
         );
+
         return;
     }
+
     if (selectedMonthKeys.value.length === 0) {
         syncSuggestedMonths();
     }
+
     sessions.value = buildDefaultSessionEntries(
         startDate.value,
         calendarCourses.value,
@@ -826,13 +887,16 @@ watch(
     () => {
         selected.value = defaultCourseIds();
         payCycle.value = defaultPayCycle();
+
         if (props.student) {
             query.value =
                 `${props.student.student_code ? `${props.student.student_code} ` : ''}${props.student.name}`.trim();
         }
+
         if (props.has_prior_payments && props.suggested_start_date) {
             startDate.value = props.suggested_start_date;
         }
+
         initSplitFromProps();
         syncSuggestedMonths();
         refillSessionDates();
@@ -880,6 +944,7 @@ watch(
     selected,
     () => {
         refillSessionDates();
+
         if (isGrade9PackageMode.value) {
             chargeMaterialMaster.value = false;
             chargeConsumableIds.value = [];
@@ -894,12 +959,14 @@ watch(
 if (props.student && props.edit) {
     pendingMonthKeys = [...props.edit.month_keys];
     const seeded: Record<string, { checked: boolean; amount: number }> = {};
+
     for (const row of props.edit.material_halves) {
         seeded[halfKey(row.course_id, row.period_year, row.period_half)] = {
             checked: true,
             amount: row.amount,
         };
     }
+
     materialHalfState.value = seeded;
 }
 
@@ -918,9 +985,11 @@ watch(startDate, (value, oldValue) => {
     if (!props.student || !value || value === oldValue) {
         return;
     }
+
     if (materialStatusReloadTimer) {
         clearTimeout(materialStatusReloadTimer);
     }
+
     materialStatusReloadTimer = setTimeout(() => {
         router.get(
             '/student-payments/create',
@@ -984,23 +1053,37 @@ const bundleByCourse = computed(() => {
         ),
     );
     const out = new Map<number, { price: number; name: string }>();
+
     for (const bundle of props.bundles ?? []) {
         const matched = bundle.course_ids.filter((id) => enrolled.has(id));
-        if (matched.length < Math.max(1, bundle.min_courses)) continue;
+
+        if (matched.length < Math.max(1, bundle.min_courses)) {
+continue;
+}
+
         for (const id of bundle.course_ids) {
-            if (!selected.value.includes(id)) continue;
+            if (!selected.value.includes(id)) {
+continue;
+}
+
             const current = out.get(id);
+
             if (!current || bundle.price < current.price) {
                 out.set(id, { price: bundle.price, name: bundle.name });
             }
         }
     }
+
     return out;
 });
 
 const appliedBundle = (s: Subject) => {
-    if (payCycle.value === 'monthly') return null;
+    if (payCycle.value === 'monthly') {
+return null;
+}
+
     const bundle = bundleByCourse.value.get(s.id);
+
     return bundle && bundle.price < s.q_single ? bundle : null;
 };
 
@@ -1014,7 +1097,10 @@ const appliedBundleNames = computed(() => [
 ]);
 
 const unitPrice = (s: Subject) => {
-    if (payCycle.value === 'monthly') return s.list;
+    if (payCycle.value === 'monthly') {
+return s.list;
+}
+
     return appliedBundle(s)?.price ?? s.q_single;
 };
 
@@ -1033,12 +1119,11 @@ const monthCount = computed(() =>
         ? Math.max(6, selectedMonths.value.length)
         : billingMonths.value.length,
 );
-const sessionCount = computed(() => sessions.value.length);
-
 const courseBillingMonths = (courseId: number): YearMonth[] => {
     if (!isSplitMode.value) {
         return billingMonths.value;
     }
+
     return (courseMonthKeys.value[courseId] ?? [])
         .map((key) => parseMonthKey(key))
         .filter((m): m is YearMonth => m !== null);
@@ -1054,17 +1139,23 @@ const blockTuition = (s: Subject) =>
 
 const countSessionsInMonth = (courseId: number, y: number, m: number) =>
     sessions.value.filter((entry) => {
-        if (entry.course_id !== courseId) return false;
+        if (entry.course_id !== courseId) {
+return false;
+}
+
         const [ey, em] = entry.date.slice(0, 10).split('-').map(Number);
+
         return ey === y && em === m;
     }).length;
 
 const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
     const price = unitPrice(s);
     const attended = countSessionsInMonth(s.id, y, m);
+
     if (s.unit === 'session_block' || !isCourseMonth(s.id, y, m)) {
         return 0;
     }
+
     return proratedMonthTuitionExact(
         price,
         attended,
@@ -1076,6 +1167,7 @@ const lineTuition = (s: Subject) => {
     if (s.unit === 'session_block') {
         return blockTuition(s);
     }
+
     // 各月：該科精確值加總後再進位會與「多科合計再進位」不一致；
     // 單科小計仍用各月 round(精確值)，月合計另以多科加總後 round。
     return courseBillingMonths(s.id).reduce((sum, month) => {
@@ -1098,6 +1190,7 @@ const toggleConsumable = (courseId: number) => {
 
 const halfState = (courseId: number, year: number, half: string) => {
     const key = halfKey(courseId, year, half);
+
     return (
         materialHalfState.value[key] ?? {
             checked: false,
@@ -1114,9 +1207,11 @@ const setHalfChecked = (
 ) => {
     const key = halfKey(courseId, year, half);
     const status = materialStatusByKey.value.get(key);
+
     if (checked && status && !status.can_charge) {
         return;
     }
+
     const current = halfState(courseId, year, half);
     materialManualKeys.value = new Set(materialManualKeys.value).add(key);
     materialHalfState.value = {
@@ -1167,10 +1262,13 @@ const onHalfAmountInput = (
 const checkedHalfAmount = (courseId: number, period: HalfPeriod) => {
     const key = halfKey(courseId, period.year, period.half);
     const status = materialStatusByKey.value.get(key);
+
     if (status && !status.can_charge) {
         return 0;
     }
+
     const st = halfState(courseId, period.year, period.half);
+
     return st.checked ? Math.max(0, st.amount) : 0;
 };
 
@@ -1178,6 +1276,7 @@ const courseHalfAmount = (courseId: number) => {
     if (!chargeMaterialMaster.value) {
         return 0;
     }
+
     return materialPeriods.value.reduce(
         (sum, period) => sum + checkedHalfAmount(courseId, period),
         0,
@@ -1187,6 +1286,7 @@ const courseHalfAmount = (courseId: number) => {
 /** 半年教材掛在帳期中第一個落在該半年的月份；帳期不含該半年則掛第一個月（與後端一致） */
 const halfTargetMonth = (period: HalfPeriod, courseId: number) => {
     const months = courseBillingMonths(courseId);
+
     return (
         months.find(
             ({ y, m }) =>
@@ -1196,29 +1296,46 @@ const halfTargetMonth = (period: HalfPeriod, courseId: number) => {
 };
 
 const lineMaterial = (s: Subject) => {
-    if (!s.material || !chargeMaterialMaster.value) return 0;
+    if (!s.material || !chargeMaterialMaster.value) {
+return 0;
+}
+
     if (s.material_unit === 'class_day') {
-        if (!isChargingConsumable(s.id)) return 0;
+        if (!isChargingConsumable(s.id)) {
+return 0;
+}
+
         return countSessionsForCourse(sessions.value, s.id) * s.material;
     }
+
     return courseHalfAmount(s.id);
 };
 
 /** 半年教材掛在對應月份（1 月／7 月或帳期首月）；耗材仍按月 */
 const lineMaterialForMonth = (s: Subject, y: number, m: number) => {
-    if (!s.material || !chargeMaterialMaster.value) return 0;
+    if (!s.material || !chargeMaterialMaster.value) {
+return 0;
+}
+
     if (s.material_unit === 'class_day') {
-        if (!isChargingConsumable(s.id)) return 0;
+        if (!isChargingConsumable(s.id)) {
+return 0;
+}
+
         return countSessionsInMonth(s.id, y, m) * s.material;
     }
+
     if (billingMonths.value.length === 0) {
         return 0;
     }
+
     return materialPeriods.value.reduce((sum, period) => {
         const target = halfTargetMonth(period, s.id);
+
         if (!target || target.y !== y || target.m !== m) {
             return sum;
         }
+
         return sum + checkedHalfAmount(s.id, period);
     }, 0);
 };
@@ -1227,10 +1344,13 @@ const materialHint = (s: Subject): string => {
     if (!s.material) {
         return '無教材／耗材';
     }
+
     if (s.material_unit === 'class_day') {
         return `耗材 ${s.material.toLocaleString()}/日｜${formatWeekdays(s.weekdays)}`;
     }
+
     const semi = semiAnnualMaterialFee(s.material);
+
     return `教材 ${s.material.toLocaleString()}（半年 ${semi.toLocaleString()}）`;
 };
 
@@ -1239,8 +1359,10 @@ const hasMaterialSubjects = computed(() => {
     if (isGrade9PackageMode.value) {
         return false;
     }
+
     return selected.value.some((id) => {
         const s = props.subjects.find((x) => x.id === id);
+
         return !!(s && s.material > 0);
     });
 });
@@ -1265,17 +1387,22 @@ const materialTermCourses = computed(() => {
             }>;
         }>;
     }
+
     const rows = [];
+
     for (const id of selected.value) {
         const s = props.subjects.find((x) => x.id === id);
+
         if (!s || !s.material || s.material_unit === 'class_day') {
             continue;
         }
+
         const semi = semiAnnualMaterialFee(s.material);
         const halves = materialPeriods.value.map(({ year, half }) => {
             const key = halfKey(id, year, half);
             const status = materialStatusByKey.value.get(key);
             const st = halfState(id, year, half);
+
             return {
                 half,
                 periodYear: year,
@@ -1298,6 +1425,7 @@ const materialTermCourses = computed(() => {
             halves,
         });
     }
+
     return rows;
 });
 
@@ -1311,12 +1439,16 @@ const consumableRows = computed(() => {
             amount: number;
         }>;
     }
+
     const rows = [];
+
     for (const id of selected.value) {
         const s = props.subjects.find((x) => x.id === id);
+
         if (!s || !s.material || s.material_unit !== 'class_day') {
             continue;
         }
+
         const days = countSessionsForCourse(sessions.value, s.id);
         rows.push({
             id: s.id,
@@ -1325,31 +1457,38 @@ const consumableRows = computed(() => {
             amount: days * s.material,
         });
     }
+
     return rows;
 });
 
 const materialHalfSummary = computed(() => {
     const rows: Array<{ label: string; amount: number }> = [];
+
     if (!chargeMaterialMaster.value) {
         return rows;
     }
+
     for (const course of materialTermCourses.value) {
         for (const half of course.halves) {
             if (!half.checked || half.locked) {
                 continue;
             }
+
             rows.push({
                 label: `${course.name}｜${half.periodLabel}`,
                 amount: half.amount,
             });
         }
     }
+
     for (const row of consumableRows.value) {
         if (!isChargingConsumable(row.id)) {
             continue;
         }
+
         rows.push({ label: `${row.name}｜耗材`, amount: row.amount });
     }
+
     return rows;
 });
 
@@ -1357,6 +1496,7 @@ const tuitionTotal = computed(() => {
     if (isGrade9PackageMode.value) {
         return grade9Package.value?.total ?? 120000;
     }
+
     // 與試算「各月金額」一致：每月先加總各科精確學費，再四捨五入後加總
     return monthBreakdown.value.reduce((sum, row) => sum + row.tuition, 0);
 });
@@ -1365,8 +1505,10 @@ const materialTotal = computed(() => {
     if (isGrade9PackageMode.value) {
         return 0;
     }
+
     return selected.value.reduce((sum, id) => {
         const s = props.subjects.find((x) => x.id === id);
+
         return s ? sum + lineMaterial(s) : sum;
     }, 0);
 });
@@ -1375,17 +1517,21 @@ const monthBreakdown = computed(() => {
     if (isGrade9PackageMode.value) {
         return packageMonthBreakdown.value;
     }
+
     const selectedSubjects = selected.value
         .map((id) => props.subjects.find((x) => x.id === id))
         .filter((s): s is Subject => !!s);
 
     // 堂數制科目：總額平均攤到該科自己的帳期月份，餘數放第一個月（與後端一致）
     const blockByMonth = new Map<string, number>();
+
     for (const s of selectedSubjects.filter((x) => x.unit === 'session_block')) {
         const months = courseBillingMonths(s.id);
+
         if (months.length === 0) {
             continue;
         }
+
         const total = blockTuition(s);
         const per = Math.floor(total / months.length);
         const rem = total % months.length;
@@ -1455,21 +1601,27 @@ const computeDiscountAllowance = (discount: {
     value: number;
 }) => {
     const subtotal = tuitionTotal.value + materialTotal.value;
+
     if (subtotal <= 0 || discount.value <= 0) {
         return 0;
     }
+
     if (discount.type === 'percent') {
         const pct = Math.min(100, Math.max(0, discount.value));
+
         return Math.min(subtotal, Math.round((subtotal * pct) / 100));
     }
+
     return Math.min(subtotal, discount.value);
 };
 
 const applySelectedDiscount = () => {
     const discount = selectedDiscount.value;
+
     if (!discount) {
         return;
     }
+
     allowance.value = computeDiscountAllowance(discount);
 };
 
@@ -1482,8 +1634,10 @@ watch([selectedDiscountId, tuitionTotal, materialTotal], () => {
 const onDiscountChange = (raw: string) => {
     if (raw === '' || raw === '0') {
         selectedDiscountId.value = null;
+
         return;
     }
+
     selectedDiscountId.value = Number(raw);
     applySelectedDiscount();
 };
@@ -1503,19 +1657,24 @@ const toggleSubject = (id: number) => {
     } else {
         selected.value = [...selected.value, id];
     }
+
     syncDefaultMaterialChecks();
 };
 
 const search = async (q: string) => {
     searchError.value = '';
+
     if (q.trim() === '') {
         results.value = [];
         open.value = false;
+
         return;
     }
+
     abortController?.abort();
     abortController = new AbortController();
     loading.value = true;
+
     try {
         const res = await fetch(
             `/student-payments/search?q=${encodeURIComponent(q.trim())}`,
@@ -1528,9 +1687,11 @@ const search = async (q: string) => {
                 signal: abortController.signal,
             },
         );
+
         if (!res.ok) {
             throw new Error('搜尋失敗');
         }
+
         const data = (await res.json()) as { students: StudentOption[] };
         results.value = data.students ?? [];
         open.value = true;
@@ -1538,6 +1699,7 @@ const search = async (q: string) => {
         if ((e as Error).name === 'AbortError') {
             return;
         }
+
         searchError.value = '搜尋失敗，請再試一次。';
         results.value = [];
     } finally {
@@ -1549,13 +1711,16 @@ watch(query, (value) => {
     if (props.student) {
         const label =
             `${props.student.student_code ? `${props.student.student_code} ` : ''}${props.student.name}`.trim();
+
         if (value === label) {
             return;
         }
     }
+
     if (timer) {
         clearTimeout(timer);
     }
+
     timer = setTimeout(() => {
         void search(value);
     }, 250);
@@ -1606,9 +1771,11 @@ const onGradeFilterChange = () => {
 const filteredGradeStudents = computed(() => {
     const keyword = gradeListQuery.value.trim();
     const list = props.grade_students ?? [];
+
     if (keyword === '') {
         return list;
     }
+
     return list.filter(
         (s) => s.name.includes(keyword) || (s.student_code ?? '').includes(keyword),
     );
@@ -1618,11 +1785,13 @@ const submit = () => {
     if (!props.student) {
         return;
     }
+
     form.course_ids = [...selected.value];
     form.pay_cycle = payCycle.value;
     form.sessions = [...sessions.value];
     form.allowance = Number(allowance.value || 0);
     form.start_date = startDate.value || null;
+
     if (isGrade9PackageMode.value || !chargeMaterialMaster.value) {
         form.charge_material_course_ids = [];
         form.material_half_charges = [];
@@ -1636,11 +1805,13 @@ const submit = () => {
             period_half: string;
             amount: number;
         }> = [];
+
         for (const course of materialTermCourses.value) {
             for (const half of course.halves) {
                 if (!half.checked || half.locked || half.amount <= 0) {
                     continue;
                 }
+
                 charges.push({
                     course_id: course.id,
                     period_year: half.periodYear,
@@ -1649,8 +1820,10 @@ const submit = () => {
                 });
             }
         }
+
         form.material_half_charges = charges;
     }
+
     form.fee_discount_id = selectedDiscountId.value;
     const trimmedReceipt = receiptNo.value.trim();
     form.receipt_no = trimmedReceipt === '' ? null : trimmedReceipt;
@@ -1668,9 +1841,11 @@ onBeforeUnmount(() => {
     if (timer) {
         clearTimeout(timer);
     }
+
     if (materialStatusReloadTimer) {
         clearTimeout(materialStatusReloadTimer);
     }
+
     abortController?.abort();
 });
 
@@ -1707,8 +1882,8 @@ defineOptions({
             :title="isEditMode ? `編輯收款｜${editContext?.period_label}` : '新增收款／報名計價'"
             :description="
                 isEditMode
-                    ? '可重新選擇科目、繳別、月份、上課日、教材與優惠；儲存後會取代原本這一期的收款紀錄（收款日與收款人保留）。'
-                    : '先輸入學生，系統依年級自動帶入可報名科目與價目；以行事曆選上課日後確認收款並產生帳期。'
+                    ? '可重新選擇科目、繳別、月份、教材與優惠；儲存後會取代原本這一期的收款紀錄（收款日與收款人保留）。'
+                    : '選擇學生、科目與帳期月份後，右側試算確認金額即可收款。'
             "
         />
 
@@ -2056,27 +2231,21 @@ defineOptions({
                                     type="date"
                                     class="h-10"
                                 />
-                                <p class="text-xs text-muted-foreground">
-                                    決定從哪天開始排上課日。學費為固定月費，該月有上課就收整月；入班當月若不想收，取消勾選該月即可。
-                                </p>
                                 <InputError :message="form.errors.start_date" />
                             </div>
                             <div v-else class="grid gap-1">
                                 <p class="text-sm font-medium">帳期起算</p>
-                                <p class="text-sm text-muted-foreground">
-                                    已有收款紀錄，本帳期自
-                                    <span
-                                        class="font-medium text-foreground tabular-nums"
-                                        >{{ startDate }}</span
-                                    >
-                                    起算。可再勾選月份或點行事曆加課／減課。
+                                <p
+                                    class="text-sm font-medium tabular-nums text-foreground"
+                                >
+                                    {{ startDate }}
                                 </p>
                                 <InputError :message="form.errors.start_date" />
                             </div>
                         </div>
 
                         <div class="mt-4 grid gap-2">
-                            <Label>帳期月份（可勾選）</Label>
+                            <Label>帳期月份</Label>
                             <p
                                 v-if="isGrade9PackageMode"
                                 class="text-xs text-muted-foreground"
@@ -2084,9 +2253,6 @@ defineOptions({
                                 國三全科年繳固定 7–12 月共 6
                                 期，每月合計 20,000（20,000 ÷
                                 科目數寫入各科該月應收）。
-                            </p>
-                            <p v-else class="text-xs text-muted-foreground">
-                                依繳別預勾連續月，可自行增減。每個勾選且有上課的月份都收整月月費。
                             </p>
                             <label
                                 v-if="!isGrade9PackageMode && selected.length > 1"
@@ -2181,58 +2347,6 @@ defineOptions({
                             </div>
                         </div>
 
-                        <h2 class="mt-4 text-base font-semibold">
-                            上課日行事曆
-                        </h2>
-                        <p class="mt-1 text-xs text-muted-foreground">
-                            預設星期：{{
-                                formatWeekdays(selectedWeekdays)
-                            }}｜已涵蓋帳期月數 {{ monthCount }}｜選中
-                            {{ sessionCount }} 堂
-                        </p>
-                        <div class="mt-3">
-                            <SessionDateCalendar
-                                v-model="sessions"
-                                :start-date="startDate"
-                                :courses="calendarCourses"
-                                :month-span="calendarMonthSpan"
-                            />
-                        </div>
-                        <div class="mt-3 rounded-lg border bg-muted/20 p-3">
-                            <h3 class="text-sm font-medium">各科已選堂數</h3>
-                            <p class="mt-1 text-xs text-muted-foreground">
-                                學費為固定月費，不論當月堂數多寡。
-                            </p>
-                            <ul class="mt-2 flex flex-col gap-1.5 text-sm">
-                                <li
-                                    v-for="course in sessionCourseSummary"
-                                    :key="course.id"
-                                    class="flex items-center justify-between gap-3 rounded-md bg-background px-3 py-2"
-                                >
-                                    <span
-                                        class="flex min-w-0 items-center gap-2"
-                                    >
-                                        <span
-                                            class="inline-block size-2.5 shrink-0 rounded-sm border border-black/10"
-                                            :style="{
-                                                backgroundColor:
-                                                    normalizeClassroomHex(
-                                                        course.color,
-                                                    ),
-                                            }"
-                                        />
-                                        <span class="truncate">{{
-                                            course.name
-                                        }}</span>
-                                    </span>
-                                    <span
-                                        class="shrink-0 font-semibold tabular-nums"
-                                        >{{ course.count }} 堂</span
-                                    >
-                                </li>
-                            </ul>
-                        </div>
-
                         <div
                             v-if="hasMaterialSubjects"
                             class="mt-4 rounded-xl border border-amber-300/80 bg-amber-50/50 p-4"
@@ -2254,7 +2368,7 @@ defineOptions({
                                     <span
                                         class="mt-0.5 block text-sm text-amber-900/80"
                                     >
-                                        勾選後可為各科分別收 1–6／7–12（可同時勾兩段）；金額預設年費一半，可手動調整。
+                                        勾選後為各科收上／下半年教材（可同時勾兩段）；金額預設年費一半，可改。
                                     </span>
                                 </span>
                             </label>
@@ -2446,12 +2560,8 @@ defineOptions({
                                 </dd>
                             </div>
                             <div class="flex justify-between gap-2">
-                                <dt class="text-muted-foreground">選中堂次</dt>
-                                <dd>{{ sessionCount }} 堂</dd>
-                            </div>
-                            <div class="flex justify-between gap-2">
                                 <dt class="text-muted-foreground">帳期月數</dt>
-                                <dd>{{ monthCount }}</dd>
+                                <dd>{{ monthCount }} 個月</dd>
                             </div>
                             <div
                                 v-if="monthBreakdown.length"
@@ -2617,7 +2727,7 @@ defineOptions({
                             </div>
                         </dl>
                         <p class="mt-3 text-sm text-muted-foreground">
-                            學費：固定月費，該月有上課即收整月，不依堂數增減。教材：先勾「教材費」，各科可分別勾 1–6／7–12（可同時收兩段），金額預設年費 ÷ 2 且可改；掛在帳期第一個月。
+                            學費依勾選月份計算；教材費請在左側勾選。
                         </p>
                         <Button
                             class="mt-4 h-11 w-full text-base"
@@ -2629,7 +2739,7 @@ defineOptions({
                             "
                             @click="submit"
                         >
-                            {{ isEditMode ? '儲存修改（取代原本這一期）' : '確認收款並產生帳期' }}
+                            {{ isEditMode ? '儲存修改' : '確認收款' }}
                         </Button>
                         <InputError class="mt-2" :message="form.errors.sessions" />
                         <p class="mt-2 text-sm text-muted-foreground">
