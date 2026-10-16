@@ -38,6 +38,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::middleware('role:super_admin,admin,teacher')->group(function () {
         Route::get('students', [StudentController::class, 'index'])->name('students.index');
         Route::get('students/create', [StudentController::class, 'create'])->name('students.create');
+        Route::get('students/import/template', [StudentController::class, 'importTemplate'])->name('students.import.template');
+        Route::post('students/import', [StudentController::class, 'import'])->name('students.import.store');
         Route::get('students/next-code', [StudentController::class, 'nextCode'])->name('students.next-code');
         Route::post('students', [StudentController::class, 'store'])->name('students.store');
         Route::get('students/{student}/edit', [StudentController::class, 'edit'])->name('students.edit');

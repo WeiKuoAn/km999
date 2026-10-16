@@ -16,6 +16,7 @@ use App\Support\CourseTuition;
 use App\Support\EnrollmentTuitionSync;
 use App\Support\MakeupAttendanceNote;
 use App\Support\StudentCodeGenerator;
+use App\Support\StudentImport;
 use App\Support\WeekdayDates;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +26,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class StudentController extends Controller
 {
@@ -60,6 +62,9 @@ class StudentController extends Controller
             $query->where('status', $status);
         }
 
+        $currentYear = AcademicYear::query()->where('is_current', true)->first()
+            ?? AcademicYear::query()->orderByDesc('year_code')->first();
+
         return Inertia::render('Students/Index', [
             'students' => $query
                 ->with(['gradeLevel:id,name,code'])
@@ -81,6 +86,21 @@ class StudentController extends Controller
             'filters' => [
                 'name' => $name,
                 'status' => $status,
+            ],
+            'importMeta' => [
+                'currentAcademicYear' => $currentYear !== null
+                    ? [
+                        'year_code' => $currentYear->year_code,
+                        'name' => $currentYear->displayName(),
+                    ]
+                    : null,
+                'gradeNames' => GradeLevel::query()
+                    ->where('is_active', true)
+                    ->orderBy('sort_order')
+                    ->orderBy('code')
+                    ->pluck('name')
+                    ->values()
+                    ->all(),
             ],
         ]);
     }
@@ -137,6 +157,40 @@ class StudentController extends Controller
         });
 
         return to_route('students.index');
+    }
+
+    public function importTemplate(): StreamedResponse
+    {
+        return StudentImport::templateResponse();
+    }
+
+    public function import(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'file' => [
+                'required',
+                'file',
+                'max:5120',
+                'extensions:xlsx,xls,csv,txt',
+            ],
+        ], [
+            'file.required' => '請選擇要上傳的 Excel 檔。',
+            'file.extensions' => '請上傳 .xlsx、.xls 或 .csv 檔。',
+            'file.max' => '檔案請勿超過 5MB。',
+        ]);
+
+        $result = StudentImport::import($request->file('file'));
+
+        $message = "匯入完成：新增 {$result['created']} 人";
+        if ($result['skipped'] > 0) {
+            $message .= "，略過 {$result['skipped']} 列";
+        }
+        $message .= '。';
+
+        return to_route('students.index')
+            ->with('success', $message)
+            ->with('import_errors', array_slice($result['errors'], 0, 50))
+            ->with('open_import', $result['errors'] !== []);
     }
 
     public function edit(Student $student): Response
