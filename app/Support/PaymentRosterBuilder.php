@@ -300,6 +300,8 @@ final class PaymentRosterBuilder
      * @param  array<string, mixed>|null  $quote
      * @return array{
      *   student_name:string,
+     *   subjects_label:string,
+     *   pay_cycle_label:string,
      *   plan_label:string,
      *   list_price:int,
      *   start_year:int,
@@ -331,11 +333,8 @@ final class PaymentRosterBuilder
         int $monthCount,
     ): array {
         $monthCount = max(1, $monthCount);
-        $cycleShort = match ($payCycle) {
-            'monthly' => '月繳',
-            'annual' => '年繳',
-            default => '季繳',
-        };
+        $cycleLabel = BillingRenewal::payCycleLabel($payCycle);
+        $subjectsLabel = $subjects === [] ? '課程' : implode('、', $subjects);
         $subjectShort = implode('', array_map(
             fn (string $name): string => mb_substr($name, 0, 1),
             $subjects
@@ -381,7 +380,9 @@ final class PaymentRosterBuilder
 
         return [
             'student_name' => $studentName,
-            'plan_label' => $subjectShort.$cycleShort,
+            'subjects_label' => $subjectsLabel,
+            'pay_cycle_label' => $cycleLabel,
+            'plan_label' => $subjectShort.$cycleLabel,
             'list_price' => $listPrice,
             'start_year' => $startYear,
             'start_month' => $startMonth,

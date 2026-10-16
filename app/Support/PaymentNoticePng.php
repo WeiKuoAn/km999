@@ -18,7 +18,8 @@ final class PaymentNoticePng
     /**
      * @param  array{
      *   student_name:string,
-     *   plan_label:string,
+     *   subjects_label:string,
+     *   pay_cycle_label:string,
      *   list_price:int,
      *   start_year:int,
      *   start_month:int,
@@ -47,37 +48,40 @@ final class PaymentNoticePng
         imagefilledrectangle($img, 0, 0, $width, $height, $white);
 
         $font = self::fontPath();
-        $padX = (int) round($width * 0.045);
-        $lineH = (int) round($height / 7.6);
-        $sizeMain = 15.5; // pt-ish for imagettftext
-        $sizeSmall = 12.5;
-        $y = (int) round($height * 0.14);
+        $padX = (int) round($width * 0.04);
+        $lineH = (int) round($height / 8.2);
+        $sizeMain = 14.5;
+        $sizeSmall = 11.5;
+        $y = (int) round($height * 0.12);
 
         $name = (string) $notice['student_name'];
-        $plan = (string) $notice['plan_label'];
-        $listPrice = (int) $notice['list_price'];
-        $rocStartY = self::toRocYear((int) $notice['start_year']);
-        $rocEndY = self::toRocYear((int) $notice['end_year']);
-        $startM = (int) $notice['start_month'];
-        $endM = (int) $notice['end_month'];
-        $tuitionUnit = (int) $notice['tuition_unit'];
-        $monthCount = (int) $notice['month_count'];
-        $tuitionTotal = (int) $notice['tuition_total'];
-        $material = (string) $notice['material_label'];
-        $grand = (int) $notice['grand_total'];
-        $dlM = (int) $notice['deadline_month'];
-        $dlD = (int) $notice['deadline_day'];
+        $subjects = (string) ($notice['subjects_label'] ?? $notice['plan_label'] ?? '課程');
+        $cycle = (string) ($notice['pay_cycle_label'] ?? '季繳');
+        $listPrice = self::num((int) $notice['list_price']);
+        $rocStartY = self::num(self::toRocYear((int) $notice['start_year']));
+        $rocEndY = self::num(self::toRocYear((int) $notice['end_year']));
+        $startM = self::num((int) $notice['start_month']);
+        $endM = self::num((int) $notice['end_month']);
+        $endD = self::num(self::lastDay((int) $notice['end_year'], (int) $notice['end_month']));
+        $tuitionUnit = self::num((int) $notice['tuition_unit']);
+        $monthCount = self::num((int) $notice['month_count']);
+        $tuitionTotal = self::num((int) $notice['tuition_total']);
+        $material = self::fw((string) $notice['material_label']);
+        $grand = self::num((int) $notice['grand_total']);
+        $dlM = self::num((int) $notice['deadline_month']);
+        $dlD = self::num((int) $notice['deadline_day']);
 
-        // 1) 貴子弟 ___ 同學 數季繳【原價 …】
+        // 1) 貴子弟 ___ 同學
         $prefix = '貴子弟 ';
-        $mid = ' 同學 '.$plan.'【原價 '.$listPrice.' 元/月/科】';
+        $afterName = ' 同學';
         self::text($img, $sizeMain, $padX, $y, $black, $font, $prefix);
         $nameX = $padX + self::textWidth($sizeMain, $font, $prefix);
         self::text($img, $sizeMain, $nameX, $y, $black, $font, $name);
         $nameW = self::textWidth($sizeMain, $font, $name);
         self::underline($img, $nameX, $y + 4, $nameW, $black);
-        self::text($img, $sizeMain, $nameX + $nameW, $y, $black, $font, $mid);
+        self::text($img, $sizeMain, $nameX + $nameW, $y, $black, $font, $afterName);
 
+        // 2) 科目：數學、英文（季繳）【原價 …】
         $y += $lineH;
         self::text(
             $img,
@@ -86,9 +90,10 @@ final class PaymentNoticePng
             $y,
             $black,
             $font,
-            sprintf('修業期間：%d 年 %d 月 1 日 至 %d 年 %d 月 %d 日', $rocStartY, $startM, $rocEndY, $endM, self::lastDay($notice['end_year'], $endM))
+            self::fw('科目：'.$subjects.'（'.$cycle.'）【原價 '.$listPrice.' 元／月／科】')
         );
 
+        // 3) 修業期間
         $y += $lineH;
         self::text(
             $img,
@@ -97,29 +102,43 @@ final class PaymentNoticePng
             $y,
             $black,
             $font,
-            sprintf('學費：%d 元 * %d 個月 = %d 元', $tuitionUnit, $monthCount, $tuitionTotal)
+            self::fw("修業期間：{$rocStartY} 年 {$startM} 月 １ 日 至 {$rocEndY} 年 {$endM} 月 {$endD} 日")
         );
 
+        // 4) 學費
         $y += $lineH;
-        self::text($img, $sizeMain, $padX, $y, $black, $font, '教 材：'.$material);
+        self::text(
+            $img,
+            $sizeMain,
+            $padX,
+            $y,
+            $black,
+            $font,
+            self::fw("學費：{$tuitionUnit} 元 ＊ {$monthCount} 個月 ＝ {$tuitionTotal} 元")
+        );
 
+        // 5) 教材
         $y += $lineH;
-        $totalPrefix = '合計：新台幣 ';
-        $totalSuffix = ' 元整';
+        self::text($img, $sizeMain, $padX, $y, $black, $font, self::fw('教 材：').$material);
+
+        // 6) 合計
+        $y += $lineH;
+        $totalPrefix = self::fw('合計：新台幣 ');
+        $totalSuffix = self::fw(' 元整');
         self::text($img, $sizeMain, $padX, $y, $black, $font, $totalPrefix);
         $totalX = $padX + self::textWidth($sizeMain, $font, $totalPrefix);
-        $totalStr = (string) $grand;
-        $slotW = (int) round($width * 0.38);
-        $totalW = self::textWidth($sizeMain, $font, $totalStr);
+        $slotW = (int) round($width * 0.36);
+        $totalW = self::textWidth($sizeMain, $font, $grand);
         $totalTextX = $totalX + (int) max(0, ($slotW - $totalW) / 2);
-        self::text($img, $sizeMain, $totalTextX, $y, $black, $font, $totalStr);
+        self::text($img, $sizeMain, $totalTextX, $y, $black, $font, $grand);
         self::underline($img, $totalX, $y + 4, $slotW, $black);
         self::text($img, $sizeMain, $totalX + $slotW, $y, $black, $font, $totalSuffix);
 
+        // 7) 期限
         $y += $lineH;
-        $dlPrefix = '※請於 ';
-        $dlDate = sprintf('%d/%d', $dlM, $dlD);
-        $dlSuffix = ' 日前繳清，以利作業';
+        $dlPrefix = self::fw('※請於 ');
+        $dlDate = self::fw("{$dlM}／{$dlD}");
+        $dlSuffix = self::fw(' 日前繳清，以利作業');
         self::text($img, $sizeMain, $padX, $y, $black, $font, $dlPrefix);
         $dlX = $padX + self::textWidth($sizeMain, $font, $dlPrefix);
         self::text($img, $sizeMain, $dlX, $y, $black, $font, $dlDate);
@@ -127,7 +146,8 @@ final class PaymentNoticePng
         self::underline($img, $dlX, $y + 4, $dlW, $black);
         self::text($img, $sizeMain, $dlX + $dlW, $y, $black, $font, $dlSuffix);
 
-        $y += (int) round($lineH * 0.95);
+        // 8) 備註
+        $y += (int) round($lineH * 0.92);
         self::text(
             $img,
             $sizeSmall,
@@ -195,9 +215,22 @@ final class PaymentNoticePng
             resource_path('fonts/DroidSansFallbackFull.ttf'),
             storage_path('fonts/DroidSansFallbackFull.ttf'),
             '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
-            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
             '/usr/share/fonts/truetype/noto/NotoSansCJKtc-Regular.otf',
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
         ];
+        foreach ($candidates as $path) {
+            if (! is_readable($path)) {
+                continue;
+            }
+            // GD 對部分 TTC 半形數字會變方塊，優先 TTF／OTF
+            if (str_ends_with(strtolower($path), '.ttc')) {
+                continue;
+            }
+
+            return $path;
+        }
+
+        // 最後才嘗試 TTC
         foreach ($candidates as $path) {
             if (is_readable($path)) {
                 return $path;
@@ -205,6 +238,30 @@ final class PaymentNoticePng
         }
 
         throw new \RuntimeException('找不到可顯示中文的字型，請將 DroidSansFallbackFull.ttf 放到 resources/fonts/。');
+    }
+
+    /** 數字轉全形，避免 CJK 字型半形數字變成 □ */
+    private static function num(int|string $value): string
+    {
+        return self::fw((string) $value);
+    }
+
+    private static function fw(string $text): string
+    {
+        $converted = mb_convert_kana($text, 'NAs', 'UTF-8');
+
+        return strtr($converted, [
+            '/' => '／',
+            '*' => '＊',
+            '=' => '＝',
+            '-' => '－',
+            ',' => '，',
+            '[' => '［',
+            ']' => '］',
+            '(' => '（',
+            ')' => '）',
+            '|' => '｜',
+        ]);
     }
 
     private static function toRocYear(int $gregorianYear): int
