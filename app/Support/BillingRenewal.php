@@ -278,9 +278,6 @@ final class BillingRenewal
             ->subDay()
             ->startOfDay();
 
-        $holidaySet = ScheduleCalendar::holidaySet($start->toDateString(), $end->toDateString());
-        $gradeLevelId = $student->grade_level_id !== null ? (int) $student->grade_level_id : null;
-
         $subjects = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id');
         $out = [];
         $seen = [];
@@ -310,16 +307,8 @@ final class BillingRenewal
                 continue;
             }
 
-            $closed = array_fill_keys(
-                ScheduleCalendar::closedDates($gradeLevelId, $courseId, $rangeStart->toDateString(), $rangeEnd->toDateString()),
-                true
-            );
-
             if ($weekdays !== []) {
                 foreach (WeekdayDates::inRange($rangeStart, $rangeEnd, $weekdays) as $ymd) {
-                    if (isset($holidaySet[$ymd]) || isset($closed[$ymd])) {
-                        continue;
-                    }
                     $key = $ymd.'#'.$courseId;
                     if (isset($seen[$key])) {
                         continue;
@@ -327,22 +316,6 @@ final class BillingRenewal
                     $seen[$key] = true;
                     $out[] = ['date' => $ymd, 'course_id' => $courseId];
                 }
-            }
-
-            foreach (ScheduleCalendar::makeupSessions($gradeLevelId, $courseId, $rangeStart->toDateString(), $rangeEnd->toDateString()) as $makeup) {
-                $ymd = $makeup['date'];
-                if ($ymd < $rangeStart->toDateString() || $ymd > $rangeEnd->toDateString()) {
-                    continue;
-                }
-                if (isset($holidaySet[$ymd]) || isset($closed[$ymd])) {
-                    continue;
-                }
-                $key = $ymd.'#'.$courseId;
-                if (isset($seen[$key])) {
-                    continue;
-                }
-                $seen[$key] = true;
-                $out[] = ['date' => $ymd, 'course_id' => $courseId];
             }
         }
 
@@ -352,6 +325,111 @@ final class BillingRenewal
         );
 
         return $out;
+    }
+
+    /**
+     * 各科最後帳期月（year*12+month）。
+     *
+     * @param  list<int>  $courseIds
+     * @return array<int, int>
+     */
+    public static function courseLastBillingKeys(Student $student, array $courseIds, bool $paidOnly = false): array
+    {
+        if ($courseIds === []) {
+            return [];
+        }
+
+        return Reconciliation::query()
+            ->where('student_id', $student->id)
+            ->whereIn('course_id', $courseIds)
+            ->when(
+                $paidOnly,
+                fn ($q) => $q->where('status', 'paid'),
+                fn ($q) => $q->where('status', '!=', 'cancelled'),
+            )
+            ->groupBy('course_id')
+            ->selectRaw('course_id, MAX(billing_year * 12 + billing_month) as last_key')
+            ->pluck('last_key', 'course_id')
+            ->mapWithKeys(fn ($key, $cid) => [(int) $cid => (int) $key])
+            ->all();
+    }
+
+    public static function monthKeyLabel(int $key): string
+    {
+        return intdiv($key - 1, 12).'-'.((($key - 1) % 12) + 1);
+    }
+
+    /**
+     * 各科下一期：從該科最後帳期月的下月起算一個繳別週期。
+     * 沒有紀錄、或落後超過一期的科目，改用 $fallbackStart（學生整體下一期）。
+     *
+     * @param  list<int>  $courseIds
+     * @return array{
+     *   start_date:string,
+     *   split:bool,
+     *   course_months:array<int, list<string>>,
+     *   months:list<array{y:int,m:int}>,
+     *   sessions:list<array{date:string, course_id:int}>
+     * }
+     */
+    public static function perCourseNextPeriod(
+        Student $student,
+        array $courseIds,
+        string $fallbackStart,
+        string $payCycle,
+        bool $paidOnly = false,
+    ): array {
+        $span = self::monthSpan($payCycle);
+        $fallback = Carbon::parse($fallbackStart)->startOfDay();
+        $fallbackKey = (int) $fallback->year * 12 + (int) $fallback->month;
+        $lastKeys = self::courseLastBillingKeys($student, $courseIds, $paidOnly);
+
+        $courseMonths = [];
+        $sessions = [];
+        $startKeys = [];
+        $startDates = [];
+        foreach ($courseIds as $courseId) {
+            $courseId = (int) $courseId;
+            $last = $lastKeys[$courseId] ?? null;
+            $startKey = $last !== null && $last + 1 < $fallbackKey && $last + 1 >= $fallbackKey - $span
+                ? $last + 1
+                : $fallbackKey;
+            $startDate = $startKey === $fallbackKey
+                ? $fallback->toDateString()
+                : Carbon::create(intdiv($startKey - 1, 12), (($startKey - 1) % 12) + 1, 1)->toDateString();
+
+            $startKeys[$courseId] = $startKey;
+            $startDates[] = $startDate;
+            for ($i = 0; $i < $span; $i++) {
+                $courseMonths[$courseId][] = self::monthKeyLabel($startKey + $i);
+            }
+            foreach (self::defaultSessions($student, [$courseId], $startDate, $payCycle) as $session) {
+                $sessions[] = $session;
+            }
+        }
+
+        usort(
+            $sessions,
+            fn (array $a, array $b): int => $a['date'] <=> $b['date'] ?: $a['course_id'] <=> $b['course_id']
+        );
+
+        $monthKeys = [];
+        foreach ($courseMonths as $keys) {
+            foreach ($keys as $label) {
+                [$y, $m] = array_map('intval', explode('-', $label));
+                $monthKeys[$y * 12 + $m] = ['y' => $y, 'm' => $m];
+            }
+        }
+        ksort($monthKeys);
+        sort($startDates);
+
+        return [
+            'start_date' => $startDates[0] ?? $fallback->toDateString(),
+            'split' => count(array_unique($startKeys)) > 1,
+            'course_months' => $courseMonths,
+            'months' => array_values($monthKeys),
+            'sessions' => $sessions,
+        ];
     }
 
     /**
@@ -458,9 +536,11 @@ final class BillingRenewal
                 /** @var array<string, array{amount:int, days:int}> $materialMonths */
                 $materialMonths = $line['material_months'] ?? [];
                 $materialNote = $line['material_note'] ?? null;
+                /** @var list<array{y:int,m:int}> $lineMonths */
+                $lineMonths = $line['billing_months'] ?? $months;
 
                 $monthWeights = [];
-                foreach ($months as $month) {
+                foreach ($lineMonths as $month) {
                     $key = ((int) $month['y']).'-'.((int) $month['m']);
                     $monthWeights[$key] = (int) ($tuitionMonths[$key]['amount'] ?? 0)
                         + (int) ($materialMonths[$key]['amount'] ?? 0);
@@ -481,7 +561,7 @@ final class BillingRenewal
                     }
                 }
 
-                foreach ($months as $index => $month) {
+                foreach ($lineMonths as $index => $month) {
                     $y = (int) $month['y'];
                     $m = (int) $month['m'];
                     $key = $y.'-'.$m;
@@ -493,6 +573,9 @@ final class BillingRenewal
                     $noteParts = [
                         sprintf('報名計價｜%s｜單價 %s', $line['course_name'], number_format($line['unit_price'])),
                     ];
+                    if ($index === 0 && ! empty($line['bundle_name'])) {
+                        $noteParts[] = '多科優惠 '.$line['bundle_name'];
+                    }
                     if ($monthMaterial > 0) {
                         $days = (int) ($materialMonths[$key]['days'] ?? 0);
                         if (($line['material_unit'] ?? '') === 'class_day' && $days > 0) {

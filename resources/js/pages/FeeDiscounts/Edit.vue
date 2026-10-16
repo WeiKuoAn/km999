@@ -40,7 +40,7 @@ const valueHint = computed(() =>
 defineOptions({
     layout: {
         breadcrumbs: [
-            { title: '優惠管理', href: '/fee-discounts' },
+            { title: '優惠設定', href: '/fee-discounts' },
             { title: '編輯', href: '#' },
         ],
     },

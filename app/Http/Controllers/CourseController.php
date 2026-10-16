@@ -52,7 +52,6 @@ class CourseController extends Controller
                 ->orderBy('name')
                 ->get(['id', 'name', 'sort_order']),
             'gradeLevels' => $this->gradeLevelOptions(),
-            'pricingGroups' => PricingGroup::options(),
         ]);
     }
 
@@ -159,7 +158,6 @@ class CourseController extends Controller
                 ->orderBy('name')
                 ->get(['id', 'name', 'sort_order']),
             'gradeLevels' => $this->gradeLevelOptions(),
-            'pricingGroups' => PricingGroup::options(),
         ]);
     }
 

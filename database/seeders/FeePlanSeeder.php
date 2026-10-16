@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\AcademicYear;
 use App\Models\Course;
+use App\Models\CourseBundle;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
 use App\Support\PricingGroup;
@@ -25,8 +26,8 @@ class FeePlanSeeder extends Seeder
                 'pricing_group' => PricingGroup::CORE,
                 'unit' => 'month',
                 'list_price' => 3600,
-                'quarter_single_price' => 3200,
-                'quarter_double_price' => 3000,
+                'quarter_price' => 3200,
+                'bundle_price' => 3000,
                 'material_fee' => 1200,
                 'material_unit' => 'term',
                 'sort_order' => 10,
@@ -48,8 +49,8 @@ class FeePlanSeeder extends Seeder
                 'pricing_group' => PricingGroup::CORE,
                 'unit' => 'month',
                 'list_price' => 3600,
-                'quarter_single_price' => 3200,
-                'quarter_double_price' => 3000,
+                'quarter_price' => 3200,
+                'bundle_price' => 3000,
                 'material_fee' => 1200,
                 'material_unit' => 'term',
                 'sort_order' => 30,
@@ -83,8 +84,8 @@ class FeePlanSeeder extends Seeder
                 'pricing_group' => PricingGroup::CORE,
                 'unit' => 'month',
                 'list_price' => 3600,
-                'quarter_single_price' => 3300,
-                'quarter_double_price' => 3100,
+                'quarter_price' => 3300,
+                'bundle_price' => 3100,
                 'material_fee' => 1500,
                 'material_unit' => 'term',
                 'sort_order' => 60,
@@ -132,8 +133,8 @@ class FeePlanSeeder extends Seeder
                     'session_block_size' => $row['session_block_size'] ?? null,
                     'list_price' => $row['list_price'],
                     'quarter_price' => $row['quarter_price'] ?? null,
-                    'quarter_single_price' => $row['quarter_single_price'] ?? null,
-                    'quarter_double_price' => $row['quarter_double_price'] ?? null,
+                    'quarter_single_price' => null,
+                    'quarter_double_price' => null,
                     'material_fee' => $row['material_fee'],
                     'material_unit' => $row['material_unit'],
                     'sort_order' => $row['sort_order'],
@@ -141,12 +142,28 @@ class FeePlanSeeder extends Seeder
                 ]
             );
 
-            $plan->courses()->sync(
-                Course::query()
-                    ->where('pricing_group', $row['pricing_group'])
-                    ->pluck('id')
-                    ->all()
-            );
+            $courseIds = Course::query()
+                ->where('pricing_group', $row['pricing_group'])
+                ->pluck('id')
+                ->all();
+
+            $plan->courses()->sync($courseIds);
+
+            if (isset($row['bundle_price']) && count($courseIds) >= 2) {
+                CourseBundle::query()->updateOrCreate(
+                    [
+                        'name' => $row['group_name'].' 雙科',
+                        'grade_level_id' => $grade->id,
+                        'academic_year_id' => $yearId,
+                    ],
+                    [
+                        'min_courses' => 2,
+                        'price' => $row['bundle_price'],
+                        'is_active' => true,
+                        'sort_order' => $row['sort_order'],
+                    ]
+                )->courses()->sync($courseIds);
+            }
         }
     }
 }

@@ -90,7 +90,7 @@ const toggleGroup = (courses: CourseOption[]) => {
                 >
             </div>
             <p class="mt-1 text-xs text-muted-foreground">
-                報名試算只會對勾選的課目套用此收費標準；同學年、同年級不可重複綁定。
+                報名試算只會對勾選的課目套用此收費設定；同學年、同年級不可重複綁定。
             </p>
         </div>
 
@@ -150,10 +150,16 @@ const toggleGroup = (courses: CourseOption[]) => {
                             <span class="block font-medium">{{
                                 course.name
                             }}</span>
-                            <span class="block text-xs text-muted-foreground">
-                                {{ course.pricing_group_label }}
+                            <span
+                                v-if="
+                                    course.levels.length ||
+                                    course.status === 'paused'
+                                "
+                                class="block text-xs text-muted-foreground"
+                            >
+                                {{ course.levels.join('、') }}
                                 <template v-if="course.status === 'paused'">
-                                    · 已停用</template
+                                    {{ course.levels.length ? '· ' : '' }}已停用</template
                                 >
                             </span>
                         </span>

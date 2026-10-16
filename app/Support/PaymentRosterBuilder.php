@@ -5,7 +5,6 @@ namespace App\Support;
 use App\Models\Course;
 use App\Models\Reconciliation;
 use App\Models\Student;
-use Carbon\Carbon;
 
 final class PaymentRosterBuilder
 {
@@ -79,8 +78,15 @@ final class PaymentRosterBuilder
             }
 
             $payCycle = $snapshot['pay_cycle'];
-            $startDate = BillingRenewal::nextStartDate($snapshot['end_year'], $snapshot['end_month']);
-            $months = self::monthsFromStart($startDate, $payCycle);
+            $plan = BillingRenewal::perCourseNextPeriod(
+                $student,
+                $courseIds,
+                BillingRenewal::nextStartDate($snapshot['end_year'], $snapshot['end_month']),
+                $payCycle,
+                true,
+            );
+            $startDate = $plan['start_date'];
+            $months = $plan['months'];
             if ($months === []) {
                 continue;
             }
@@ -94,23 +100,41 @@ final class PaymentRosterBuilder
                 continue;
             }
 
-            // 下一期已全部繳清 → 不列入
-            if (BillingRenewal::hasPaidConflicts($student, $courseIds, $months)) {
+            /** @var array<int, list<array{y:int,m:int}>> $monthsByCourse */
+            $monthsByCourse = [];
+            foreach ($plan['course_months'] as $cid => $labels) {
+                $monthsByCourse[(int) $cid] = array_map(function (string $label): array {
+                    [$y, $m] = array_map('intval', explode('-', $label));
+
+                    return ['y' => $y, 'm' => $m];
+                }, $labels);
+            }
+
+            // 下一期已繳 → 不列入
+            $conflict = false;
+            foreach ($monthsByCourse as $cid => $courseMonthList) {
+                if (BillingRenewal::hasPaidConflicts($student, [$cid], $courseMonthList)) {
+                    $conflict = true;
+                    break;
+                }
+            }
+            if ($conflict) {
                 continue;
             }
 
-            $keys = collect($months)
-                ->map(fn (array $m): int => ((int) $m['y']) * 12 + (int) $m['m'])
-                ->all();
-
             $existing = Reconciliation::query()
                 ->where('student_id', $student->id)
-                ->whereIn('course_id', $courseIds)
                 ->where('status', '!=', 'cancelled')
-                ->whereRaw(
-                    '(billing_year * 12 + billing_month) in ('.implode(',', array_fill(0, count($keys), '?')).')',
-                    $keys
-                )
+                ->where(function ($query) use ($monthsByCourse): void {
+                    foreach ($monthsByCourse as $cid => $courseMonthList) {
+                        foreach ($courseMonthList as $month) {
+                            $query->orWhere(fn ($w) => $w
+                                ->where('course_id', $cid)
+                                ->where('billing_year', $month['y'])
+                                ->where('billing_month', $month['m']));
+                        }
+                    }
+                })
                 ->get(['expected_amount', 'paid_amount', 'status', 'course_id']);
 
             $feeSource = 'estimate';
@@ -124,13 +148,23 @@ final class PaymentRosterBuilder
                 $fee = (int) $unpaid->sum('expected_amount');
                 $feeSource = 'unpaid';
             } else {
-                $sessions = BillingRenewal::defaultSessions($student, $courseIds, $startDate, $payCycle);
+                $sessions = $plan['sessions'];
                 if ($sessions === []) {
                     continue;
                 }
                 $subjectsById = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id')->all();
-                $materialCharges = MaterialHalfYear::autoChargesForMonths($student, $courseIds, $months, $subjectsById);
-                $quote = EnrollmentPricing::quote($student, $courseIds, $payCycle, $sessions, 0, $startDate, [], $materialCharges);
+                $materialCharges = MaterialHalfYear::autoChargesForCourseMonths($student, $plan['course_months'], $subjectsById);
+                $quote = EnrollmentPricing::quote(
+                    $student,
+                    $courseIds,
+                    $payCycle,
+                    $sessions,
+                    0,
+                    $startDate,
+                    [],
+                    $materialCharges,
+                    $plan['split'] ? $plan['course_months'] : null,
+                );
                 $fee = (int) ($quote['grand_total'] ?? 0);
                 if ($fee <= 0 || ($quote['lines'] ?? []) === []) {
                     continue;
@@ -146,7 +180,9 @@ final class PaymentRosterBuilder
             }
 
             $subjects = self::subjectLabels($courseIds);
-            $periodLabel = self::periodLabel($startYear, $startMonth, $endYear, $endMonth);
+            $periodLabel = $plan['split']
+                ? self::splitPeriodLabel($monthsByCourse)
+                : self::periodLabel($startYear, $startMonth, $endYear, $endMonth);
 
             $rows[] = [
                 'student_id' => $student->id,
@@ -201,19 +237,29 @@ final class PaymentRosterBuilder
     }
 
     /**
-     * @return list<array{y:int,m:int}>
+     * 各科帳期不同時：「數學、英文 1–3月；理化 2–4月」。
+     *
+     * @param  array<int, list<array{y:int,m:int}>>  $monthsByCourse
      */
-    private static function monthsFromStart(string $startDate, string $payCycle): array
+    private static function splitPeriodLabel(array $monthsByCourse): string
     {
-        $span = BillingRenewal::monthSpan($payCycle);
-        $start = Carbon::parse($startDate)->startOfMonth();
-        $months = [];
-        for ($i = 0; $i < $span; $i++) {
-            $d = $start->copy()->addMonths($i);
-            $months[] = ['y' => (int) $d->year, 'm' => (int) $d->month];
+        $groups = [];
+        foreach ($monthsByCourse as $cid => $courseMonths) {
+            if ($courseMonths === []) {
+                continue;
+            }
+            $first = $courseMonths[0];
+            $last = $courseMonths[array_key_last($courseMonths)];
+            $label = self::periodLabel($first['y'], $first['m'], $last['y'], $last['m']);
+            $groups[$label][] = (int) $cid;
         }
 
-        return $months;
+        $parts = [];
+        foreach ($groups as $label => $ids) {
+            $parts[] = implode('、', self::subjectLabels($ids)).' '.$label;
+        }
+
+        return implode('；', $parts);
     }
 
     private static function periodLabel(int $startYear, int $startMonth, int $endYear, int $endMonth): string

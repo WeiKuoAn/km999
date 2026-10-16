@@ -57,39 +57,25 @@ class FeePlan extends Model
     public function unitLabel(): string
     {
         return match ($this->unit) {
-            'session_block' => ($this->session_block_size ?: 4).'堂',
+            'session_block' => '期',
             default => '月',
         };
     }
 
     public function listPriceLabel(): string
     {
-        $price = number_format($this->list_price);
-
-        return match ($this->unit) {
-            'session_block' => $price.'／'.$this->unitLabel(),
-            default => $price.'／月',
-        };
+        return number_format($this->list_price).'／'.$this->unitLabel();
     }
 
     public function quarterLabel(): string
     {
-        if ($this->quarter_single_price !== null || $this->quarter_double_price !== null) {
-            $single = $this->quarter_single_price !== null
-                ? number_format($this->quarter_single_price)
-                : '—';
-            $double = $this->quarter_double_price !== null
-                ? number_format($this->quarter_double_price)
-                : '—';
+        $quarterPrice = $this->quarter_single_price ?? $this->quarter_price;
 
-            return "單 {$single}／雙 {$double}";
-        }
-
-        if ($this->quarter_price !== null) {
-            $price = number_format($this->quarter_price);
+        if ($quarterPrice !== null) {
+            $price = number_format($quarterPrice);
 
             return match ($this->unit) {
-                'session_block' => $price.'／'.$this->unitLabel(),
+                'session_block' => $price.'／季',
                 default => $price.'／月',
             };
         }
@@ -101,7 +87,6 @@ class FeePlan extends Model
     {
         $price = number_format($this->material_fee);
         $unit = match ($this->material_unit) {
-            'subject' => '科',
             'class_day' => '日',
             default => '年（半年收一次）',
         };

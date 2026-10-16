@@ -80,4 +80,9 @@ class Course extends Model
     {
         return $this->belongsToMany(FeePlan::class);
     }
+
+    public function bundles(): BelongsToMany
+    {
+        return $this->belongsToMany(CourseBundle::class, 'course_bundle_course');
+    }
 }

@@ -38,7 +38,6 @@ type Subject = {
     unit: string;
     list: number;
     q_single: number;
-    q_double: number;
     material: number;
     material_unit: string;
     weekdays: number[];
@@ -71,6 +70,7 @@ type EditContext = {
     to: string;
     period_label: string;
     month_keys: string[];
+    course_months?: Record<string, string[]>;
     receipt_no: string | null;
     fee_discount_id: number | null;
     allowance: number;
@@ -99,27 +99,19 @@ const props = defineProps<{
     student: StudentInfo | null;
     subjects: Subject[];
     warnings: string[];
-    holidays?: Array<{ date: string; name: string }>;
-    schedule_closures?: Array<{
-        date_from: string;
-        date_to: string;
-        name: string;
-        grade_level_id: number | null;
-        course_ids: number[];
-    }>;
-    schedule_makeups?: Array<{
-        date_from: string;
-        date_to: string;
-        name: string;
-        grade_level_id: number | null;
-        course_ids: number[];
-        start_time?: string | null;
-        end_time?: string | null;
-    }>;
     has_prior_payments?: boolean;
     suggested_start_date?: string | null;
     suggested_course_ids?: number[];
     suggested_pay_cycle?: 'monthly' | 'quarterly' | 'annual' | null;
+    suggested_course_months?: Record<string, string[]> | null;
+    enrolled_course_ids?: number[];
+    bundles?: Array<{
+        id: number;
+        name: string;
+        min_courses: number;
+        price: number;
+        course_ids: number[];
+    }>;
     material_status?: Array<{
         course_id: number;
         can_charge: boolean;
@@ -152,10 +144,6 @@ const props = defineProps<{
 const page = usePage();
 const successMessage = computed(
     () => (page.props.flash as { success?: string } | undefined)?.success,
-);
-
-const holidaySet = computed(
-    () => new Set((props.holidays ?? []).map((h) => h.date.slice(0, 10))),
 );
 
 const hasPriorPayments = computed(() => !!props.has_prior_payments);
@@ -235,6 +223,9 @@ const startDate = ref(
 const sessions = ref<SessionEntry[]>([]);
 /** 帳期月份勾選（例：8 月不足 + 9–11 季繳連續） */
 const selectedMonthKeys = ref<string[]>([]);
+/** 各科分開勾帳期月份；開啟時 selectedMonthKeys 為各科月份聯集 */
+const splitByCourse = ref(false);
+const courseMonthKeys = ref<Record<number, string[]>>({});
 /** 教材費大總覽（勾了才展開各科半年） */
 const chargeMaterialMaster = ref(false);
 /** 耗材 class_day 科目 id */
@@ -303,11 +294,19 @@ const materialPeriods = computed<HalfPeriod[]>(() => {
     );
 });
 
-/** 帳期含 1 月或 7 月，或為起算月所屬半年 → 預設要收 */
-const isHalfSuggested = (period: HalfPeriod) => {
+/** 該科帳期月份（分科模式用各科自己的月份） */
+const courseYearMonths = (courseId: number) =>
+    splitByCourse.value && courseMonthKeys.value[courseId]
+        ? courseMonthKeys.value[courseId]
+              .map((key) => key.split('-').map(Number))
+              .map(([y, m]) => ({ y, m }))
+        : selectedYearMonths.value;
+
+/** 該科帳期含 1 月或 7 月，或為起算月所屬半年 → 預設要收 */
+const isHalfSuggested = (period: HalfPeriod, courseId: number) => {
     const startMonth = period.half === 'H1' ? 1 : 7;
     if (
-        selectedYearMonths.value.some(
+        courseYearMonths(courseId).some(
             ({ y, m }) => y === period.year && m === startMonth,
         )
     ) {
@@ -356,7 +355,7 @@ const syncDefaultMaterialChecks = () => {
                 ? false
                 : props.edit || materialManualKeys.value.has(key)
                   ? !!prev?.checked
-                  : isHalfSuggested(period);
+                  : isHalfSuggested(period, id);
             if (checked && !prev?.checked) {
                 autoAdded = true;
             }
@@ -571,10 +570,76 @@ const calendarMonthSpan = computed(() => {
 
 /** 勾選早於起算日的月份時，起算日會前移；前移後保留使用者勾選的月份 */
 let pendingMonthKeys: string[] | null = null;
+let pendingCourseMonths: Record<number, string[]> | null = null;
+
+const monthKeyIndex = (key: string) => {
+    const ym = parseMonthKey(key);
+    return ym ? ym.y * 12 + ym.m : 0;
+};
+
+const sortMonthKeys = (keys: string[]) =>
+    [...new Set(keys)]
+        .filter((key) => monthKeyIndex(key) > 0)
+        .sort((a, b) => monthKeyIndex(a) - monthKeyIndex(b));
+
+/** 寫入各科月份，並把聯集同步到 selectedMonthKeys；新加入的科目沿用目前全部月份 */
+const applyCourseMonths = (next: Record<number, string[]>) => {
+    const cleaned: Record<number, string[]> = {};
+    for (const id of selected.value) {
+        const keys = sortMonthKeys(next[id] ?? selectedMonthKeys.value);
+        if (keys.length > 0) {
+            cleaned[id] = keys;
+        }
+    }
+    courseMonthKeys.value = cleaned;
+    selectedMonthKeys.value = sortMonthKeys(Object.values(cleaned).flat());
+};
+
+/** 編輯或建議帶入的各科月份不一致時，自動開啟分科模式 */
+const splitSource = (): Record<number, string[]> | null => {
+    const source = props.edit?.course_months ?? props.suggested_course_months;
+    if (!source) {
+        return null;
+    }
+    const entries = Object.entries(source)
+        .map(([id, keys]) => [Number(id), sortMonthKeys(keys)] as const)
+        .filter(([id, keys]) => selected.value.includes(id) && keys.length > 0);
+    if (entries.length < 2) {
+        return null;
+    }
+    const first = entries[0][1].join(',');
+    if (entries.every(([, keys]) => keys.join(',') === first)) {
+        return null;
+    }
+    return Object.fromEntries(entries);
+};
 
 const syncSuggestedMonths = () => {
     if (!startDate.value) {
         selectedMonthKeys.value = [];
+        return;
+    }
+    if (splitByCourse.value && !isGrade9PackageMode.value) {
+        if (pendingCourseMonths !== null) {
+            const next = pendingCourseMonths;
+            pendingCourseMonths = null;
+            applyCourseMonths(next);
+            return;
+        }
+        // 起算日或繳別變動：各科從自己的第一個月（不早於起算月）重排一個週期
+        const startIndex = monthKeyIndex(startDate.value.slice(0, 7));
+        const next: Record<number, string[]> = {};
+        for (const id of selected.value) {
+            const first = sortMonthKeys(courseMonthKeys.value[id] ?? [])[0];
+            const from =
+                first && monthKeyIndex(first) > startIndex
+                    ? `${first.split('-')[0]}-${first.split('-')[1].padStart(2, '0')}-01`
+                    : startDate.value;
+            next[id] = defaultBillingMonths(from, sessionMonthSpan.value).map(
+                (m) => monthKey(m.y, m.m),
+            );
+        }
+        applyCourseMonths(next);
         return;
     }
     if (pendingMonthKeys !== null) {
@@ -614,6 +679,57 @@ const toggleBillingMonth = (key: string) => {
         selectedMonthKeys.value = next;
     }
     refillSessionDates();
+};
+
+const initSplitFromProps = () => {
+    const source = splitSource();
+    splitByCourse.value = source !== null;
+    courseMonthKeys.value = {};
+    pendingCourseMonths = source;
+    if (source !== null) {
+        pendingMonthKeys = null;
+    }
+};
+
+const toggleCourseMonth = (courseId: number, key: string) => {
+    const current = courseMonthKeys.value[courseId] ?? [];
+    let next: string[];
+    if (current.includes(key)) {
+        if (current.length <= 1) {
+            return;
+        }
+        next = current.filter((k) => k !== key);
+    } else {
+        next = [...current, key];
+        const ym = parseMonthKey(key);
+        const monthStart = ym ? `${ym.y}-${String(ym.m).padStart(2, '0')}-01` : '';
+        if (monthStart !== '' && startDate.value && monthStart < startDate.value.slice(0, 7) + '-01') {
+            pendingCourseMonths = { ...courseMonthKeys.value, [courseId]: next };
+            startDate.value = monthStart;
+            return;
+        }
+    }
+    applyCourseMonths({ ...courseMonthKeys.value, [courseId]: next });
+    refillSessionDates();
+};
+
+const setSplitByCourse = (on: boolean) => {
+    if (on) {
+        splitByCourse.value = true;
+        applyCourseMonths(
+            Object.fromEntries(
+                selected.value.map((id) => [id, [...selectedMonthKeys.value]]),
+            ),
+        );
+    } else {
+        splitByCourse.value = false;
+        courseMonthKeys.value = {};
+    }
+    refillSessionDates();
+};
+
+const onSplitToggle = (event: Event) => {
+    setSplitByCourse(!!(event.target as HTMLInputElement | null)?.checked);
 };
 
 const selectedWeekdays = computed(() => {
@@ -664,6 +780,35 @@ const refillSessionDates = () => {
         sessions.value = [];
         return;
     }
+    if (splitByCourse.value && !isGrade9PackageMode.value) {
+        const ids = Object.keys(courseMonthKeys.value).map(Number).sort();
+        const sel = [...selected.value].sort();
+        if (ids.join(',') !== sel.join(',')) {
+            applyCourseMonths(courseMonthKeys.value);
+        }
+        const merged: SessionEntry[] = [];
+        for (const course of calendarCourses.value) {
+            const months = (courseMonthKeys.value[course.id] ?? [])
+                .map((key) => parseMonthKey(key))
+                .filter((m): m is YearMonth => m !== null);
+            if (months.length === 0) {
+                continue;
+            }
+            merged.push(
+                ...buildDefaultSessionEntries(
+                    startDate.value,
+                    [course],
+                    sessionMonthSpan.value,
+                    undefined,
+                    { months },
+                ),
+            );
+        }
+        sessions.value = merged.sort(
+            (a, b) => a.date.localeCompare(b.date) || a.course_id - b.course_id,
+        );
+        return;
+    }
     if (selectedMonthKeys.value.length === 0) {
         syncSuggestedMonths();
     }
@@ -671,13 +816,8 @@ const refillSessionDates = () => {
         startDate.value,
         calendarCourses.value,
         sessionMonthSpan.value,
-        holidaySet.value,
-        {
-            closures: props.schedule_closures ?? [],
-            makeups: props.schedule_makeups ?? [],
-            gradeLevelId: props.student?.grade_level_id ?? null,
-            months: selectedMonths.value,
-        },
+        undefined,
+        { months: selectedMonths.value },
     );
 };
 
@@ -693,6 +833,7 @@ watch(
         if (props.has_prior_payments && props.suggested_start_date) {
             startDate.value = props.suggested_start_date;
         }
+        initSplitFromProps();
         syncSuggestedMonths();
         refillSessionDates();
     },
@@ -703,6 +844,7 @@ watch(
     () => {
         selected.value = defaultCourseIds();
         payCycle.value = defaultPayCycle();
+        initSplitFromProps();
         syncSuggestedMonths();
         refillSessionDates();
     },
@@ -725,6 +867,8 @@ watch([startDate, payCycle], () => {
 
 watch(isGrade9PackageMode, (active) => {
     if (active) {
+        splitByCourse.value = false;
+        courseMonthKeys.value = {};
         chargeMaterialMaster.value = false;
         chargeConsumableIds.value = [];
         materialHalfState.value = {};
@@ -733,7 +877,7 @@ watch(isGrade9PackageMode, (active) => {
 });
 
 watch(
-    [selected, holidaySet, () => props.schedule_closures, () => props.schedule_makeups],
+    selected,
     () => {
         refillSessionDates();
         if (isGrade9PackageMode.value) {
@@ -760,6 +904,7 @@ if (props.student && props.edit) {
 }
 
 if (props.student) {
+    initSplitFromProps();
     syncSuggestedMonths();
     refillSessionDates();
     syncDefaultMaterialChecks();
@@ -827,32 +972,85 @@ const form = useForm({
     edit_from: props.edit?.from ?? null,
     edit_to: props.edit?.to ?? null,
     return_grade_level_id: props.return_grade_level_id ?? null,
+    course_months: {} as Record<number, string[]>,
 });
 
-const coreCount = computed(
-    () =>
-        selected.value.filter(
+/** 組合優惠看報名中的科目（本次收款＋報名科目），各科分開繳也維持優惠；每科只取最便宜的組合 */
+const bundleByCourse = computed(() => {
+    const enrolled = new Set(
+        [...selected.value, ...(props.enrolled_course_ids ?? [])].filter(
             (id) =>
-                props.subjects.find((s) => s.id === id)?.pricing_group ===
-                'core',
-        ).length,
-);
+                props.subjects.find((s) => s.id === id)?.fee_plan_id != null,
+        ),
+    );
+    const out = new Map<number, { price: number; name: string }>();
+    for (const bundle of props.bundles ?? []) {
+        const matched = bundle.course_ids.filter((id) => enrolled.has(id));
+        if (matched.length < Math.max(1, bundle.min_courses)) continue;
+        for (const id of bundle.course_ids) {
+            if (!selected.value.includes(id)) continue;
+            const current = out.get(id);
+            if (!current || bundle.price < current.price) {
+                out.set(id, { price: bundle.price, name: bundle.name });
+            }
+        }
+    }
+    return out;
+});
+
+const appliedBundle = (s: Subject) => {
+    if (payCycle.value === 'monthly') return null;
+    const bundle = bundleByCourse.value.get(s.id);
+    return bundle && bundle.price < s.q_single ? bundle : null;
+};
+
+const appliedBundleNames = computed(() => [
+    ...new Set(
+        props.subjects
+            .filter((s) => selected.value.includes(s.id))
+            .map((s) => appliedBundle(s)?.name)
+            .filter((name): name is string => !!name),
+    ),
+]);
 
 const unitPrice = (s: Subject) => {
     if (payCycle.value === 'monthly') return s.list;
-    if (payCycle.value === 'annual') return s.q_double;
-    if (s.pricing_group === 'core' && coreCount.value >= 2) return s.q_double;
-    return s.q_single;
+    return appliedBundle(s)?.price ?? s.q_single;
 };
 
 const sessionDates = computed(() => uniqueDatesFromSessions(sessions.value));
-const billingMonths = computed(() => monthsFromDates(sessionDates.value));
+const isSplitMode = computed(
+    () => splitByCourse.value && !isGrade9PackageMode.value,
+);
+/** 分科模式以各科勾選月份聯集為帳期（與後端一致，沒上課的月份也列出） */
+const billingMonths = computed(() =>
+    isSplitMode.value
+        ? selectedMonths.value
+        : monthsFromDates(sessionDates.value),
+);
 const monthCount = computed(() =>
     isGrade9PackageMode.value
         ? Math.max(6, selectedMonths.value.length)
         : billingMonths.value.length,
 );
 const sessionCount = computed(() => sessions.value.length);
+
+const courseBillingMonths = (courseId: number): YearMonth[] => {
+    if (!isSplitMode.value) {
+        return billingMonths.value;
+    }
+    return (courseMonthKeys.value[courseId] ?? [])
+        .map((key) => parseMonthKey(key))
+        .filter((m): m is YearMonth => m !== null);
+};
+
+const isCourseMonth = (courseId: number, y: number, m: number) =>
+    !isSplitMode.value ||
+    (courseMonthKeys.value[courseId] ?? []).includes(monthKey(y, m));
+
+const blockTuition = (s: Subject) =>
+    unitPrice(s) *
+    Math.max(1, Math.ceil(Math.max(1, courseBillingMonths(s.id).length) / 3));
 
 const countSessionsInMonth = (courseId: number, y: number, m: number) =>
     sessions.value.filter((entry) => {
@@ -864,7 +1062,7 @@ const countSessionsInMonth = (courseId: number, y: number, m: number) =>
 const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
     const price = unitPrice(s);
     const attended = countSessionsInMonth(s.id, y, m);
-    if (s.unit === 'session_block') {
+    if (s.unit === 'session_block' || !isCourseMonth(s.id, y, m)) {
         return 0;
     }
     return proratedMonthTuitionExact(
@@ -875,15 +1073,12 @@ const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
 };
 
 const lineTuition = (s: Subject) => {
-    const price = unitPrice(s);
     if (s.unit === 'session_block') {
-        return (
-            price * Math.max(1, Math.ceil(Math.max(1, monthCount.value) / 3))
-        );
+        return blockTuition(s);
     }
     // 各月：該科精確值加總後再進位會與「多科合計再進位」不一致；
     // 單科小計仍用各月 round(精確值)，月合計另以多科加總後 round。
-    return billingMonths.value.reduce((sum, month) => {
+    return courseBillingMonths(s.id).reduce((sum, month) => {
         return sum + Math.round(lineTuitionForMonthExact(s, month.y, month.m));
     }, 0);
 };
@@ -990,8 +1185,8 @@ const courseHalfAmount = (courseId: number) => {
 };
 
 /** 半年教材掛在帳期中第一個落在該半年的月份；帳期不含該半年則掛第一個月（與後端一致） */
-const halfTargetMonth = (period: HalfPeriod) => {
-    const months = billingMonths.value;
+const halfTargetMonth = (period: HalfPeriod, courseId: number) => {
+    const months = courseBillingMonths(courseId);
     return (
         months.find(
             ({ y, m }) =>
@@ -1020,7 +1215,7 @@ const lineMaterialForMonth = (s: Subject, y: number, m: number) => {
         return 0;
     }
     return materialPeriods.value.reduce((sum, period) => {
-        const target = halfTargetMonth(period);
+        const target = halfTargetMonth(period, s.id);
         if (!target || target.y !== y || target.m !== m) {
             return sum;
         }
@@ -1184,19 +1379,26 @@ const monthBreakdown = computed(() => {
         .map((id) => props.subjects.find((x) => x.id === id))
         .filter((s): s is Subject => !!s);
 
-    const blockSubjects = selectedSubjects.filter((s) => s.unit === 'session_block');
-    const blockTuitionTotal = blockSubjects.reduce((sum, s) => {
-        const price = unitPrice(s);
-        return (
-            sum +
-            price * Math.max(1, Math.ceil(Math.max(1, monthCount.value) / 3))
-        );
-    }, 0);
-    const blockMonths = Math.max(1, monthCount.value);
-    const blockPerMonth = Math.floor(blockTuitionTotal / blockMonths);
-    const blockRem = blockTuitionTotal % blockMonths;
+    // 堂數制科目：總額平均攤到該科自己的帳期月份，餘數放第一個月（與後端一致）
+    const blockByMonth = new Map<string, number>();
+    for (const s of selectedSubjects.filter((x) => x.unit === 'session_block')) {
+        const months = courseBillingMonths(s.id);
+        if (months.length === 0) {
+            continue;
+        }
+        const total = blockTuition(s);
+        const per = Math.floor(total / months.length);
+        const rem = total % months.length;
+        months.forEach((month, index) => {
+            const key = monthKey(month.y, month.m);
+            blockByMonth.set(
+                key,
+                (blockByMonth.get(key) ?? 0) + per + (index === 0 ? rem : 0),
+            );
+        });
+    }
 
-    return billingMonths.value.map((month, index) => {
+    return billingMonths.value.map((month) => {
         const exactTuition = selectedSubjects
             .filter((s) => s.unit !== 'session_block')
             .reduce(
@@ -1204,7 +1406,7 @@ const monthBreakdown = computed(() => {
                 0,
             );
         let tuition = Math.round(exactTuition);
-        tuition += blockPerMonth + (index === 0 ? blockRem : 0);
+        tuition += blockByMonth.get(monthKey(month.y, month.m)) ?? 0;
 
         const material = selectedSubjects.reduce(
             (sum, s) => sum + lineMaterialForMonth(s, month.y, month.m),
@@ -1452,6 +1654,11 @@ const submit = () => {
     form.fee_discount_id = selectedDiscountId.value;
     const trimmedReceipt = receiptNo.value.trim();
     form.receipt_no = trimmedReceipt === '' ? null : trimmedReceipt;
+    form.course_months = isSplitMode.value
+        ? Object.fromEntries(
+              selected.value.map((id) => [id, courseMonthKeys.value[id] ?? []]),
+          )
+        : {};
     form.post(`/student-payments/${props.student.id}/quote`, {
         preserveScroll: true,
     });
@@ -1698,7 +1905,7 @@ defineOptions({
                             v-if="subjects.length === 0"
                             class="mt-3 text-base text-muted-foreground"
                         >
-                            尚無可報名課目。請確認學生年級與收費標準的適用課目。
+                            尚無可報名課目。請確認學生年級與收費設定的適用課目。
                         </p>
                         <div
                             v-else
@@ -1736,11 +1943,10 @@ defineOptions({
                                     {{ s.name }}
                                 </div>
                                 <div class="text-xs text-muted-foreground">
-                                    {{ s.pricing_group_label }}
-                                    <span v-if="s.group_name"
-                                        >｜{{ s.group_name }}</span
-                                    >
-                                    <span v-else>｜尚未設定適用價目</span>
+                                    <span v-if="s.group_name">{{
+                                        s.group_name
+                                    }}</span>
+                                    <span v-else>尚未設定適用價目</span>
                                     <span v-if="s.weekdays?.length"
                                         >｜{{
                                             formatWeekdays(s.weekdays)
@@ -1749,10 +1955,15 @@ defineOptions({
                                 </div>
                                 <div class="text-xs text-muted-foreground">
                                     定價 {{ s.list.toLocaleString() }}｜季繳
-                                    {{ s.q_single.toLocaleString() }}／雙
-                                    {{ s.q_double.toLocaleString() }}｜{{
-                                        materialHint(s)
-                                    }}
+                                    {{ s.q_single.toLocaleString() }}
+                                    <span
+                                        v-if="appliedBundle(s)"
+                                        class="text-emerald-700"
+                                        >（{{ appliedBundle(s)!.name }}
+                                        {{
+                                            appliedBundle(s)!.price.toLocaleString()
+                                        }}）</span
+                                    >｜{{ materialHint(s) }}
                                 </div>
                             </div>
                         </div>
@@ -1877,7 +2088,72 @@ defineOptions({
                             <p v-else class="text-xs text-muted-foreground">
                                 依繳別預勾連續月，可自行增減。每個勾選且有上課的月份都收整月月費。
                             </p>
-                            <div class="flex flex-wrap gap-2">
+                            <label
+                                v-if="!isGrade9PackageMode && selected.length > 1"
+                                class="inline-flex w-fit cursor-pointer items-center gap-2 text-sm"
+                            >
+                                <input
+                                    type="checkbox"
+                                    class="size-3.5 accent-[var(--brand-green)]"
+                                    :checked="splitByCourse"
+                                    @change="onSplitToggle"
+                                />
+                                各科分開勾月份（科目繳到的月份不同時使用）
+                            </label>
+                            <div v-if="isSplitMode" class="grid gap-3">
+                                <div
+                                    v-for="course in calendarCourses"
+                                    :key="`months-${course.id}`"
+                                    class="grid gap-1.5"
+                                >
+                                    <p
+                                        class="inline-flex items-center gap-1.5 text-sm font-medium"
+                                    >
+                                        <span
+                                            class="size-2.5 rounded-full"
+                                            :style="{
+                                                backgroundColor:
+                                                    normalizeClassroomHex(
+                                                        course.color,
+                                                    ),
+                                            }"
+                                        />
+                                        {{ course.name }}
+                                        <span
+                                            class="text-xs font-normal text-muted-foreground"
+                                            >{{
+                                                (courseMonthKeys[course.id] ?? []).length
+                                            }}
+                                            個月</span
+                                        >
+                                    </p>
+                                    <div class="flex flex-wrap gap-2">
+                                        <label
+                                            v-for="opt in monthCheckboxOptions"
+                                            :key="`${course.id}-${opt.key}`"
+                                            class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm"
+                                            :class="
+                                                (courseMonthKeys[course.id] ?? []).includes(opt.key)
+                                                    ? 'border-primary bg-primary/10 text-foreground'
+                                                    : 'border-border text-muted-foreground'
+                                            "
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                class="size-3.5 rounded border"
+                                                :checked="
+                                                    (courseMonthKeys[course.id] ?? []).includes(opt.key)
+                                                "
+                                                @change="
+                                                    toggleCourseMonth(course.id, opt.key)
+                                                "
+                                            />
+                                            {{ opt.yearLabel }}
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-else class="flex flex-wrap gap-2">
                                 <label
                                     v-for="opt in monthCheckboxOptions"
                                     :key="opt.key"
@@ -1920,15 +2196,12 @@ defineOptions({
                                 :start-date="startDate"
                                 :courses="calendarCourses"
                                 :month-span="calendarMonthSpan"
-                                :holidays="holidays ?? []"
-                                :closures="schedule_closures ?? []"
-                                :grade-level-id="student?.grade_level_id ?? null"
                             />
                         </div>
                         <div class="mt-3 rounded-lg border bg-muted/20 p-3">
                             <h3 class="text-sm font-medium">各科已選堂數</h3>
                             <p class="mt-1 text-xs text-muted-foreground">
-                                學費為固定月費，不論當月堂數多寡（放假、停課、補課都不影響）。
+                                學費為固定月費，不論當月堂數多寡。
                             </p>
                             <ul class="mt-2 flex flex-col gap-1.5 text-sm">
                                 <li
@@ -2161,10 +2434,16 @@ defineOptions({
                                 v-if="!isGrade9PackageMode"
                                 class="flex justify-between gap-2"
                             >
-                                <dt class="text-muted-foreground">
-                                    同組核心科數
-                                </dt>
-                                <dd>{{ coreCount }}（影響雙科價）</dd>
+                                <dt class="text-muted-foreground">多科優惠</dt>
+                                <dd class="text-right">
+                                    {{
+                                        appliedBundleNames.length
+                                            ? appliedBundleNames.join('、')
+                                            : payCycle === 'monthly'
+                                              ? '月繳不適用'
+                                              : '無'
+                                    }}
+                                </dd>
                             </div>
                             <div class="flex justify-between gap-2">
                                 <dt class="text-muted-foreground">選中堂次</dt>
@@ -2293,7 +2572,7 @@ defineOptions({
                                     v-if="feeDiscounts.length === 0"
                                     class="text-xs text-muted-foreground"
                                 >
-                                    尚無可用優惠（可至設定管理 → 優惠管理新增）
+                                    尚無可用優惠（可至設定管理 → 優惠設定新增）
                                 </p>
                                 <InputError
                                     :message="form.errors.fee_discount_id"

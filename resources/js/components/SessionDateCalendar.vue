@@ -15,10 +15,10 @@ import {
     isoWeekday,
     parseYmd,
     toggleSession,
-    toYmd,
-    type ScheduleExceptionRange,
-    type SessionEntry,
+    toYmd
+    
 } from '@/lib/weekdayDates';
+import type {SessionEntry} from '@/lib/weekdayDates';
 
 export type CalendarCourse = {
     id: number;
@@ -40,11 +40,6 @@ const props = defineProps<{
     courses?: CalendarCourse[];
     /** 可瀏覽／點選的月數（含起算月） */
     monthSpan?: number;
-    /** 國定假日／自訂連假（預選會略過；格子標示） */
-    holidays?: Array<{ date: string; name: string }>;
-    /** 停課（年級／科目）；預選會略過，格子淡紅標示 */
-    closures?: ScheduleExceptionRange[];
-    gradeLevelId?: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -56,57 +51,16 @@ const viewCursor = ref({ y: 0, m: 0 });
 const pickerOpen = ref(false);
 const pickerDate = ref<string | null>(null);
 
-const holidayMap = computed(() => {
-    const map = new Map<string, string>();
-    for (const h of props.holidays ?? []) {
-        map.set(h.date.slice(0, 10), h.name);
-    }
-    return map;
-});
-
-const relevantClosures = computed(() => {
-    const gradeId = props.gradeLevelId ?? null;
-    return (props.closures ?? []).filter(
-        (ex) =>
-            ex.grade_level_id == null ||
-            gradeId == null ||
-            ex.grade_level_id === gradeId,
-    );
-});
-
-const ymdInRange = (ymd: string, from: string, to: string) =>
-    ymd >= from.slice(0, 10) && ymd <= to.slice(0, 10);
-
-/** 該日對目前已選科目是否停課；回傳顯示名稱 */
-const closureNameForDate = (ymd: string): string | null => {
-    const courses = props.courses ?? [];
-    const courseIds = new Set(courses.map((c) => c.id));
-    for (const ex of relevantClosures.value) {
-        if (!ymdInRange(ymd, ex.date_from, ex.date_to)) {
-            continue;
-        }
-        const ids = ex.course_ids ?? [];
-        const applies =
-            ids.length === 0 ||
-            (courseIds.size > 0
-                ? ids.some((id) => courseIds.has(id))
-                : true);
-        if (!applies) {
-            continue;
-        }
-        const name = (ex.name ?? '').trim();
-        return name !== '' ? name : '停課';
-    }
-    return null;
-};
-
 const syncViewToStart = () => {
     const d = parseYmd(props.startDate || toYmd(new Date()));
+
     if (Number.isNaN(d.getTime())) {
         const now = new Date();
         viewCursor.value = { y: now.getFullYear(), m: now.getMonth() + 1 };
+
         return;
     }
+
     viewCursor.value = { y: d.getFullYear(), m: d.getMonth() + 1 };
 };
 
@@ -114,47 +68,57 @@ watch(() => props.startDate, syncViewToStart, { immediate: true });
 
 const courseMap = computed(() => {
     const map = new Map<number, CalendarCourse>();
+
     for (const c of props.courses ?? []) {
         map.set(c.id, c);
     }
+
     return map;
 });
 
 const entriesByDate = computed(() => {
     const map = new Map<string, SessionEntry[]>();
+
     for (const entry of props.modelValue) {
         const list = map.get(entry.date) ?? [];
         list.push(entry);
         map.set(entry.date, list);
     }
+
     return map;
 });
 
 const labelsForDate = (ymd: string): CourseLabel[] => {
     const entries = entriesByDate.value.get(ymd) ?? [];
     const out: CourseLabel[] = [];
+
     for (const entry of entries) {
         const course = courseMap.value.get(entry.course_id);
+
         if (!course) {
             continue;
         }
+
         out.push({
             id: course.id,
             name: course.name,
             color: normalizeClassroomHex(course.color),
         });
     }
+
     return out;
 };
 
 const minDate = computed(() => parseYmd(props.startDate || toYmd(new Date())));
 const maxDate = computed(() => {
     const s = minDate.value;
+
     return new Date(s.getFullYear(), s.getMonth() + monthSpan.value, 0);
 });
 
 const canPrev = computed(() => {
     const s = minDate.value;
+
     return (
         viewCursor.value.y > s.getFullYear() ||
         (viewCursor.value.y === s.getFullYear() && viewCursor.value.m > s.getMonth() + 1)
@@ -163,6 +127,7 @@ const canPrev = computed(() => {
 
 const canNext = computed(() => {
     const e = maxDate.value;
+
     return (
         viewCursor.value.y < e.getFullYear() ||
         (viewCursor.value.y === e.getFullYear() && viewCursor.value.m < e.getMonth() + 1)
@@ -182,10 +147,6 @@ type Cell = {
     inMonth: boolean;
     disabled: boolean;
     selected: boolean;
-    isHoliday: boolean;
-    holidayName: string | null;
-    isClosure: boolean;
-    closureName: string | null;
     dayNum: number;
     courseLabels: CourseLabel[];
     /** 起算日前、符合科目上課日但未計入的科目 */
@@ -199,10 +160,6 @@ const emptyCell = (key: string): Cell => ({
     inMonth: false,
     disabled: true,
     selected: false,
-    isHoliday: false,
-    holidayName: null,
-    isClosure: false,
-    closureName: null,
     dayNum: 0,
     courseLabels: [],
     skippedLabels: [],
@@ -233,10 +190,9 @@ const cells = computed<Cell[]>(() => {
         const afterEnd = date > maxDate.value;
         const labels = labelsForDate(ymd);
         const selected = labels.length > 0;
-        const holidayName = holidayMap.value.get(ymd) ?? null;
-        const closureName = closureNameForDate(ymd);
         const wd = isoWeekday(date);
         const skippedLabels: CourseLabel[] = [];
+
         if (beforeStart && !selected) {
             for (const course of props.courses ?? []) {
                 if ((course.weekdays ?? []).includes(wd)) {
@@ -248,16 +204,13 @@ const cells = computed<Cell[]>(() => {
                 }
             }
         }
+
         out.push({
             key: ymd,
             date: ymd,
             inMonth: true,
             disabled: beforeStart || afterEnd,
             selected,
-            isHoliday: holidayName !== null,
-            holidayName,
-            isClosure: closureName !== null,
-            closureName,
             dayNum: day,
             courseLabels: labels,
             skippedLabels,
@@ -278,8 +231,10 @@ const pickerDateLabel = computed(() => {
     if (!pickerDate.value) {
         return '';
     }
+
     const d = parseYmd(pickerDate.value);
     const wd = ['一', '二', '三', '四', '五', '六', '日'][isoWeekday(d) - 1] ?? '';
+
     return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}（週${wd}）`;
 });
 
@@ -296,19 +251,26 @@ const onCellClick = (cell: Cell) => {
     if (!cell.date || cell.disabled) {
         return;
     }
+
     const courses = pickerCourses.value;
+
     if (courses.length === 0) {
         return;
     }
+
     if (courses.length === 1) {
         applyToggle(cell.date, courses[0]!.id);
+
         return;
     }
+
     // 已選且只有一科：直接取消該科
     if (cell.courseLabels.length === 1 && cell.selected) {
         applyToggle(cell.date, cell.courseLabels[0]!.id);
+
         return;
     }
+
     openPicker(cell.date);
 };
 
@@ -316,6 +278,7 @@ const pickCourse = (courseId: number) => {
     if (!pickerDate.value) {
         return;
     }
+
     applyToggle(pickerDate.value, courseId);
 };
 
@@ -323,6 +286,7 @@ const courseActiveOnPickerDate = (courseId: number) => {
     if (!pickerDate.value) {
         return false;
     }
+
     return hasSession(props.modelValue, pickerDate.value, courseId);
 };
 
@@ -363,20 +327,14 @@ const sessionCount = computed(() => props.modelValue.length);
                         ? 'cursor-not-allowed border-transparent bg-transparent text-muted-foreground/40'
                         : cell.selected
                           ? 'hover:opacity-90'
-                          : cell.isHoliday || cell.isClosure
-                            ? 'border-rose-200 bg-rose-50 text-rose-800 hover:border-rose-300 hover:bg-rose-100/80'
-                            : 'border-transparent bg-white text-foreground hover:border-primary/40 hover:bg-accent/40',
+                          : 'border-transparent bg-white text-foreground hover:border-primary/40 hover:bg-accent/40',
                 ]"
                 :style="cell.selected && !cell.disabled ? cell.selectedStyle : undefined"
                 :disabled="!cell.inMonth || cell.disabled"
                 :title="
                     cell.courseLabels.length
                         ? cell.courseLabels.map((c) => c.name).join('、')
-                        : cell.closureName
-                          ? `停課：${cell.closureName}（預選略過，仍可手動加課）`
-                          : cell.holidayName
-                            ? `假日：${cell.holidayName}（仍可點選加課）`
-                            : '點選加課'
+                        : '點選加課'
                 "
                 @click="onCellClick(cell)"
             >
@@ -401,23 +359,11 @@ const sessionCount = computed(() => props.modelValue.length);
                 >
                     未入班
                 </span>
-                <span
-                    v-else-if="cell.inMonth && cell.closureName"
-                    class="line-clamp-2 w-full text-center text-[9px] leading-tight text-rose-700 sm:text-[10px]"
-                >
-                    {{ cell.closureName }}
-                </span>
-                <span
-                    v-else-if="cell.inMonth && cell.holidayName"
-                    class="line-clamp-2 w-full text-center text-[9px] leading-tight text-rose-700 sm:text-[10px]"
-                >
-                    {{ cell.holidayName }}
-                </span>
             </button>
         </div>
 
         <p class="text-xs text-muted-foreground">
-            已選 {{ sessionCount }} 堂。起算日前的上課日標「未入班」不計費；淡紅為假日或停課（預選會略過，仍可手動加課）。
+            已選 {{ sessionCount }} 堂。起算日前的上課日標「未入班」不計費；點日期可加課或取消。
         </p>
 
         <Dialog v-model:open="pickerOpen">

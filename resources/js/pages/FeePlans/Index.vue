@@ -14,8 +14,8 @@ type Plan = {
     id: number;
     grade_name: string | null;
     group_name: string;
-    pricing_group_label: string;
     course_names: string[];
+    bundles: Array<{ id: number; name: string; price: number }>;
     list_label: string;
     quarter_label: string;
     material_label: string;
@@ -41,7 +41,7 @@ const canManage =
 
 defineOptions({
     layout: {
-        breadcrumbs: [{ title: '收費標準', href: '/fee-plans' }],
+        breadcrumbs: [{ title: '收費設定', href: '/fee-plans' }],
     },
 });
 
@@ -55,7 +55,7 @@ const filterGrade = (grade: string) => {
 };
 
 const destroyPlan = (id: number) => {
-    if (!window.confirm('確定要刪除此收費標準嗎？')) {
+    if (!window.confirm('確定要刪除此收費設定嗎？')) {
         return;
     }
 
@@ -64,17 +64,17 @@ const destroyPlan = (id: number) => {
 </script>
 
 <template>
-    <Head title="收費標準" />
+    <Head title="收費設定" />
     <div class="page-shell">
         <PageHeader
-            title="收費標準"
-            description="依學年、年級與適用課目維護定價、季繳及教材費。"
+            title="收費設定"
+            description="每門課的單科價，以及同時報多科時的雙科／多科優惠（季繳、年繳適用）。"
         >
             <template v-if="canManage" #actions>
                 <Button as-child>
                     <Link href="/fee-plans/create">
                         <Plus class="size-4" />
-                        新增標準
+                        新增收費設定
                     </Link>
                 </Button>
             </template>
@@ -109,9 +109,6 @@ const destroyPlan = (id: number) => {
                         {{ plan.is_active ? '啟用' : '停用' }}
                     </span>
                 </template>
-                <MobileRecordField label="收費組別">{{
-                    plan.pricing_group_label
-                }}</MobileRecordField>
                 <MobileRecordField label="適用課目">
                     {{
                         plan.course_names.length > 0
@@ -122,9 +119,20 @@ const destroyPlan = (id: number) => {
                 <MobileRecordField label="定價">{{
                     plan.list_label
                 }}</MobileRecordField>
-                <MobileRecordField label="季繳">{{
+                <MobileRecordField label="季繳（單科）">{{
                     plan.quarter_label
                 }}</MobileRecordField>
+                <MobileRecordField
+                    v-if="plan.bundles.length"
+                    label="雙科／多科優惠"
+                >
+                    <span
+                        v-for="(bundle, i) in plan.bundles"
+                        :key="bundle.id"
+                        >{{ i > 0 ? '、' : '' }}{{ bundle.name }}
+                        {{ bundle.price.toLocaleString() }}／月</span
+                    >
+                </MobileRecordField>
                 <MobileRecordField label="教材費">{{
                     plan.material_label
                 }}</MobileRecordField>
@@ -141,7 +149,7 @@ const destroyPlan = (id: number) => {
                 v-if="plans.data.length === 0"
                 class="rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground"
             >
-                尚無收費標準，請新增或執行 seed。
+                尚無收費設定，請新增或執行 seed。
             </p>
         </div>
 
@@ -152,9 +160,9 @@ const destroyPlan = (id: number) => {
                         <th class="py-2 text-left">年級</th>
                         <th class="py-2 text-left">科目組</th>
                         <th class="py-2 text-left">適用課目</th>
-                        <th class="py-2 text-left">收費組別</th>
                         <th class="py-2 text-left">定價</th>
-                        <th class="py-2 text-left">季繳優惠</th>
+                        <th class="py-2 text-left">季繳（單科）</th>
+                        <th class="py-2 text-left">雙科／多科優惠</th>
                         <th class="py-2 text-left">教材費</th>
                         <th class="py-2 text-left">單位</th>
                         <th class="py-2 text-left">狀態</th>
@@ -176,11 +184,23 @@ const destroyPlan = (id: number) => {
                                     : '尚未設定'
                             }}
                         </td>
-                        <td class="py-2 text-muted-foreground">
-                            {{ plan.pricing_group_label }}
-                        </td>
                         <td class="py-2">{{ plan.list_label }}</td>
                         <td class="py-2">{{ plan.quarter_label }}</td>
+                        <td class="py-2">
+                            <div
+                                v-for="bundle in plan.bundles"
+                                :key="bundle.id"
+                                class="text-emerald-700"
+                            >
+                                {{ bundle.name }}
+                                {{ bundle.price.toLocaleString() }}／月
+                            </div>
+                            <span
+                                v-if="plan.bundles.length === 0"
+                                class="text-muted-foreground"
+                                >—</span
+                            >
+                        </td>
                         <td class="py-2">{{ plan.material_label }}</td>
                         <td class="py-2">{{ plan.unit_label }}</td>
                         <td class="py-2">

@@ -113,21 +113,6 @@
             height: 36px;
             border: 1px solid #222;
         }
-        .legend {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 8px;
-            margin-top: 10px;
-        }
-        .legend .box {
-            border: 1px solid #333;
-            padding: 8px 10px;
-            text-align: center;
-            font-size: 12px;
-            line-height: 1.35;
-        }
-        .legend .fee { background: #fef9c3; }
-        .legend .cycle { background: #dcfce7; }
         @media print {
             .toolbar { display: none !important; }
             .page-hint { display: none !important; }
@@ -215,12 +200,6 @@
                         </tbody>
                     </table>
                 @endforeach
-            </div>
-
-            <div class="legend">
-                <div class="box fee">教材費／學期<br>依收費標準</div>
-                <div class="box fee">學費<br>依繳別與科目數計價</div>
-                <div class="box cycle">繳費週期<br>季繳／三個月（首期可不足）</div>
             </div>
         </div>
     @empty

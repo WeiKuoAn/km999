@@ -2,15 +2,13 @@
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import { Plus, Trash2 } from 'lucide-vue-next';
 import { computed } from 'vue';
-import InputError from '@/components/InputError.vue';
 import ClassroomColorInput from '@/components/ClassroomColorInput.vue';
+import InputError from '@/components/InputError.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 type GradeOption = { id: number; name: string; code: number };
-type PricingGroupOption = { value: string; label: string };
-
 type CoursePrice = {
     id: number;
     level: string | null;
@@ -45,7 +43,6 @@ const props = defineProps<{
     };
     categories: Array<{ id: number; name: string; sort_order: number }>;
     gradeLevels: GradeOption[];
-    pricingGroups: PricingGroupOption[];
 }>();
 
 const gradeNames = props.gradeLevels.map((g) => g.name);
@@ -60,6 +57,7 @@ const initialSchedules = (): ScheduleRow[] => {
     if (!props.course.schedules?.length) {
         return [];
     }
+
     return props.course.schedules.map((s) => ({
         level: s.level?.trim() ? s.level.trim() : null,
         weekday: String(s.weekday),
@@ -114,8 +112,10 @@ const toggleAllLevels = () => {
         form.schedules = form.schedules.filter(
             (s) => s.level == null || !names.has(s.level),
         );
+
         return;
     }
+
     form.levels = props.gradeLevels.map((g) => g.name);
 };
 
@@ -136,6 +136,7 @@ const submit = () =>
                     if (data.levels.length === 0) {
                         return true;
                     }
+
                     return s.level != null && levelSet.has(s.level);
                 })
                 .map((s) => ({
@@ -208,28 +209,6 @@ defineOptions({
                     用於學生收款科目卡片與上課日行事曆辨識。
                 </p>
                 <InputError :message="form.errors.color" />
-            </div>
-
-            <div class="grid gap-2">
-                <Label for="pricing_group">收費組別</Label>
-                <select
-                    id="pricing_group"
-                    v-model="form.pricing_group"
-                    class="h-9 rounded-md border px-3"
-                >
-                    <option value="">未設定</option>
-                    <option
-                        v-for="g in pricingGroups"
-                        :key="g.value"
-                        :value="g.value"
-                    >
-                        {{ g.label }}
-                    </option>
-                </select>
-                <p class="text-xs text-muted-foreground">
-                    用於核心科單科／雙科等優惠分類；實際價目請至「收費標準」勾選適用課目。
-                </p>
-                <InputError :message="form.errors.pricing_group" />
             </div>
 
             <div class="space-y-2 rounded-lg border p-4">

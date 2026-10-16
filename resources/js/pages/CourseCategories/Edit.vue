@@ -21,7 +21,7 @@ const form = useForm({
 defineOptions({
     layout: {
         breadcrumbs: [
-            { title: '課程類別管理', href: '/course-categories' },
+            { title: '課程類別', href: '/course-categories' },
             { title: '編輯', href: '#' },
         ],
     },

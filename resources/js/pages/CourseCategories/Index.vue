@@ -29,7 +29,7 @@ const deleteError = computed(() => (page.props.errors as Record<string, string |
 
 defineOptions({
     layout: {
-        breadcrumbs: [{ title: '課程類別管理', href: '/course-categories' }],
+        breadcrumbs: [{ title: '課程類別', href: '/course-categories' }],
     },
 });
 
@@ -40,9 +40,9 @@ const destroyCategory = (id: number) => {
 </script>
 
 <template>
-    <Head title="課程類別管理" />
+    <Head title="課程類別" />
     <div class="page-shell">
-        <PageHeader title="課程類別管理">
+        <PageHeader title="課程類別">
             <template #actions>
                 <Button as-child><Link href="/course-categories/create">新增類別</Link></Button>
             </template>

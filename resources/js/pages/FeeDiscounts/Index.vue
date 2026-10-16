@@ -48,7 +48,7 @@ const valueLabel = (row: Discount) =>
 
 defineOptions({
     layout: {
-        breadcrumbs: [{ title: '優惠管理', href: '/fee-discounts' }],
+        breadcrumbs: [{ title: '優惠設定', href: '/fee-discounts' }],
     },
 });
 
@@ -61,10 +61,10 @@ const destroyDiscount = (id: number) => {
 </script>
 
 <template>
-    <Head title="優惠管理" />
+    <Head title="優惠設定" />
     <div class="page-shell">
         <PageHeader
-            title="優惠管理"
+            title="優惠設定"
             description="設定固定折讓金額或打折％數，新增收款時可選用。"
         >
             <template #actions>

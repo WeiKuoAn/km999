@@ -4,11 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Models\AcademicYear;
 use App\Models\Course;
+use App\Models\CourseBundle;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
 use App\Support\PricingGroup;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -34,10 +36,20 @@ class FeePlanController extends Controller
             }
         }
 
+        $bundles = CourseBundle::query()
+            ->with('courses:id')
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
         return Inertia::render('FeePlans/Index', [
             'plans' => $query
                 ->paginate(50)
-                ->through(fn (FeePlan $plan): array => $this->planPayload($plan))
+                ->through(fn (FeePlan $plan): array => [
+                    ...$this->planPayload($plan),
+                    'bundles' => $this->bundlesForPlan($plan, $bundles),
+                ])
                 ->withQueryString(),
             'filters' => [
                 'grade' => $gradeFilter !== '' ? $gradeFilter : '全部',
@@ -51,7 +63,6 @@ class FeePlanController extends Controller
         return Inertia::render('FeePlans/Create', [
             'academicYears' => $this->academicYearOptions(),
             'gradeLevels' => $this->gradeLevelOptions(),
-            'pricingGroups' => PricingGroup::options(),
             'courses' => $this->courseOptions(),
             'defaultAcademicYearId' => AcademicYear::query()->where('is_current', true)->value('id'),
         ]);
@@ -61,11 +72,13 @@ class FeePlanController extends Controller
     {
         $validated = $this->validatePlan($request);
         $courseIds = $validated['course_ids'];
-        unset($validated['course_ids']);
+        $bundles = $validated['bundles'] ?? [];
+        unset($validated['course_ids'], $validated['bundles']);
 
-        DB::transaction(function () use ($validated, $courseIds): void {
+        DB::transaction(function () use ($validated, $courseIds, $bundles): void {
             $plan = FeePlan::query()->create($validated);
             $plan->courses()->sync($courseIds);
+            $this->syncBundles($plan, $bundles, []);
         });
 
         return to_route('fee-plans.index');
@@ -73,11 +86,24 @@ class FeePlanController extends Controller
 
     public function edit(FeePlan $feePlan): Response
     {
+        $feePlan->load(['gradeLevel', 'academicYear', 'courses']);
+
         return Inertia::render('FeePlans/Edit', [
-            'plan' => $this->planPayload($feePlan->load(['gradeLevel', 'academicYear', 'courses'])),
+            'plan' => [
+                ...$this->planPayload($feePlan),
+                'bundles' => $this->matchingBundles($feePlan, CourseBundle::query()->with('courses:id')->orderBy('sort_order')->orderBy('id')->get())
+                    ->map(fn (CourseBundle $bundle): array => [
+                        'id' => $bundle->id,
+                        'name' => $bundle->name,
+                        'course_ids' => $bundle->courses->pluck('id')->map(fn ($id): int => (int) $id)->values()->all(),
+                        'min_courses' => $bundle->min_courses,
+                        'price' => $bundle->price,
+                    ])
+                    ->values()
+                    ->all(),
+            ],
             'academicYears' => $this->academicYearOptions(),
             'gradeLevels' => $this->gradeLevelOptions(),
-            'pricingGroups' => PricingGroup::options(),
             'courses' => $this->courseOptions(),
         ]);
     }
@@ -86,14 +112,87 @@ class FeePlanController extends Controller
     {
         $validated = $this->validatePlan($request, $feePlan);
         $courseIds = $validated['course_ids'];
-        unset($validated['course_ids']);
+        $bundles = $validated['bundles'] ?? [];
+        unset($validated['course_ids'], $validated['bundles']);
 
-        DB::transaction(function () use ($feePlan, $validated, $courseIds): void {
+        $previousBundleIds = $this->matchingBundles(
+            $feePlan->load('courses:id'),
+            CourseBundle::query()->with('courses:id')->get()
+        )->pluck('id')->all();
+
+        DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $previousBundleIds): void {
             $feePlan->update($validated);
             $feePlan->courses()->sync($courseIds);
+            $this->syncBundles($feePlan, $bundles, $previousBundleIds);
         });
 
         return to_route('fee-plans.index');
+    }
+
+    /**
+     * 表單上的雙科／多科優惠寫入組合優惠（年級、學年跟著收費設定）；表單拿掉的就刪除。
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  list<int>  $previousIds
+     */
+    private function syncBundles(FeePlan $plan, array $rows, array $previousIds): void
+    {
+        $keepIds = [];
+        $courseNames = Course::query()->pluck('name', 'id');
+
+        foreach ($rows as $row) {
+            $courseIds = array_values(array_map('intval', $row['course_ids']));
+            $minCourses = (int) $row['min_courses'];
+            $name = trim((string) ($row['name'] ?? ''));
+            if ($name === '') {
+                $name = $this->defaultBundleName($courseIds, $minCourses, $courseNames->all());
+            }
+
+            $attributes = [
+                'name' => $name,
+                'grade_level_id' => $plan->grade_level_id,
+                'academic_year_id' => $plan->academic_year_id,
+                'min_courses' => $minCourses,
+                'price' => (int) $row['price'],
+                'is_active' => true,
+                'sort_order' => $plan->sort_order,
+            ];
+
+            $bundle = ! empty($row['id']) ? CourseBundle::query()->find((int) $row['id']) : null;
+            if ($bundle !== null) {
+                $bundle->update($attributes);
+            } else {
+                $bundle = CourseBundle::query()->create($attributes);
+            }
+            $bundle->courses()->sync($courseIds);
+            $keepIds[] = $bundle->id;
+        }
+
+        $removeIds = array_diff($previousIds, $keepIds);
+        if ($removeIds !== []) {
+            CourseBundle::query()->whereKey($removeIds)->delete();
+        }
+    }
+
+    /**
+     * 例：英文課＋數學課、至少 2 科 → 「英數 雙科」。
+     *
+     * @param  list<int>  $courseIds
+     * @param  array<int, string>  $courseNames
+     */
+    private function defaultBundleName(array $courseIds, int $minCourses, array $courseNames): string
+    {
+        $short = implode('', array_map(
+            fn (int $id): string => mb_substr((string) ($courseNames[$id] ?? ''), 0, 1),
+            $courseIds
+        ));
+        $count = match ($minCourses) {
+            2 => '雙科',
+            3 => '三科',
+            default => $minCourses.'科',
+        };
+
+        return trim($short.' '.$count);
     }
 
     public function destroy(FeePlan $feePlan): RedirectResponse
@@ -125,7 +224,31 @@ class FeePlanController extends Controller
             'material_unit' => ['required', 'in:term,subject,class_day'],
             'sort_order' => ['nullable', 'integer', 'min:0'],
             'is_active' => ['boolean'],
+            'bundles' => ['nullable', 'array'],
+            'bundles.*.id' => ['nullable', 'integer', 'exists:course_bundles,id'],
+            'bundles.*.name' => ['nullable', 'string', 'max:64'],
+            'bundles.*.course_ids' => ['required', 'array', 'min:2'],
+            'bundles.*.course_ids.*' => ['required', 'integer', 'exists:courses,id'],
+            'bundles.*.min_courses' => ['required', 'integer', 'min:2'],
+            'bundles.*.price' => ['required', 'integer', 'min:0'],
+        ], [
+            'bundles.*.course_ids.min' => '優惠至少要勾 2 門課。',
+            'bundles.*.price.required' => '請填優惠價。',
         ]);
+
+        $bundleErrors = [];
+        foreach ($validated['bundles'] ?? [] as $i => $bundle) {
+            $validated['bundles'][$i]['course_ids'] = $bundle['course_ids'] = array_values(array_unique(array_map('intval', $bundle['course_ids'])));
+            if ((int) $bundle['min_courses'] > count($bundle['course_ids'])) {
+                $bundleErrors["bundles.{$i}.min_courses"] = '「至少報幾科」不能超過勾選的課數。';
+            }
+            if (array_intersect(array_map('intval', $bundle['course_ids']), array_map('intval', $validated['course_ids'])) === []) {
+                $bundleErrors["bundles.{$i}.course_ids"] = '優惠要包含這個收費設定的課程。';
+            }
+        }
+        if ($bundleErrors !== []) {
+            throw ValidationException::withMessages($bundleErrors);
+        }
 
         if (($validated['unit'] ?? '') === 'session_block') {
             $validated['session_block_size'] = $validated['session_block_size'] ?? 4;
@@ -175,6 +298,39 @@ class FeePlanController extends Controller
     }
 
     /**
+     * 與此收費設定同年級、同學年且含有其課程的組合優惠。
+     *
+     * @param  Collection<int, CourseBundle>  $bundles
+     * @return Collection<int, CourseBundle>
+     */
+    private function matchingBundles(FeePlan $plan, Collection $bundles): Collection
+    {
+        $planCourseIds = $plan->courses->pluck('id')->map(fn ($id): int => (int) $id)->all();
+
+        return $bundles
+            ->filter(fn (CourseBundle $bundle): bool => $bundle->grade_level_id == $plan->grade_level_id
+                && $bundle->academic_year_id == $plan->academic_year_id
+                && $bundle->courses->pluck('id')->intersect($planCourseIds)->isNotEmpty())
+            ->values();
+    }
+
+    /**
+     * @param  Collection<int, CourseBundle>  $bundles
+     * @return list<array{id:int, name:string, price:int, min_courses:int}>
+     */
+    private function bundlesForPlan(FeePlan $plan, Collection $bundles): array
+    {
+        return $this->matchingBundles($plan, $bundles)
+            ->map(fn (CourseBundle $bundle): array => [
+                'id' => $bundle->id,
+                'name' => $bundle->name,
+                'price' => $bundle->price,
+                'min_courses' => $bundle->min_courses,
+            ])
+            ->all();
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function planPayload(FeePlan $plan): array
@@ -203,7 +359,7 @@ class FeePlanController extends Controller
             'list_label' => $plan->listPriceLabel(),
             'quarter_label' => $plan->quarterLabel(),
             'material_label' => $plan->materialLabel(),
-            'unit_label' => $plan->unit === 'session_block' ? '堂塊' : '月',
+            'unit_label' => $plan->unit === 'session_block' ? '按期' : '月',
         ];
     }
 

@@ -777,7 +777,7 @@ defineOptions({
                         v-if="!(target_subjects ?? []).length"
                         class="text-xs text-amber-700"
                     >
-                        新年級尚無可選課程，請先至收費標準／課程確認適用年級。
+                        新年級尚無可選課程，請先至收費設定／課程確認適用年級。
                     </p>
                     <p v-if="individualError" class="text-xs text-destructive">
                         {{ individualError }}

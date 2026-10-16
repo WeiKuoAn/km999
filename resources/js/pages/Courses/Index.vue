@@ -10,7 +10,6 @@ import TableEditIconLink from '@/components/table/TableEditIconLink.vue';
 import { Button } from '@/components/ui/button';
 
 import { classroomSwatchStyle } from '@/lib/classroomColor';
-import { pricingGroupLabel } from '@/lib/pricingGroup';
 import { scheduleLabelLines } from '@/lib/scheduleLabelLines';
 import {
     formatCourseSchedules
@@ -139,9 +138,6 @@ return;
                         </span>
                     </div>
                 </MobileRecordField>
-                <MobileRecordField label="收費組別">{{
-                    pricingGroupLabel(course.pricing_group)
-                }}</MobileRecordField>
                 <template v-if="canManage" #actions>
                     <div class="mobile-card-actions">
                         <TableEditIconLink
@@ -170,7 +166,6 @@ return;
                         <th class="py-2 text-left">名稱</th>
                         <th class="py-2 text-left">年級</th>
                         <th class="py-2 text-left">上課時段</th>
-                        <th class="py-2 text-left">收費組別</th>
                         <th class="py-2 text-left">狀態</th>
                         <th class="w-[88px] py-2 text-left">操作</th>
                     </tr>
@@ -205,9 +200,6 @@ return;
                                     {{ line }}
                                 </span>
                             </div>
-                        </td>
-                        <td class="py-2">
-                            {{ pricingGroupLabel(course.pricing_group) }}
                         </td>
                         <td class="py-2">{{ statusLabel(course.status) }}</td>
                         <td class="py-2">

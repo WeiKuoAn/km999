@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\FeeDiscount;
 use App\Models\GradeLevel;
-use App\Models\Holiday;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\StudentMaterialPayment;
@@ -15,7 +14,6 @@ use App\Support\Grade9AnnualPackage;
 use App\Support\MaterialHalfYear;
 use App\Support\PaymentRosterBuilder;
 use App\Support\PromotionCourses;
-use App\Support\ScheduleCalendar;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -303,12 +301,16 @@ class StudentPaymentController extends Controller
         $suggestedStartDate = null;
         $suggestedCourseIds = [];
         $suggestedPayCycle = 'quarterly';
+        $suggestedCourseMonths = null;
+        $enrolledCourseIds = [];
+        $bundles = [];
 
         if (! empty($validated['student_id'])) {
             $student = Student::query()->findOrFail((int) $validated['student_id']);
             $this->authorizeTeacherCanViewStudent($student);
             $student->load(['gradeLevel:id,name,code', 'academicYear:id,year_code,name']);
             $subjects = EnrollmentPricing::subjectsForStudent($student);
+            $bundles = EnrollmentPricing::bundlesForStudent($student);
             $warnings = $this->warnings($student, $subjects);
             $studentPayload = [
                 'id' => $student->id,
@@ -321,6 +323,7 @@ class StudentPaymentController extends Controller
             ];
             $hasPriorPayments = BillingRenewal::hasPriorPayments($student);
             $suggestedStartDate = BillingRenewal::suggestedStartDate($student);
+            $enrolledCourseIds = PromotionCourses::intendedOrSnapshotCourseIds($student);
 
             $subjectIdSet = collect($subjects)->pluck('id')->map(fn ($id) => (int) $id)->all();
             $requestCourseIds = array_values(array_unique(array_map(
@@ -362,29 +365,20 @@ class StudentPaymentController extends Controller
                     $hasPriorPayments = true;
                 }
             }
+
+            if ($edit === null && $suggestedStartDate !== null && $suggestedCourseIds !== []) {
+                $plan = BillingRenewal::perCourseNextPeriod(
+                    $student,
+                    $suggestedCourseIds,
+                    $suggestedStartDate,
+                    $suggestedPayCycle,
+                );
+                if ($plan['split']) {
+                    $suggestedCourseMonths = $plan['course_months'];
+                    $suggestedStartDate = $plan['start_date'];
+                }
+            }
         }
-
-        $from = Carbon::today()->subMonths(6)->startOfDay();
-        $to = Carbon::today()->addYear()->endOfDay();
-        $holidays = Holiday::query()
-            ->whereBetween('date', [$from->toDateString(), $to->toDateString()])
-            ->orderBy('date')
-            ->get(['date', 'name'])
-            ->map(fn (Holiday $holiday): array => [
-                'date' => $holiday->date->toDateString(),
-                'name' => $holiday->name,
-            ])
-            ->values()
-            ->all();
-
-        $gradeLevelId = is_array($studentPayload) && ! empty($studentPayload['grade_level_id'])
-            ? (int) $studentPayload['grade_level_id']
-            : null;
-        $schedule = ScheduleCalendar::payloadForRange(
-            $from->toDateString(),
-            $to->toDateString(),
-            $gradeLevelId
-        );
 
         $materialStatus = [];
         if (! empty($validated['student_id'] ?? null) && isset($student)) {
@@ -421,13 +415,13 @@ class StudentPaymentController extends Controller
             'student' => $studentPayload,
             'subjects' => $subjects,
             'warnings' => $warnings,
-            'holidays' => $holidays,
-            'schedule_closures' => $schedule['closures'],
-            'schedule_makeups' => $schedule['makeups'],
             'has_prior_payments' => $hasPriorPayments,
             'suggested_start_date' => $suggestedStartDate,
             'suggested_course_ids' => $suggestedCourseIds,
             'suggested_pay_cycle' => $suggestedPayCycle,
+            'suggested_course_months' => $suggestedCourseMonths,
+            'enrolled_course_ids' => $enrolledCourseIds,
+            'bundles' => $bundles,
             'material_status' => $materialStatus,
             'fee_discounts' => FeeDiscount::query()
                 ->active()
@@ -733,6 +727,7 @@ class StudentPaymentController extends Controller
      *   pay_cycle:string,
      *   start_date:string,
      *   month_keys:list<string>,
+     *   course_months:array<int, list<string>>,
      *   receipt_no:?string,
      *   fee_discount_id:?int,
      *   allowance:int,
@@ -805,6 +800,15 @@ class StudentPaymentController extends Controller
                 ->map(fn (Reconciliation $row): string => $row->billing_year.'-'.$row->billing_month)
                 ->unique()
                 ->values()
+                ->all(),
+            'course_months' => $rows
+                ->filter(fn (Reconciliation $row) => $row->course_id !== null)
+                ->groupBy('course_id')
+                ->map(fn ($group) => $group
+                    ->map(fn (Reconciliation $row): string => $row->billing_year.'-'.$row->billing_month)
+                    ->unique()
+                    ->values()
+                    ->all())
                 ->all(),
             'receipt_no' => $rows->pluck('receipt_no')->first(fn ($no) => is_string($no) && $no !== ''),
             'fee_discount_id' => ($id = $rows->pluck('fee_discount_id')->first(fn ($v) => $v !== null)) !== null
@@ -891,6 +895,9 @@ class StudentPaymentController extends Controller
             'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
             'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
             'return_grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'course_months' => ['nullable', 'array'],
+            'course_months.*' => ['array', 'min:1'],
+            'course_months.*.*' => ['string', 'regex:/^\d{4}-\d{1,2}$/'],
         ]);
 
         $edit = null;
@@ -898,6 +905,15 @@ class StudentPaymentController extends Controller
             $edit = $this->editContext($student, $validated['edit_from'], $validated['edit_to']);
             if ($edit === null) {
                 return back()->withErrors(['edit' => '找不到要編輯的帳期，可能已被修改，請重新整理。']);
+            }
+        }
+
+        /** @var array<int, list<string>>|null $courseMonths */
+        $courseMonths = null;
+        if (! empty($validated['course_months'])) {
+            $courseMonths = [];
+            foreach ($validated['course_months'] as $cid => $keys) {
+                $courseMonths[(int) $cid] = array_values(array_unique($keys));
             }
         }
 
@@ -1008,14 +1024,15 @@ class StudentPaymentController extends Controller
                 $startDate,
                 $chargeMaterialCourseIds,
                 $materialHalfCharges,
+                $courseMonths,
             );
         }
 
         if ($quote['lines'] === []) {
-            return back()->withErrors(['course_ids' => '所選課目沒有適用的收費標準，請先在收費標準中勾選課目。']);
+            return back()->withErrors(['course_ids' => '所選課目沒有適用的收費設定，請先在收費設定中勾選課目。']);
         }
         if (count($quote['lines']) !== count(array_unique(array_map('intval', $validated['course_ids'])))) {
-            return back()->withErrors(['course_ids' => '部分所選課目沒有適用的收費標準，請先完成收費標準設定。']);
+            return back()->withErrors(['course_ids' => '部分所選課目沒有適用的收費設定，請先完成收費設定設定。']);
         }
 
         $months = $quote['months'] ?? [];
@@ -1035,16 +1052,18 @@ class StudentPaymentController extends Controller
         $allowance = min($subtotal, max(0, $allowance));
         $quote['grand_total'] = max(0, $subtotal - $allowance);
 
-        $quoteCourseIds = collect($quote['lines'])->pluck('course_id')->map(fn ($id) => (int) $id)->all();
         $overlapQuery = Reconciliation::query()
+            ->with('course:id,name')
             ->where('student_id', $student->id)
-            ->whereIn('course_id', $quoteCourseIds)
             ->where('status', '!=', 'cancelled')
-            ->where(function ($q) use ($months): void {
-                foreach ($months as $month) {
-                    $q->orWhere(fn ($w) => $w
-                        ->where('billing_year', (int) $month['y'])
-                        ->where('billing_month', (int) $month['m']));
+            ->where(function ($q) use ($quote, $months): void {
+                foreach ($quote['lines'] as $line) {
+                    foreach ($line['billing_months'] ?? $months as $month) {
+                        $q->orWhere(fn ($w) => $w
+                            ->where('course_id', (int) $line['course_id'])
+                            ->where('billing_year', (int) $month['y'])
+                            ->where('billing_month', (int) $month['m']));
+                    }
                 }
             });
         if ($edit !== null) {
@@ -1053,8 +1072,8 @@ class StudentPaymentController extends Controller
         $overlap = $overlapQuery
             ->orderBy('billing_year')
             ->orderBy('billing_month')
-            ->get(['billing_year', 'billing_month'])
-            ->map(fn (Reconciliation $r): string => $r->billing_year.'/'.$r->billing_month)
+            ->get(['course_id', 'billing_year', 'billing_month'])
+            ->map(fn (Reconciliation $r): string => ($r->course?->name ? $r->course->name.' ' : '').$r->billing_year.'/'.$r->billing_month)
             ->unique()
             ->values()
             ->all();
@@ -1146,28 +1165,23 @@ class StudentPaymentController extends Controller
             return back()->withErrors(['renewal' => '尚無可用的收款紀錄，請先用「新增收款」產生第一期帳。']);
         }
 
-        $startDate = BillingRenewal::nextStartDate($snapshot['end_year'], $snapshot['end_month']);
-        $sessions = BillingRenewal::defaultSessions(
+        $plan = BillingRenewal::perCourseNextPeriod(
             $student,
             $snapshot['course_ids'],
-            $startDate,
+            BillingRenewal::nextStartDate($snapshot['end_year'], $snapshot['end_month']),
             $snapshot['pay_cycle'],
         );
+        $startDate = $plan['start_date'];
+        $sessions = $plan['sessions'];
 
         if ($sessions === []) {
             return back()->withErrors(['renewal' => '無法依科目上課日預選堂次，請確認課程已設定上課時段後再試，或改用「新增收款」。']);
         }
 
-        $sessionMonths = collect($sessions)
-            ->map(fn (array $s): array => ['y' => (int) substr($s['date'], 0, 4), 'm' => (int) substr($s['date'], 5, 2)])
-            ->unique(fn (array $m): string => $m['y'].'-'.$m['m'])
-            ->values()
-            ->all();
         $subjectsById = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id')->all();
-        $materialCharges = MaterialHalfYear::autoChargesForMonths(
+        $materialCharges = MaterialHalfYear::autoChargesForCourseMonths(
             $student,
-            $snapshot['course_ids'],
-            $sessionMonths,
+            $plan['course_months'],
             $subjectsById,
         );
 
@@ -1180,10 +1194,11 @@ class StudentPaymentController extends Controller
             $startDate,
             [],
             $materialCharges,
+            $plan['split'] ? $plan['course_months'] : null,
         );
 
         if ($quote['lines'] === []) {
-            return back()->withErrors(['renewal' => '所選課目沒有適用的收費標準，請先完成收費標準設定。']);
+            return back()->withErrors(['renewal' => '所選課目沒有適用的收費設定，請先完成收費設定設定。']);
         }
 
         $months = $quote['months'] ?? [];
@@ -1191,8 +1206,10 @@ class StudentPaymentController extends Controller
             return back()->withErrors(['renewal' => '無法推導下一期帳期月份。']);
         }
 
-        if (BillingRenewal::hasPaidConflicts($student, $snapshot['course_ids'], $months)) {
-            return back()->withErrors(['renewal' => '下一期帳期中已有已繳紀錄，請勿重複產生。']);
+        foreach ($quote['lines'] as $line) {
+            if (BillingRenewal::hasPaidConflicts($student, [(int) $line['course_id']], $line['billing_months'] ?? $months)) {
+                return back()->withErrors(['renewal' => '下一期帳期中已有已繳紀錄，請勿重複產生。']);
+            }
         }
 
         $receiptNo = DB::transaction(function () use ($student, $snapshot, $quote, $materialCharges, $startDate): ?string {
@@ -1223,14 +1240,14 @@ class StudentPaymentController extends Controller
     {
         $warnings = [];
         if ($student->grade_level_id === null) {
-            $warnings[] = '此學生尚未設定年級，無法對應收費標準。';
+            $warnings[] = '此學生尚未設定年級，無法對應收費設定。';
         }
         if ($subjects === []) {
             $warnings[] = '沒有適用此學生年級的可報名課目。';
         }
         $missingPlan = collect($subjects)->contains(fn (array $s): bool => empty($s['fee_plan_id']));
         if ($missingPlan) {
-            $warnings[] = '部分課目尚未綁定此學年、年級適用的收費標準，價格顯示為 0。';
+            $warnings[] = '部分課目尚未綁定此學年、年級適用的收費設定，價格顯示為 0。';
         }
         $missingWeekdays = collect($subjects)->contains(
             fn (array $s): bool => ($s['material_unit'] ?? '') === 'class_day'

@@ -3,9 +3,11 @@
 namespace App\Support;
 
 use App\Models\Course;
+use App\Models\CourseBundle;
 use App\Models\FeePlan;
 use App\Models\Student;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Schema;
 
 final class EnrollmentPricing
 {
@@ -19,7 +21,6 @@ final class EnrollmentPricing
      *   unit:string,
      *   list:int,
      *   q_single:int,
-     *   q_double:int,
      *   material:int,
      *   material_unit:string,
      *   weekdays:list<int>,
@@ -91,7 +92,6 @@ final class EnrollmentPricing
 
             $list = (int) ($plan?->list_price ?? 0);
             $qSingle = (int) ($plan?->quarter_single_price ?? $plan?->quarter_price ?? $list);
-            $qDouble = (int) ($plan?->quarter_double_price ?? $plan?->quarter_price ?? $qSingle);
             $material = (int) ($plan?->material_fee ?? 0);
             $materialUnit = (string) ($plan?->material_unit ?? 'term');
 
@@ -120,7 +120,6 @@ final class EnrollmentPricing
                 'unit' => $plan?->unit ?? 'month',
                 'list' => $list,
                 'q_single' => $qSingle,
-                'q_double' => $qDouble,
                 'material' => $material,
                 'material_unit' => $materialUnit,
                 'weekdays' => $weekdays,
@@ -206,7 +205,6 @@ final class EnrollmentPricing
      *   tuition_total:int,
      *   material_total:int,
      *   grand_total:int,
-     *   core_count:int,
      *   months:list<array{y:int,m:int}>,
      *   month_breakdown:list<array{y:int,m:int,tuition:int,material:int,subtotal:int}>,
      *   lines:list<array{
@@ -238,6 +236,12 @@ final class EnrollmentPricing
          * @var list<array{course_id:int, period_year:int, period_half:string, amount:int}>|null
          */
         ?array $materialHalfCharges = null,
+        /**
+         * 各科帳期月份（key=course_id，值為 "Y-n"）；未給的科目沿用全部帳期月份。
+         *
+         * @var array<int, list<string>>|null
+         */
+        ?array $courseMonths = null,
     ): array {
         $chargeMaterialSet = array_fill_keys(
             array_map('intval', $chargeMaterialCourseIds ?? []),
@@ -267,11 +271,50 @@ final class EnrollmentPricing
 
         $selectedIds = $selected->pluck('id')->map(fn ($id) => (int) $id)->all();
         $normalizedSessions = self::normalizeSessions($sessions, $startDate, $selectedIds);
+
+        /** @var array<int, array<string, true>> $courseMonthSet */
+        $courseMonthSet = [];
+        foreach ($courseMonths ?? [] as $cid => $keys) {
+            if (! is_array($keys) || ! in_array((int) $cid, $selectedIds, true)) {
+                continue;
+            }
+            foreach ($keys as $key) {
+                if (is_string($key) && preg_match('/^(\d{4})-(\d{1,2})$/', $key, $match)) {
+                    $courseMonthSet[(int) $cid][((int) $match[1]).'-'.((int) $match[2])] = true;
+                }
+            }
+        }
+        if ($courseMonthSet !== []) {
+            $normalizedSessions = array_values(array_filter(
+                $normalizedSessions,
+                function (array $session) use ($courseMonthSet): bool {
+                    $set = $courseMonthSet[(int) $session['course_id']] ?? null;
+                    if ($set === null) {
+                        return true;
+                    }
+                    $d = Carbon::parse($session['date']);
+
+                    return isset($set[$d->year.'-'.$d->month]);
+                }
+            ));
+        }
+
         $allDates = array_values(array_unique(array_column($normalizedSessions, 'date')));
         sort($allDates);
         $months = self::monthsFromDates($allDates);
-        $coreCount = $selected->where('pricing_group', PricingGroup::CORE)->count();
-        $monthCount = count($months);
+        foreach ($courseMonthSet as $set) {
+            foreach (array_keys($set) as $key) {
+                [$y, $m] = array_map('intval', explode('-', $key));
+                $months[] = ['y' => $y, 'm' => $m];
+            }
+        }
+        $months = collect($months)
+            ->unique(fn (array $m): string => $m['y'].'-'.$m['m'])
+            ->sortBy(fn (array $m): int => $m['y'] * 12 + $m['m'])
+            ->values()
+            ->all();
+
+        $bundlePrices = self::bundlePrices($student, $subjects->all(), $selectedIds);
 
         $datesByCourse = [];
         foreach ($normalizedSessions as $session) {
@@ -299,15 +342,25 @@ final class EnrollmentPricing
         $exactByMonth = [];
 
         foreach ($selected as $subject) {
-            $unitPrice = match ($payCycle) {
-                'monthly' => (int) $subject['list'],
-                'annual' => (int) $subject['q_double'],
-                default => $subject['pricing_group'] === PricingGroup::CORE && $coreCount >= 2
-                    ? (int) $subject['q_double']
-                    : (int) $subject['q_single'],
+            $bundle = $payCycle === 'monthly' ? null : ($bundlePrices[(int) $subject['id']] ?? null);
+            if ($bundle !== null && $bundle['price'] >= (int) $subject['q_single']) {
+                $bundle = null;
+            }
+            $unitPrice = match (true) {
+                $payCycle === 'monthly' => (int) $subject['list'],
+                $bundle !== null => $bundle['price'],
+                default => (int) $subject['q_single'],
             };
 
             $subjectDates = $datesByCourse[(int) $subject['id']] ?? [];
+            $ownMonthSet = $courseMonthSet[(int) $subject['id']] ?? null;
+            $subjectMonths = $ownMonthSet === null
+                ? $months
+                : array_values(array_filter(
+                    $months,
+                    fn (array $m): bool => isset($ownMonthSet[$m['y'].'-'.$m['m']])
+                ));
+            $monthCount = count($subjectMonths);
             $baseline = self::billingBaselineSessions($subject['weekdays'] ?? []);
             /** @var array<string, array{amount:int, attended:int, baseline:int}> $tuitionMonths */
             $tuitionMonths = [];
@@ -317,10 +370,10 @@ final class EnrollmentPricing
                 $blocks = max(1, (int) ceil(max(1, $monthCount) / 3));
                 $tuition = $unitPrice * $blocks;
                 $monthsUsed = $blocks;
-                if ($months !== []) {
+                if ($subjectMonths !== []) {
                     $per = intdiv($tuition, $monthCount);
                     $rem = $tuition % $monthCount;
-                    foreach ($months as $index => $month) {
+                    foreach ($subjectMonths as $index => $month) {
                         $key = ((int) $month['y']).'-'.((int) $month['m']);
                         $attended = self::countDatesInMonth($subjectDates, (int) $month['y'], (int) $month['m']);
                         $amount = $per + ($index === 0 ? $rem : 0);
@@ -333,7 +386,7 @@ final class EnrollmentPricing
                 }
             } else {
                 $monthsUsed = $monthCount;
-                foreach ($months as $month) {
+                foreach ($subjectMonths as $month) {
                     $y = (int) $month['y'];
                     $m = (int) $month['m'];
                     $key = $y.'-'.$m;
@@ -358,13 +411,13 @@ final class EnrollmentPricing
                 [$material, $materialMonths, $materialNote] = self::materialForSubject(
                     $subject,
                     $subjectDates,
-                    $months,
+                    $subjectMonths,
                     isset($chargeMaterialSet[(int) $subject['id']]),
                 );
             } else {
                 [$material, $materialMonths, $materialNote] = self::materialForHalfCharges(
                     $subject,
-                    $months,
+                    $subjectMonths,
                     $halfChargesByCourse[(int) $subject['id']] ?? [],
                 );
             }
@@ -389,6 +442,8 @@ final class EnrollmentPricing
                 'tuition_months' => $tuitionMonths,
                 'material_note' => $materialNote,
                 'is_block' => $isBlock,
+                'billing_months' => $subjectMonths,
+                'bundle_name' => $bundle['name'] ?? null,
             ];
         }
 
@@ -436,11 +491,82 @@ final class EnrollmentPricing
             'tuition_total' => $tuitionTotal,
             'material_total' => $materialTotal,
             'grand_total' => $grandTotal,
-            'core_count' => $coreCount,
             'months' => $months,
             'month_breakdown' => $monthBreakdown,
             'lines' => $lines,
         ];
+    }
+
+    /**
+     * 適用此學生（年級、學年）的啟用中組合優惠。
+     *
+     * @return list<array{id:int, name:string, min_courses:int, price:int, course_ids:list<int>}>
+     */
+    public static function bundlesForStudent(Student $student): array
+    {
+        if (! Schema::hasTable('course_bundles')) {
+            return [];
+        }
+
+        return CourseBundle::query()
+            ->with('courses:id')
+            ->where('is_active', true)
+            ->where(fn ($q) => $q->whereNull('grade_level_id')->orWhere('grade_level_id', $student->grade_level_id))
+            ->where(function ($q) use ($student): void {
+                $q->whereNull('academic_year_id');
+                if ($student->academic_year_id !== null) {
+                    $q->orWhere('academic_year_id', $student->academic_year_id);
+                }
+            })
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get()
+            ->map(fn (CourseBundle $bundle): array => [
+                'id' => $bundle->id,
+                'name' => $bundle->name,
+                'min_courses' => $bundle->min_courses,
+                'price' => $bundle->price,
+                'course_ids' => $bundle->courses->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * 各科適用的組合優惠價（每科只取最便宜的組合，不疊加）。
+     * 是否符合組合看「報名中」的科目（本次收款＋報名科目），各科分開繳也維持優惠。
+     *
+     * @param  array<int, array<string, mixed>>  $subjectsById
+     * @param  list<int>  $selectedIds
+     * @return array<int, array{price:int, name:string}>
+     */
+    public static function bundlePrices(Student $student, array $subjectsById, array $selectedIds): array
+    {
+        $enrolled = [];
+        foreach (array_merge($selectedIds, PromotionCourses::intendedOrSnapshotCourseIds($student)) as $id) {
+            $subject = $subjectsById[(int) $id] ?? null;
+            if (is_array($subject) && ! empty($subject['fee_plan_id'])) {
+                $enrolled[(int) $id] = true;
+            }
+        }
+
+        $out = [];
+        foreach (self::bundlesForStudent($student) as $bundle) {
+            $matched = array_filter($bundle['course_ids'], fn (int $id): bool => isset($enrolled[$id]));
+            if (count($matched) < max(1, $bundle['min_courses'])) {
+                continue;
+            }
+            foreach ($bundle['course_ids'] as $courseId) {
+                if (! in_array($courseId, $selectedIds, true)) {
+                    continue;
+                }
+                if (! isset($out[$courseId]) || $bundle['price'] < $out[$courseId]['price']) {
+                    $out[$courseId] = ['price' => $bundle['price'], 'name' => $bundle['name']];
+                }
+            }
+        }
+
+        return $out;
     }
 
     /**

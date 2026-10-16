@@ -2,6 +2,7 @@
 
 use App\Models\AcademicYear;
 use App\Models\Course;
+use App\Models\CourseBundle;
 use App\Models\CourseCategory;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
@@ -55,8 +56,7 @@ function feePlanTestPlan(GradeLevel $grade, ?AcademicYear $year, array $override
         'pricing_group' => PricingGroup::CORE,
         'unit' => 'month',
         'list_price' => 3600,
-        'quarter_single_price' => 3200,
-        'quarter_double_price' => 3000,
+        'quarter_price' => 3200,
         'material_fee' => 0,
         'material_unit' => 'term',
         'sort_order' => 10,
@@ -75,9 +75,7 @@ function feePlanTestPayload(AcademicYear $year, GradeLevel $grade, array $course
         'unit' => 'month',
         'session_block_size' => null,
         'list_price' => 3600,
-        'quarter_price' => null,
-        'quarter_single_price' => 3200,
-        'quarter_double_price' => 3000,
+        'quarter_price' => 3200,
         'material_fee' => 0,
         'material_unit' => 'term',
         'sort_order' => 10,
@@ -96,6 +94,32 @@ test('fee plan creation stores selected courses', function () {
     $response->assertRedirect(route('fee-plans.index'));
     $plan = FeePlan::query()->sole();
     expect($plan->courses()->pluck('courses.id')->all())->toBe([$course->id]);
+});
+
+test('fee plan form saves and removes multi-course discounts', function () {
+    ['year' => $year, 'grade' => $grade, 'category' => $category] = feePlanTestContext();
+    $english = feePlanTestCourse($category, '英文');
+    $math = feePlanTestCourse($category, '數學');
+    $user = User::factory()->create();
+
+    $this->actingAs($user)->post(route('fee-plans.store'), feePlanTestPayload($year, $grade, [$english->id, $math->id], [
+        'bundles' => [
+            ['id' => null, 'name' => '', 'course_ids' => [$english->id, $math->id], 'min_courses' => 2, 'price' => 3000],
+        ],
+    ]))->assertRedirect(route('fee-plans.index'));
+
+    $bundle = CourseBundle::query()->sole();
+    expect($bundle->name)->toBe('英數 雙科')
+        ->and($bundle->grade_level_id)->toBe($grade->id)
+        ->and($bundle->academic_year_id)->toBe($year->id)
+        ->and($bundle->price)->toBe(3000);
+
+    $plan = FeePlan::query()->sole();
+    $this->actingAs($user)->put(route('fee-plans.update', $plan), feePlanTestPayload($year, $grade, [$english->id, $math->id], [
+        'bundles' => [],
+    ]))->assertRedirect(route('fee-plans.index'));
+
+    expect(CourseBundle::query()->count())->toBe(0);
 });
 
 test('fee plan update replaces selected courses', function () {
@@ -204,23 +228,35 @@ test('academic year plan takes priority over a shared plan', function () {
         ->and($subject['list'])->toBe(4200);
 });
 
-test('core double-course pricing remains available through pricing groups', function () {
+test('course bundle applies its price when enough bundled courses are enrolled', function () {
     ['year' => $year, 'grade' => $grade, 'category' => $category] = feePlanTestContext();
     $english = feePlanTestCourse($category, '英文');
     $math = feePlanTestCourse($category, '數學');
     $plan = feePlanTestPlan($grade, $year);
     $plan->courses()->attach([$english->id, $math->id]);
+    CourseBundle::query()->create([
+        'name' => '英數雙科',
+        'grade_level_id' => $grade->id,
+        'min_courses' => 2,
+        'price' => 3000,
+    ])->courses()->sync([$english->id, $math->id]);
     $student = Student::query()->create([
         'name' => '測試學生',
         'academic_year_id' => $year->id,
         'grade_level_id' => $grade->id,
     ]);
 
-    $quote = EnrollmentPricing::quote($student, [$english->id, $math->id], 'quarterly', [
+    $sessions = [
         ['date' => '2026-09-01', 'course_id' => $english->id],
         ['date' => '2026-09-02', 'course_id' => $math->id],
-    ]);
+    ];
 
-    expect($quote['core_count'])->toBe(2)
-        ->and($quote['tuition_total'])->toBe(6000);
+    $both = EnrollmentPricing::quote($student, [$english->id, $math->id], 'quarterly', $sessions);
+    $single = EnrollmentPricing::quote($student, [$english->id], 'quarterly', [$sessions[0]]);
+    $monthly = EnrollmentPricing::quote($student, [$english->id, $math->id], 'monthly', $sessions);
+
+    expect($both['tuition_total'])->toBe(6000)
+        ->and($both['lines'][0]['bundle_name'])->toBe('英數雙科')
+        ->and($single['tuition_total'])->toBe(3200)
+        ->and($monthly['tuition_total'])->toBe(7200);
 });

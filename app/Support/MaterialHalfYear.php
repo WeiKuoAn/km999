@@ -91,6 +91,33 @@ final class MaterialHalfYear
     }
 
     /**
+     * 各科依自己的帳期月份判斷是否跨到 1 月／7 月。
+     *
+     * @param  array<int, list<string>>  $courseMonths  key=course_id，值為 "Y-n"
+     * @param  array<int, array<string, mixed>>  $subjectsById
+     * @return list<array{course_id:int, period_year:int, period_half:string, amount:int}>
+     */
+    public static function autoChargesForCourseMonths(
+        Student $student,
+        array $courseMonths,
+        array $subjectsById,
+    ): array {
+        $out = [];
+        foreach ($courseMonths as $courseId => $keys) {
+            $months = array_map(function (string $key): array {
+                [$y, $m] = array_map('intval', explode('-', $key));
+
+                return ['y' => $y, 'm' => $m];
+            }, $keys);
+            foreach (self::autoChargesForMonths($student, [(int) $courseId], $months, $subjectsById) as $row) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * 回傳 asOf 所屬年與隔年各科 H1／H2 狀態（帳期可能跨年）。
      *
      * @param  list<int>  $courseIds

@@ -4,7 +4,6 @@ import { usePage } from '@inertiajs/vue3';
 import {
     ArrowRightLeft,
     BookOpenCheck,
-    CalendarOff,
     CalendarRange,
     ChartColumnBig,
     CircleDollarSign,
@@ -19,7 +18,6 @@ import {
     Wallet,
 } from 'lucide-vue-next';
 import { computed } from 'vue';
-import { useCloseMobileSidebar } from '@/composables/useCloseMobileSidebar';
 import AppLogo from '@/components/AppLogo.vue';
 import NavMain from '@/components/NavMain.vue';
 import NavUser from '@/components/NavUser.vue';
@@ -33,6 +31,7 @@ import {
     SidebarMenuItem,
     SidebarRail,
 } from '@/components/ui/sidebar';
+import { useCloseMobileSidebar } from '@/composables/useCloseMobileSidebar';
 import type { NavGroup, NavItem } from '@/types';
 
 const page = usePage();
@@ -132,34 +131,29 @@ const navGroups = computed<NavGroup[]>(() => {
                 icon: CalendarRange,
             },
             {
-                title: '假日／停課補課',
-                href: '/holidays',
-                icon: CalendarOff,
-            },
-            {
                 title: '年級編號',
                 href: '/grade-levels',
                 icon: Layers,
             },
             {
-                title: '收費標準',
-                href: '/fee-plans',
-                icon: CircleDollarSign,
-            },
-            {
-                title: '優惠管理',
+                title: '優惠設定',
                 href: '/fee-discounts',
                 icon: Percent,
             },
             {
-                title: '課程類別管理',
-                href: '/course-categories',
-                icon: Tags,
+                title: '收費設定',
+                href: '/fee-plans',
+                icon: CircleDollarSign,
             },
             {
                 title: '課程管理',
                 href: '/courses',
                 icon: BookOpenCheck,
+            },
+            {
+                title: '課程類別',
+                href: '/course-categories',
+                icon: Tags,
             },
         ],
     });
