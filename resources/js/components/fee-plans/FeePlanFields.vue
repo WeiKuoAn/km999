@@ -355,11 +355,7 @@ if (props.form.material_unit === 'subject') {
                     />
                 </div>
                 <div class="grid gap-1.5">
-                    <Label :for="`bundle-price-${i}`">{{
-                        isPeriodBilling
-                            ? `優惠價（每科每 ${months} 個月）`
-                            : '優惠價（每科每月）'
-                    }}</Label>
+                    <Label :for="`bundle-price-${i}`">優惠價（每科每月）</Label>
                     <Input
                         :id="`bundle-price-${i}`"
                         v-model.number="bundle.price"

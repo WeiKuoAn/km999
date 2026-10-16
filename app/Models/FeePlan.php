@@ -65,9 +65,19 @@ class FeePlan extends Model
         return $size === 3 ? '季' : $size.'個月';
     }
 
+    /** 列表顯示用：按期顯示一期總額（月價 × 期數） */
+    public function periodAmount(int $monthlyPrice): int
+    {
+        if ($this->unit !== 'session_block') {
+            return $monthlyPrice;
+        }
+
+        return $monthlyPrice * max(1, (int) ($this->session_block_size ?? 3));
+    }
+
     public function listPriceLabel(): string
     {
-        return number_format($this->list_price).'／'.$this->unitLabel();
+        return number_format($this->periodAmount((int) $this->list_price)).'／'.$this->unitLabel();
     }
 
     public function quarterLabel(): string
@@ -75,7 +85,7 @@ class FeePlan extends Model
         $quarterPrice = $this->quarter_single_price ?? $this->quarter_price;
 
         if ($quarterPrice !== null) {
-            return number_format($quarterPrice).'／'.$this->unitLabel();
+            return number_format($this->periodAmount((int) $quarterPrice)).'／'.$this->unitLabel();
         }
 
         return '—';

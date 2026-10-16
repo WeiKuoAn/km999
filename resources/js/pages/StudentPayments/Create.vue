@@ -1097,12 +1097,31 @@ const appliedBundleNames = computed(() => [
     ),
 ]);
 
-const unitPrice = (s: Subject) => {
+/** 一個月單價（定價／優惠／組合優惠） */
+const monthlyUnitPrice = (s: Subject) => {
     if (payCycle.value === 'monthly') {
-return s.list;
-}
+        return s.list;
+    }
 
     return appliedBundle(s)?.price ?? s.q_single;
+};
+
+/** 計價單位：按月＝月價；按期＝一期總額（月價 × 期數） */
+const unitPrice = (s: Subject) => {
+    const monthly = monthlyUnitPrice(s);
+    if (s.unit !== 'session_block') {
+        return monthly;
+    }
+
+    return monthly * Math.max(1, Number(s.session_block_size) || 3);
+};
+
+const cardPeriodPrice = (s: Subject, monthly: number) => {
+    if (s.unit !== 'session_block') {
+        return monthly;
+    }
+
+    return monthly * Math.max(1, Number(s.session_block_size) || 3);
 };
 
 const sessionDates = computed(() => uniqueDatesFromSessions(sessions.value));
@@ -2138,8 +2157,19 @@ defineOptions({
                                     >
                                 </div>
                                 <div class="text-xs text-muted-foreground">
-                                    定價 {{ s.list.toLocaleString() }}｜季繳
-                                    {{ s.q_single.toLocaleString() }}
+                                    定價
+                                    {{
+                                        cardPeriodPrice(
+                                            s,
+                                            s.list,
+                                        ).toLocaleString()
+                                    }}｜季繳
+                                    {{
+                                        cardPeriodPrice(
+                                            s,
+                                            s.q_single,
+                                        ).toLocaleString()
+                                    }}
                                     <span
                                         v-if="appliedBundle(s)"
                                         class="text-emerald-700"

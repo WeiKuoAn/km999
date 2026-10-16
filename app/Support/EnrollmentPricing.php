@@ -349,7 +349,8 @@ final class EnrollmentPricing
             if ($bundle !== null && $bundle['price'] >= (int) $subject['q_single']) {
                 $bundle = null;
             }
-            $unitPrice = match (true) {
+            // list / q_single / bundle 皆為「一個月」單價；按期再 × 一期月數
+            $monthlyPrice = match (true) {
                 $payCycle === 'monthly' => (int) $subject['list'],
                 $bundle !== null => $bundle['price'],
                 default => (int) $subject['q_single'],
@@ -369,6 +370,7 @@ final class EnrollmentPricing
             $tuitionMonths = [];
             $isBlock = ($subject['unit'] ?? 'month') === 'session_block';
             $blockSize = max(1, (int) ($subject['session_block_size'] ?? 3));
+            $unitPrice = $isBlock ? $monthlyPrice * $blockSize : $monthlyPrice;
 
             if ($isBlock) {
                 $blocks = max(1, (int) ceil(max(1, $monthCount) / $blockSize));

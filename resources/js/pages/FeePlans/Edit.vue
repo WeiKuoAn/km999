@@ -2,12 +2,7 @@
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import FeePlanFields from '@/components/fee-plans/FeePlanFields.vue';
 import { Button } from '@/components/ui/button';
-import {
-    billingKindFromPlan,
-    feePlanPayload,
-    periodMonths,
-    periodToMonthly,
-} from '@/lib/feePlanForm';
+import { billingKindFromPlan, feePlanPayload, periodMonths } from '@/lib/feePlanForm';
 import type {
     FeePlanBundleRow,
     FeePlanCourseOption,
@@ -47,8 +42,6 @@ const months = periodMonths(
     billingKind,
     props.plan.session_block_size ?? (billingKind === 'quarter' ? 3 : 4),
 );
-const storedQuarter =
-    props.plan.quarter_single_price ?? props.plan.quarter_price;
 
 const form = useForm<FeePlanFormData>({
     academic_year_id: props.plan.academic_year_id
@@ -62,11 +55,9 @@ const form = useForm<FeePlanFormData>({
     pricing_group: props.plan.pricing_group,
     billing_kind: billingKind,
     session_block_size: props.plan.session_block_size ?? months,
-    list_price: periodToMonthly(props.plan.list_price, billingKind, months),
+    list_price: props.plan.list_price,
     quarter_price:
-        storedQuarter === null || storedQuarter === undefined
-            ? ''
-            : periodToMonthly(storedQuarter, billingKind, months),
+        props.plan.quarter_single_price ?? props.plan.quarter_price ?? '',
     material_fee: props.plan.material_fee,
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
