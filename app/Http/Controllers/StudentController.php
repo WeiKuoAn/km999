@@ -170,13 +170,13 @@ class StudentController extends Controller
             'file' => [
                 'required',
                 'file',
-                'max:5120',
+                'max:20480',
                 'extensions:xlsx,xls,csv,txt',
             ],
         ], [
             'file.required' => '請選擇要上傳的 Excel 檔。',
             'file.extensions' => '請上傳 .xlsx、.xls 或 .csv 檔。',
-            'file.max' => '檔案請勿超過 5MB。',
+            'file.max' => '檔案請勿超過 20MB。',
         ]);
 
         $result = StudentImport::import($request->file('file'));
@@ -189,7 +189,7 @@ class StudentController extends Controller
 
         return to_route('students.index')
             ->with('success', $message)
-            ->with('import_errors', array_slice($result['errors'], 0, 50))
+            ->with('import_errors', $result['errors'])
             ->with('open_import', $result['errors'] !== []);
     }
 

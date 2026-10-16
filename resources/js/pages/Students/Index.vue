@@ -370,11 +370,9 @@ const resetFilters = () => {
                     v-if="importErrors.length"
                     class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950"
                 >
-                    <p class="font-medium">
-                        以下列未匯入（最多顯示 50 筆）：
-                    </p>
+                    <p class="font-medium">以下列未匯入：</p>
                     <ul
-                        class="mt-1.5 max-h-40 list-inside list-disc space-y-0.5 overflow-y-auto"
+                        class="mt-1.5 max-h-72 list-inside list-disc space-y-0.5 overflow-y-auto"
                     >
                         <li v-for="(err, i) in importErrors" :key="i">
                             {{ err }}
