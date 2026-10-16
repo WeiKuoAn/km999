@@ -110,6 +110,7 @@ const props = defineProps<{
         id: number;
         name: string;
         min_courses: number;
+        sort_order?: number;
         course_ids: number[];
         course_prices: Record<string | number, number | null>;
     }>;
@@ -1045,7 +1046,10 @@ const form = useForm({
     course_months: {} as Record<number, string[]>,
 });
 
-/** 組合優惠看報名中的科目；各科用自己的優惠價，未填價的科維持原價 */
+/**
+ * 組合優惠：符合科數較多 → 組合課全報齊 → 組合較小 優先。
+ * 同順位若該科留白（原價），不改吃其他組合的較低價。
+ */
 const bundleByCourse = computed(() => {
     const enrolled = new Set(
         [...selected.value, ...(props.enrolled_course_ids ?? [])].filter(
@@ -1053,31 +1057,73 @@ const bundleByCourse = computed(() => {
                 props.subjects.find((s) => s.id === id)?.fee_plan_id != null,
         ),
     );
+
+    type Qualified = {
+        bundle: NonNullable<typeof props.bundles>[number];
+        matched: number;
+        exact: boolean;
+        size: number;
+    };
+
+    const qualified: Qualified[] = [];
+    for (const bundle of props.bundles ?? []) {
+        const matchedIds = bundle.course_ids.filter((id) => enrolled.has(id));
+        const matched = matchedIds.length;
+        if (matched < Math.max(1, bundle.min_courses)) {
+            continue;
+        }
+        const size = bundle.course_ids.length;
+        qualified.push({
+            bundle,
+            matched,
+            exact: matched === size,
+            size,
+        });
+    }
+
+    const coursePrice = (
+        bundle: NonNullable<typeof props.bundles>[number],
+        courseId: number,
+    ): number | null | undefined => {
+        const prices = bundle.course_prices ?? {};
+        return prices[courseId] ?? prices[String(courseId)];
+    };
+
     const out = new Map<number, { price: number; name: string }>();
 
-    for (const bundle of props.bundles ?? []) {
-        const matched = bundle.course_ids.filter((id) => enrolled.has(id));
-
-        if (matched.length < Math.max(1, bundle.min_courses)) {
+    for (const courseId of selected.value) {
+        const candidates = qualified.filter((row) =>
+            row.bundle.course_ids.includes(courseId),
+        );
+        if (candidates.length === 0) {
             continue;
         }
 
-        for (const id of bundle.course_ids) {
-            if (!selected.value.includes(id)) {
-                continue;
+        candidates.sort((a, b) => {
+            if (a.matched !== b.matched) {
+                return b.matched - a.matched;
+            }
+            if (a.exact !== b.exact) {
+                return a.exact ? -1 : 1;
+            }
+            if (a.size !== b.size) {
+                return a.size - b.size;
+            }
+            const orderA = a.bundle.sort_order ?? 0;
+            const orderB = b.bundle.sort_order ?? 0;
+            if (orderA !== orderB) {
+                return orderA - orderB;
             }
 
-            const prices = bundle.course_prices ?? {};
-            const price = prices[id] ?? prices[String(id)];
-            if (price === null || price === undefined) {
-                continue;
-            }
+            return a.bundle.id - b.bundle.id;
+        });
 
-            const current = out.get(id);
-            if (!current || price < current.price) {
-                out.set(id, { price, name: bundle.name });
-            }
+        const best = candidates[0].bundle;
+        const price = coursePrice(best, courseId);
+        if (price === null || price === undefined) {
+            continue;
         }
+        out.set(courseId, { price, name: best.name });
     }
 
     return out;

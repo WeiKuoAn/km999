@@ -306,7 +306,7 @@ if (props.form.material_unit === 'subject') {
             <div>
                 <p class="text-sm font-medium">雙科／多科優惠</p>
                 <p class="text-xs text-muted-foreground">
-                    勾選一起報的課，並為「要打折的科」各自填每月優惠價；留白的科維持原價。沒有優惠就不用加。
+                    勾選一起報的課，並為「要打折的科」各自填每月優惠價；留白＝該科維持原價，且不會改吃其他組合的較低價。沒有優惠就不用加。
                 </p>
             </div>
             <Button type="button" variant="outline" size="sm" @click="addBundle">

@@ -498,7 +498,7 @@ final class EnrollmentPricing
     /**
      * 適用此學生（年級、學年）的啟用中組合優惠。
      *
-     * @return list<array{id:int, name:string, min_courses:int, course_ids:list<int>, course_prices:array<int, int|null>}>
+     * @return list<array{id:int, name:string, min_courses:int, sort_order:int, course_ids:list<int>, course_prices:array<int, int|null>}>
      */
     public static function bundlesForStudent(Student $student): array
     {
@@ -532,6 +532,7 @@ final class EnrollmentPricing
                     'id' => $bundle->id,
                     'name' => $bundle->name,
                     'min_courses' => $bundle->min_courses,
+                    'sort_order' => (int) $bundle->sort_order,
                     'course_ids' => $courseIds,
                     'course_prices' => $coursePrices,
                 ];
@@ -541,9 +542,10 @@ final class EnrollmentPricing
     }
 
     /**
-     * 各科適用的組合優惠價（每科只取最便宜的組合，不疊加）。
-     * 是否符合組合看「報名中」的科目（本次收款＋報名科目），各科分開繳也維持優惠。
-     * 組合內某科未填優惠價時，該科不套優惠（收原價）。
+     * 各科適用的組合優惠價。
+     * 是否符合組合看「報名中」的科目（本次收款＋報名科目）。
+     * 多個組合同時符合時：符合科數較多 → 全部組合課都有報（精準）→ 組合較小（較專）優先；
+     * 同順位若該組合將此科設為「原價」（未填價），則不套其他組合折扣。
      *
      * @param  array<int, array<string, mixed>>  $subjectsById
      * @param  list<int>  $selectedIds
@@ -559,24 +561,66 @@ final class EnrollmentPricing
             }
         }
 
-        $out = [];
+        /** @var list<array{bundle:array<string, mixed>, matched:int, exact:bool, size:int}> $qualified */
+        $qualified = [];
         foreach (self::bundlesForStudent($student) as $bundle) {
-            $matched = array_filter($bundle['course_ids'], fn (int $id): bool => isset($enrolled[$id]));
-            if (count($matched) < max(1, $bundle['min_courses'])) {
+            $matchedIds = array_values(array_filter(
+                $bundle['course_ids'],
+                fn (int $id): bool => isset($enrolled[$id])
+            ));
+            $matched = count($matchedIds);
+            if ($matched < max(1, (int) $bundle['min_courses'])) {
                 continue;
             }
-            foreach ($bundle['course_ids'] as $courseId) {
-                if (! in_array($courseId, $selectedIds, true)) {
-                    continue;
-                }
-                $price = $bundle['course_prices'][$courseId] ?? null;
-                if ($price === null) {
-                    continue;
-                }
-                if (! isset($out[$courseId]) || $price < $out[$courseId]['price']) {
-                    $out[$courseId] = ['price' => $price, 'name' => $bundle['name']];
-                }
+            $size = count($bundle['course_ids']);
+            $qualified[] = [
+                'bundle' => $bundle,
+                'matched' => $matched,
+                'exact' => $matched === $size,
+                'size' => $size,
+            ];
+        }
+
+        $out = [];
+        foreach ($selectedIds as $courseId) {
+            $courseId = (int) $courseId;
+            $candidates = array_values(array_filter(
+                $qualified,
+                fn (array $row): bool => in_array($courseId, $row['bundle']['course_ids'], true)
+            ));
+            if ($candidates === []) {
+                continue;
             }
+
+            usort($candidates, function (array $a, array $b): int {
+                if ($a['matched'] !== $b['matched']) {
+                    return $b['matched'] <=> $a['matched'];
+                }
+                if ($a['exact'] !== $b['exact']) {
+                    return $a['exact'] ? -1 : 1;
+                }
+                if ($a['size'] !== $b['size']) {
+                    return $a['size'] <=> $b['size'];
+                }
+                $orderA = (int) ($a['bundle']['sort_order'] ?? 0);
+                $orderB = (int) ($b['bundle']['sort_order'] ?? 0);
+                if ($orderA !== $orderB) {
+                    return $orderA <=> $orderB;
+                }
+
+                return ((int) $a['bundle']['id']) <=> ((int) $b['bundle']['id']);
+            });
+
+            // 排序後只套用最適合的那一組（避免通用雙科搶過專屬組合）
+            $best = $candidates[0]['bundle'];
+            $price = $best['course_prices'][$courseId] ?? null;
+            if ($price === null) {
+                continue;
+            }
+            $out[$courseId] = [
+                'price' => (int) $price,
+                'name' => (string) $best['name'],
+            ];
         }
 
         return $out;
