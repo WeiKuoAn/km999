@@ -110,8 +110,8 @@ const props = defineProps<{
         id: number;
         name: string;
         min_courses: number;
-        price: number;
         course_ids: number[];
+        course_prices: Record<string | number, number | null>;
     }>;
     material_status?: Array<{
         course_id: number;
@@ -1045,7 +1045,7 @@ const form = useForm({
     course_months: {} as Record<number, string[]>,
 });
 
-/** 組合優惠看報名中的科目（本次收款＋報名科目），各科分開繳也維持優惠；每科只取最便宜的組合 */
+/** 組合優惠看報名中的科目；各科用自己的優惠價，未填價的科維持原價 */
 const bundleByCourse = computed(() => {
     const enrolled = new Set(
         [...selected.value, ...(props.enrolled_course_ids ?? [])].filter(
@@ -1059,18 +1059,23 @@ const bundleByCourse = computed(() => {
         const matched = bundle.course_ids.filter((id) => enrolled.has(id));
 
         if (matched.length < Math.max(1, bundle.min_courses)) {
-continue;
-}
+            continue;
+        }
 
         for (const id of bundle.course_ids) {
             if (!selected.value.includes(id)) {
-continue;
-}
+                continue;
+            }
+
+            const prices = bundle.course_prices ?? {};
+            const price = prices[id] ?? prices[String(id)];
+            if (price === null || price === undefined) {
+                continue;
+            }
 
             const current = out.get(id);
-
-            if (!current || bundle.price < current.price) {
-                out.set(id, { price: bundle.price, name: bundle.name });
+            if (!current || price < current.price) {
+                out.set(id, { price, name: bundle.name });
             }
         }
     }
@@ -1098,30 +1103,12 @@ const appliedBundleNames = computed(() => [
 ]);
 
 /** 一個月單價（定價／優惠／組合優惠） */
-const monthlyUnitPrice = (s: Subject) => {
+const unitPrice = (s: Subject) => {
     if (payCycle.value === 'monthly') {
         return s.list;
     }
 
     return appliedBundle(s)?.price ?? s.q_single;
-};
-
-/** 計價單位：按月＝月價；按期＝一期總額（月價 × 期數） */
-const unitPrice = (s: Subject) => {
-    const monthly = monthlyUnitPrice(s);
-    if (s.unit !== 'session_block') {
-        return monthly;
-    }
-
-    return monthly * Math.max(1, Number(s.session_block_size) || 3);
-};
-
-const cardPeriodPrice = (s: Subject, monthly: number) => {
-    if (s.unit !== 'session_block') {
-        return monthly;
-    }
-
-    return monthly * Math.max(1, Number(s.session_block_size) || 3);
 };
 
 const sessionDates = computed(() => uniqueDatesFromSessions(sessions.value));
@@ -1153,17 +1140,9 @@ const isCourseMonth = (courseId: number, y: number, m: number) =>
     !isSplitMode.value ||
     (courseMonthKeys.value[courseId] ?? []).includes(monthKey(y, m));
 
-const blockTuition = (s: Subject) => {
-    const blockSize = Math.max(1, Number(s.session_block_size) || 3);
-
-    return (
-        unitPrice(s) *
-        Math.max(
-            1,
-            Math.ceil(Math.max(1, courseBillingMonths(s.id).length) / blockSize),
-        )
-    );
-};
+/** 按期：月價 × 勾選月數（與表單「一個月價」一致） */
+const blockTuition = (s: Subject) =>
+    unitPrice(s) * courseBillingMonths(s.id).length;
 
 const countSessionsInMonth = (courseId: number, y: number, m: number) =>
     sessions.value.filter((entry) => {
@@ -1550,25 +1529,15 @@ const monthBreakdown = computed(() => {
         .map((id) => props.subjects.find((x) => x.id === id))
         .filter((s): s is Subject => !!s);
 
-    // 堂數制科目：總額平均攤到該科自己的帳期月份，餘數放第一個月（與後端一致）
+    // 按期科目：每月收滿額月價（不依出席比例）
     const blockByMonth = new Map<string, number>();
 
     for (const s of selectedSubjects.filter((x) => x.unit === 'session_block')) {
         const months = courseBillingMonths(s.id);
-
-        if (months.length === 0) {
-            continue;
-        }
-
-        const total = blockTuition(s);
-        const per = Math.floor(total / months.length);
-        const rem = total % months.length;
-        months.forEach((month, index) => {
+        const monthly = unitPrice(s);
+        months.forEach((month) => {
             const key = monthKey(month.y, month.m);
-            blockByMonth.set(
-                key,
-                (blockByMonth.get(key) ?? 0) + per + (index === 0 ? rem : 0),
-            );
+            blockByMonth.set(key, (blockByMonth.get(key) ?? 0) + monthly);
         });
     }
 
@@ -2157,19 +2126,8 @@ defineOptions({
                                     >
                                 </div>
                                 <div class="text-xs text-muted-foreground">
-                                    定價
-                                    {{
-                                        cardPeriodPrice(
-                                            s,
-                                            s.list,
-                                        ).toLocaleString()
-                                    }}｜季繳
-                                    {{
-                                        cardPeriodPrice(
-                                            s,
-                                            s.q_single,
-                                        ).toLocaleString()
-                                    }}
+                                    定價 {{ s.list.toLocaleString() }}/月｜季繳
+                                    {{ s.q_single.toLocaleString() }}/月
                                     <span
                                         v-if="appliedBundle(s)"
                                         class="text-emerald-700"

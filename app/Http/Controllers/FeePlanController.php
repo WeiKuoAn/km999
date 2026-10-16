@@ -37,7 +37,7 @@ class FeePlanController extends Controller
         }
 
         $bundles = CourseBundle::query()
-            ->with('courses:id')
+            ->with('courses:id,name')
             ->where('is_active', true)
             ->orderBy('sort_order')
             ->orderBy('id')
@@ -91,14 +91,8 @@ class FeePlanController extends Controller
         return Inertia::render('FeePlans/Edit', [
             'plan' => [
                 ...$this->planPayload($feePlan),
-                'bundles' => $this->matchingBundles($feePlan, CourseBundle::query()->with('courses:id')->orderBy('sort_order')->orderBy('id')->get())
-                    ->map(fn (CourseBundle $bundle): array => [
-                        'id' => $bundle->id,
-                        'name' => $bundle->name,
-                        'course_ids' => $bundle->courses->pluck('id')->map(fn ($id): int => (int) $id)->values()->all(),
-                        'min_courses' => $bundle->min_courses,
-                        'price' => $bundle->price,
-                    ])
+                'bundles' => $this->matchingBundles($feePlan, CourseBundle::query()->with('courses:id,name')->orderBy('sort_order')->orderBy('id')->get())
+                    ->map(fn (CourseBundle $bundle): array => $this->bundleFormRow($bundle))
                     ->values()
                     ->all(),
             ],
@@ -148,12 +142,23 @@ class FeePlanController extends Controller
                 $name = $this->defaultBundleName($courseIds, $minCourses, $courseNames->all());
             }
 
+            /** @var array<int, int|null> $coursePrices */
+            $coursePrices = [];
+            foreach ($courseIds as $courseId) {
+                $raw = $row['course_prices'][$courseId] ?? $row['course_prices'][(string) $courseId] ?? null;
+                $coursePrices[$courseId] = $raw === null || $raw === ''
+                    ? null
+                    : (int) $raw;
+            }
+            $priced = array_values(array_filter($coursePrices, fn (?int $p): bool => $p !== null));
+
             $attributes = [
                 'name' => $name,
                 'grade_level_id' => $plan->grade_level_id,
                 'academic_year_id' => $plan->academic_year_id,
                 'min_courses' => $minCourses,
-                'price' => (int) $row['price'],
+                // 摘要：有填優惠的科最低價（相容舊欄位／列表）
+                'price' => $priced === [] ? 0 : min($priced),
                 'is_active' => true,
                 'sort_order' => $plan->sort_order,
             ];
@@ -164,7 +169,12 @@ class FeePlanController extends Controller
             } else {
                 $bundle = CourseBundle::query()->create($attributes);
             }
-            $bundle->courses()->sync($courseIds);
+
+            $sync = [];
+            foreach ($courseIds as $courseId) {
+                $sync[$courseId] = ['price' => $coursePrices[$courseId]];
+            }
+            $bundle->courses()->sync($sync);
             $keepIds[] = $bundle->id;
         }
 
@@ -229,11 +239,11 @@ class FeePlanController extends Controller
             'bundles.*.name' => ['nullable', 'string', 'max:64'],
             'bundles.*.course_ids' => ['required', 'array', 'min:2'],
             'bundles.*.course_ids.*' => ['required', 'integer', 'exists:courses,id'],
+            'bundles.*.course_prices' => ['nullable', 'array'],
+            'bundles.*.course_prices.*' => ['nullable', 'integer', 'min:0'],
             'bundles.*.min_courses' => ['required', 'integer', 'min:2'],
-            'bundles.*.price' => ['required', 'integer', 'min:0'],
         ], [
             'bundles.*.course_ids.min' => '優惠至少要勾 2 門課。',
-            'bundles.*.price.required' => '請填優惠價。',
         ]);
 
         $bundleErrors = [];
@@ -244,6 +254,18 @@ class FeePlanController extends Controller
             }
             if (array_intersect(array_map('intval', $bundle['course_ids']), array_map('intval', $validated['course_ids'])) === []) {
                 $bundleErrors["bundles.{$i}.course_ids"] = '優惠要包含這個收費設定的課程。';
+            }
+            $prices = $bundle['course_prices'] ?? [];
+            $hasPriced = false;
+            foreach ($bundle['course_ids'] as $courseId) {
+                $raw = $prices[$courseId] ?? $prices[(string) $courseId] ?? null;
+                if ($raw !== null && $raw !== '') {
+                    $hasPriced = true;
+                    break;
+                }
+            }
+            if (! $hasPriced) {
+                $bundleErrors["bundles.{$i}.course_prices"] = '請至少為一科填寫優惠價（留白的科維持原價）。';
             }
         }
         if ($bundleErrors !== []) {
@@ -315,8 +337,37 @@ class FeePlanController extends Controller
     }
 
     /**
+     * @return array{id:int, name:string, course_ids:list<int>, course_prices:array<int, int|null>, min_courses:int, price:int, summary:string}
+     */
+    private function bundleFormRow(CourseBundle $bundle): array
+    {
+        $courseIds = $bundle->courses->pluck('id')->map(fn ($id): int => (int) $id)->values()->all();
+        $coursePrices = [];
+        $parts = [];
+        foreach ($bundle->courses as $course) {
+            $id = (int) $course->id;
+            $raw = $course->pivot->price ?? null;
+            $price = $raw === null ? null : (int) $raw;
+            $coursePrices[$id] = $price;
+            $parts[] = $price === null
+                ? $course->name.'（原價）'
+                : $course->name.' '.number_format($price).'／月';
+        }
+
+        return [
+            'id' => $bundle->id,
+            'name' => $bundle->name,
+            'course_ids' => $courseIds,
+            'course_prices' => $coursePrices,
+            'min_courses' => $bundle->min_courses,
+            'price' => (int) $bundle->price,
+            'summary' => implode('、', $parts),
+        ];
+    }
+
+    /**
      * @param  Collection<int, CourseBundle>  $bundles
-     * @return list<array{id:int, name:string, price:int, min_courses:int}>
+     * @return list<array{id:int, name:string, price:int, min_courses:int, summary:string}>
      */
     private function bundlesForPlan(FeePlan $plan, Collection $bundles): array
     {
@@ -326,6 +377,7 @@ class FeePlanController extends Controller
                 'name' => $bundle->name,
                 'price' => $bundle->price,
                 'min_courses' => $bundle->min_courses,
+                'summary' => $this->bundleFormRow($bundle)['summary'],
             ])
             ->all();
     }

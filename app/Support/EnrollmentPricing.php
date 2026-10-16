@@ -349,8 +349,8 @@ final class EnrollmentPricing
             if ($bundle !== null && $bundle['price'] >= (int) $subject['q_single']) {
                 $bundle = null;
             }
-            // list / q_single / bundle 皆為「一個月」單價；按期再 × 一期月數
-            $monthlyPrice = match (true) {
+            // list / q_single / bundle 皆為「一個月」單價；學費＝月價 × 帳期月數
+            $unitPrice = match (true) {
                 $payCycle === 'monthly' => (int) $subject['list'],
                 $bundle !== null => $bundle['price'],
                 default => (int) $subject['q_single'],
@@ -369,29 +369,21 @@ final class EnrollmentPricing
             /** @var array<string, array{amount:int, attended:int, baseline:int}> $tuitionMonths */
             $tuitionMonths = [];
             $isBlock = ($subject['unit'] ?? 'month') === 'session_block';
-            $blockSize = max(1, (int) ($subject['session_block_size'] ?? 3));
-            $unitPrice = $isBlock ? $monthlyPrice * $blockSize : $monthlyPrice;
+            $monthsUsed = $monthCount;
 
             if ($isBlock) {
-                $blocks = max(1, (int) ceil(max(1, $monthCount) / $blockSize));
-                $tuition = $unitPrice * $blocks;
-                $monthsUsed = $blocks;
-                if ($subjectMonths !== []) {
-                    $per = intdiv($tuition, $monthCount);
-                    $rem = $tuition % $monthCount;
-                    foreach ($subjectMonths as $index => $month) {
-                        $key = ((int) $month['y']).'-'.((int) $month['m']);
-                        $attended = self::countDatesInMonth($subjectDates, (int) $month['y'], (int) $month['m']);
-                        $amount = $per + ($index === 0 ? $rem : 0);
-                        $tuitionMonths[$key] = [
-                            'amount' => $amount,
-                            'attended' => $attended,
-                            'baseline' => $baseline,
-                        ];
-                    }
+                // 按期：不依出席比例，每月收滿額月價
+                $tuition = $unitPrice * max(0, $monthCount);
+                foreach ($subjectMonths as $month) {
+                    $key = ((int) $month['y']).'-'.((int) $month['m']);
+                    $attended = self::countDatesInMonth($subjectDates, (int) $month['y'], (int) $month['m']);
+                    $tuitionMonths[$key] = [
+                        'amount' => $unitPrice,
+                        'attended' => $attended,
+                        'baseline' => $baseline,
+                    ];
                 }
             } else {
-                $monthsUsed = $monthCount;
                 foreach ($subjectMonths as $month) {
                     $y = (int) $month['y'];
                     $m = (int) $month['m'];
@@ -441,7 +433,7 @@ final class EnrollmentPricing
                 'course_name' => (string) $subject['name'],
                 'unit_price' => $unitPrice,
                 'months' => $monthsUsed,
-                'tuition' => $isBlock ? ($unitPrice * max(1, (int) ceil(max(1, $monthCount) / $blockSize))) : 0,
+                'tuition' => $isBlock ? ($unitPrice * max(0, $monthCount)) : 0,
                 'material' => $material,
                 'material_unit' => (string) ($subject['material_unit'] ?? 'term'),
                 'material_months' => $materialMonths,
@@ -506,7 +498,7 @@ final class EnrollmentPricing
     /**
      * 適用此學生（年級、學年）的啟用中組合優惠。
      *
-     * @return list<array{id:int, name:string, min_courses:int, price:int, course_ids:list<int>}>
+     * @return list<array{id:int, name:string, min_courses:int, course_ids:list<int>, course_prices:array<int, int|null>}>
      */
     public static function bundlesForStudent(Student $student): array
     {
@@ -527,13 +519,23 @@ final class EnrollmentPricing
             ->orderBy('sort_order')
             ->orderBy('id')
             ->get()
-            ->map(fn (CourseBundle $bundle): array => [
-                'id' => $bundle->id,
-                'name' => $bundle->name,
-                'min_courses' => $bundle->min_courses,
-                'price' => $bundle->price,
-                'course_ids' => $bundle->courses->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
-            ])
+            ->map(function (CourseBundle $bundle): array {
+                $courseIds = $bundle->courses->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
+                $coursePrices = [];
+                foreach ($bundle->courses as $course) {
+                    $id = (int) $course->id;
+                    $raw = $course->pivot->price ?? null;
+                    $coursePrices[$id] = $raw === null ? null : (int) $raw;
+                }
+
+                return [
+                    'id' => $bundle->id,
+                    'name' => $bundle->name,
+                    'min_courses' => $bundle->min_courses,
+                    'course_ids' => $courseIds,
+                    'course_prices' => $coursePrices,
+                ];
+            })
             ->values()
             ->all();
     }
@@ -541,6 +543,7 @@ final class EnrollmentPricing
     /**
      * 各科適用的組合優惠價（每科只取最便宜的組合，不疊加）。
      * 是否符合組合看「報名中」的科目（本次收款＋報名科目），各科分開繳也維持優惠。
+     * 組合內某科未填優惠價時，該科不套優惠（收原價）。
      *
      * @param  array<int, array<string, mixed>>  $subjectsById
      * @param  list<int>  $selectedIds
@@ -566,8 +569,12 @@ final class EnrollmentPricing
                 if (! in_array($courseId, $selectedIds, true)) {
                     continue;
                 }
-                if (! isset($out[$courseId]) || $bundle['price'] < $out[$courseId]['price']) {
-                    $out[$courseId] = ['price' => $bundle['price'], 'name' => $bundle['name']];
+                $price = $bundle['course_prices'][$courseId] ?? null;
+                if ($price === null) {
+                    continue;
+                }
+                if (! isset($out[$courseId]) || $price < $out[$courseId]['price']) {
+                    $out[$courseId] = ['price' => $price, 'name' => $bundle['name']];
                 }
             }
         }

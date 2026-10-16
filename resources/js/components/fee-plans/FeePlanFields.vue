@@ -15,7 +15,7 @@ import type {
     FeePlanCourseOption,
     FeePlanFormData,
 } from '@/lib/feePlanForm';
-import { periodMonths } from '@/lib/feePlanForm';
+import { emptyCoursePrices, periodMonths } from '@/lib/feePlanForm';
 
 const props = defineProps<{
     form: InertiaForm<FeePlanFormData>;
@@ -102,20 +102,30 @@ const bundleCourseOptions = computed(() => {
 });
 
 const addBundle = () => {
+    const courseIds = [...planCourseIds.value];
     props.form.bundles.push({
         id: null,
         name: '',
-        course_ids: [...planCourseIds.value],
+        course_ids: courseIds,
+        course_prices: emptyCoursePrices(courseIds),
         min_courses: 2,
-        price: '',
     });
 };
 
 const toggleBundleCourse = (bundle: FeePlanBundleRow, courseId: number) => {
-    bundle.course_ids = bundle.course_ids.includes(courseId)
-        ? bundle.course_ids.filter((id) => id !== courseId)
-        : [...bundle.course_ids, courseId];
+    if (bundle.course_ids.includes(courseId)) {
+        bundle.course_ids = bundle.course_ids.filter((id) => id !== courseId);
+        const next = { ...bundle.course_prices };
+        delete next[courseId];
+        bundle.course_prices = next;
+        return;
+    }
+    bundle.course_ids = [...bundle.course_ids, courseId];
+    bundle.course_prices = { ...bundle.course_prices, [courseId]: '' };
 };
+
+const selectedBundleCourses = (bundle: FeePlanBundleRow) =>
+    bundleCourseOptions.value.filter((c) => bundle.course_ids.includes(c.id));
 
 const bundleError = (index: number, field: string) =>
     (props.form.errors as Record<string, string | undefined>)[
@@ -296,7 +306,7 @@ if (props.form.material_unit === 'subject') {
             <div>
                 <p class="text-sm font-medium">雙科／多科優惠</p>
                 <p class="text-xs text-muted-foreground">
-                    上面是單科價。學生同時報了優惠裡的課，會改收這裡的優惠價。沒有優惠就不用加。
+                    勾選一起報的課，並為「要打折的科」各自填每月優惠價；留白的科維持原價。沒有優惠就不用加。
                 </p>
             </div>
             <Button type="button" variant="outline" size="sm" @click="addBundle">
@@ -343,7 +353,32 @@ if (props.form.material_unit === 'subject') {
                 <InputError :message="bundleError(i, 'course_ids')" />
             </div>
 
-            <div class="grid gap-3 sm:grid-cols-[auto_auto_1fr_auto] sm:items-end">
+            <div
+                v-if="selectedBundleCourses(bundle).length"
+                class="space-y-2 rounded-md border bg-background p-2.5"
+            >
+                <p class="text-xs font-medium text-muted-foreground">
+                    各科每月優惠價（留白＝該科不優惠）
+                </p>
+                <div
+                    v-for="course in selectedBundleCourses(bundle)"
+                    :key="`${i}-${course.id}`"
+                    class="flex flex-wrap items-center gap-2"
+                >
+                    <span class="min-w-28 text-sm">{{ course.name }}</span>
+                    <Input
+                        v-model.number="bundle.course_prices[course.id]"
+                        type="number"
+                        min="0"
+                        class="w-36"
+                        placeholder="原價"
+                    />
+                    <span class="text-xs text-muted-foreground">／月</span>
+                </div>
+                <InputError :message="bundleError(i, 'course_prices')" />
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-[auto_1fr_auto] sm:items-end">
                 <div class="grid gap-1.5">
                     <Label :for="`bundle-min-${i}`">至少報幾科</Label>
                     <Input
@@ -352,16 +387,6 @@ if (props.form.material_unit === 'subject') {
                         type="number"
                         min="2"
                         class="w-24"
-                    />
-                </div>
-                <div class="grid gap-1.5">
-                    <Label :for="`bundle-price-${i}`">優惠價（每科每月）</Label>
-                    <Input
-                        :id="`bundle-price-${i}`"
-                        v-model.number="bundle.price"
-                        type="number"
-                        min="0"
-                        class="w-36"
                     />
                 </div>
                 <div class="grid gap-1.5">
@@ -384,7 +409,6 @@ if (props.form.material_unit === 'subject') {
                 </Button>
             </div>
             <InputError :message="bundleError(i, 'min_courses')" />
-            <InputError :message="bundleError(i, 'price')" />
         </div>
     </div>
 

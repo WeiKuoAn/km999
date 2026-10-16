@@ -15,7 +15,12 @@ type Plan = {
     grade_name: string | null;
     group_name: string;
     course_names: string[];
-    bundles: Array<{ id: number; name: string; price: number }>;
+    bundles: Array<{
+        id: number;
+        name: string;
+        price: number;
+        summary: string;
+    }>;
     list_label: string;
     quarter_label: string;
     material_label: string;
@@ -129,8 +134,9 @@ const destroyPlan = (id: number) => {
                     <span
                         v-for="(bundle, i) in plan.bundles"
                         :key="bundle.id"
-                        >{{ i > 0 ? '、' : '' }}{{ bundle.name }}
-                        {{ bundle.price.toLocaleString() }}／月</span
+                        >{{ i > 0 ? '；' : '' }}{{ bundle.name }}：{{
+                            bundle.summary
+                        }}</span
                     >
                 </MobileRecordField>
                 <MobileRecordField label="教材費">{{
@@ -192,8 +198,7 @@ const destroyPlan = (id: number) => {
                                 :key="bundle.id"
                                 class="text-emerald-700"
                             >
-                                {{ bundle.name }}
-                                {{ bundle.price.toLocaleString() }}／月
+                                {{ bundle.name }}：{{ bundle.summary }}
                             </div>
                             <span
                                 v-if="plan.bundles.length === 0"

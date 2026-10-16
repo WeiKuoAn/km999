@@ -2,7 +2,12 @@
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import FeePlanFields from '@/components/fee-plans/FeePlanFields.vue';
 import { Button } from '@/components/ui/button';
-import { billingKindFromPlan, feePlanPayload, periodMonths } from '@/lib/feePlanForm';
+import {
+    billingKindFromPlan,
+    emptyCoursePrices,
+    feePlanPayload,
+    periodMonths,
+} from '@/lib/feePlanForm';
 import type {
     FeePlanBundleRow,
     FeePlanCourseOption,
@@ -27,7 +32,13 @@ const props = defineProps<{
         material_unit: 'term' | 'subject' | 'class_day';
         sort_order: number;
         is_active: boolean;
-        bundles: FeePlanBundleRow[];
+        bundles: Array<{
+            id: number | null;
+            name: string;
+            course_ids: number[];
+            course_prices: Record<number, number | null>;
+            min_courses: number;
+        }>;
     };
     academicYears: Array<{ id: number; year_code: string; name: string }>;
     gradeLevels: Array<{ id: number; name: string }>;
@@ -62,10 +73,26 @@ const form = useForm<FeePlanFormData>({
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
     is_active: props.plan.is_active,
-    bundles: props.plan.bundles.map((bundle) => ({
-        ...bundle,
-        course_ids: [...bundle.course_ids],
-    })),
+    bundles: props.plan.bundles.map((bundle): FeePlanBundleRow => {
+        const courseIds = [...bundle.course_ids];
+        const prices = emptyCoursePrices(courseIds);
+        for (const id of courseIds) {
+            const raw =
+                bundle.course_prices?.[id] ??
+                (
+                    bundle.course_prices as Record<string, number | null>
+                )?.[String(id)];
+            prices[id] = raw === null || raw === undefined ? '' : raw;
+        }
+
+        return {
+            id: bundle.id,
+            name: bundle.name,
+            course_ids: courseIds,
+            course_prices: prices,
+            min_courses: bundle.min_courses,
+        };
+    }),
 });
 
 defineOptions({

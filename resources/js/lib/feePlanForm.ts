@@ -14,8 +14,9 @@ export type FeePlanBundleRow = {
     id: number | null;
     name: string;
     course_ids: number[];
+    /** 各科每月優惠價；留白＝該科不優惠（收原價） */
+    course_prices: Record<number, number | ''>;
     min_courses: number;
-    price: number | '';
 };
 
 /** 表單上的收費方式（存檔時 quarter／other → session_block） */
@@ -67,6 +68,10 @@ export function periodMonths(kind: FeePlanBillingKind, blockSize: number | ''): 
     return Math.max(1, Number(blockSize) || 4);
 }
 
+export function emptyCoursePrices(courseIds: number[]): Record<number, number | ''> {
+    return Object.fromEntries(courseIds.map((id) => [id, '' as const]));
+}
+
 export function feePlanPayload(data: FeePlanFormData) {
     const months = periodMonths(data.billing_kind, data.session_block_size);
 
@@ -95,8 +100,13 @@ export function feePlanPayload(data: FeePlanFormData) {
             id: bundle.id,
             name: bundle.name,
             course_ids: bundle.course_ids.map(Number),
+            course_prices: Object.fromEntries(
+                bundle.course_ids.map((id) => [
+                    id,
+                    emptyToNull(bundle.course_prices[id]),
+                ]),
+            ),
             min_courses: Number(bundle.min_courses || 2),
-            price: bundle.price === '' ? null : Number(bundle.price),
         })),
     };
 }

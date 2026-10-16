@@ -7,7 +7,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
- * 組合優惠：報了組合內至少 min_courses 科，組合內各科季繳／年繳每月改收 price。
+ * 組合優惠：報了組合內至少 min_courses 科時生效。
+ * 各科優惠價存在 pivot course_bundle_course.price（null＝該科不優惠，收原價）。
+ * course_bundles.price 僅作列表摘要（各科有填優惠價的最低值）。
  */
 class CourseBundle extends Model
 {
@@ -43,6 +45,7 @@ class CourseBundle extends Model
 
     public function courses(): BelongsToMany
     {
-        return $this->belongsToMany(Course::class, 'course_bundle_course');
+        return $this->belongsToMany(Course::class, 'course_bundle_course')
+            ->withPivot('price');
     }
 }
