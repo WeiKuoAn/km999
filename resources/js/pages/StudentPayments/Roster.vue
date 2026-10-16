@@ -130,7 +130,7 @@ defineOptions({
                     </a>
                 </Button>
                 <Button variant="outline" as-child>
-                    <a :href="noticesHref()">
+                    <a :href="noticesHref()" target="_blank" rel="noopener">
                         <FileDown class="size-4" />
                         匯出繳費條 PNG
                     </a>
@@ -189,7 +189,12 @@ defineOptions({
                 <template #actions>
                     <div class="mobile-card-actions">
                         <Button variant="outline" size="sm" as-child>
-                            <a :href="noticeHref(row)">繳費條</a>
+                            <a
+                                :href="noticeHref(row)"
+                                target="_blank"
+                                rel="noopener"
+                                >繳費條</a
+                            >
                         </Button>
                         <Button variant="outline" size="sm" as-child>
                             <Link :href="detailHref(row)">確認收款</Link>
@@ -252,6 +257,8 @@ defineOptions({
                             <div class="flex flex-col gap-1">
                                 <a
                                     :href="noticeHref(row)"
+                                    target="_blank"
+                                    rel="noopener"
                                     class="text-primary underline-offset-4 hover:underline"
                                 >
                                     繳費條 PNG

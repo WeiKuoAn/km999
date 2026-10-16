@@ -272,9 +272,10 @@ class StudentPaymentController extends Controller
             $png = PaymentNoticePng::render($items[0]['notice']);
             $filename = $items[0]['filename'].'.png';
 
+            // inline：新分頁可直接預覽；仍可用另存新檔下載
             return response($png, 200, [
                 'Content-Type' => 'image/png',
-                'Content-Disposition' => 'attachment; filename="'.rawurlencode($filename).'"; filename*=UTF-8\'\''.rawurlencode($filename),
+                'Content-Disposition' => 'inline; filename="'.rawurlencode($filename).'"; filename*=UTF-8\'\''.rawurlencode($filename),
             ]);
         }
 
