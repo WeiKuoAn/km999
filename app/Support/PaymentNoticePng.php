@@ -32,6 +32,7 @@ final class PaymentNoticePng
     public static function render(array $notice): string
     {
         $font = self::fontPath();
+        $latinFont = self::latinFontPath();
         $subjectLines = $notice['subject_lines'] ?? [];
         if ($subjectLines === []) {
             $subjectLines = [[
@@ -112,21 +113,22 @@ final class PaymentNoticePng
         $y += $lineH;
         self::text($img, $sizeMain, $padX, $y, $black, $font, self::fw($tuitionHeading.'：'));
 
-        // 4) 各科條列（金額維持半形千分位，如 10,800）
+        // 4) 各科條列（金額用拉丁字型畫半形 10,800；● 用圓點繪製）
         foreach ($subjectLines as $line) {
             $y += $subjectLineH;
             $subjectName = (string) ($line['name'] ?? '課程');
             $preferTotal = self::money((int) ($line['preferential_total'] ?? 0));
             $listPrice = self::money((int) ($line['list_price'] ?? 0));
             $material = self::money((int) ($line['material_semester'] ?? 0));
-            $text = self::fw("● {$subjectName}：{$preferLabel}＄")
-                .$preferTotal
-                .self::fw('，（原價＄')
-                .$listPrice
-                .self::fw('／月）（教材＄')
-                .$material
-                .self::fw('／學期）');
-            self::text($img, $sizeSubject, $padX + (int) round(0.15 / 2.54 * self::DPI), $y, $black, $font, $text);
+            $lineX = $padX + (int) round(0.15 / 2.54 * self::DPI);
+            $lineX = self::drawBullet($img, $lineX, $y, $sizeSubject, $black);
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw("{$subjectName}：{$preferLabel}＄"));
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $latinFont, $preferTotal);
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('，（原價＄'));
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $latinFont, $listPrice);
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／月）（教材＄'));
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $latinFont, $material);
+            self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／學期）'));
         }
 
         // 5) 合計
@@ -136,9 +138,9 @@ final class PaymentNoticePng
         self::text($img, $sizeMain, $padX, $y, $black, $font, $totalPrefix);
         $totalX = $padX + self::textWidth($sizeMain, $font, $totalPrefix);
         $slotW = (int) round($width * 0.34);
-        $totalW = self::textWidth($sizeMain, $font, $grand);
+        $totalW = self::textWidth($sizeMain, $latinFont, $grand);
         $totalTextX = $totalX + (int) max(0, ($slotW - $totalW) / 2);
-        self::text($img, $sizeMain, $totalTextX, $y, $black, $font, $grand);
+        self::text($img, $sizeMain, $totalTextX, $y, $black, $latinFont, $grand);
         self::underline($img, $totalX, $y + 5, $slotW, $black);
         self::text($img, $sizeMain, $totalX + $slotW, $y, $black, $font, $totalSuffix);
 
@@ -246,12 +248,30 @@ final class PaymentNoticePng
         throw new \RuntimeException('找不到可顯示中文的字型，請將 DroidSansFallbackFull.ttf 放到 resources/fonts/。');
     }
 
+    /** 半形數字／千分位用（中文字型在部分主機缺拉丁字元） */
+    public static function latinFontPath(): string
+    {
+        $candidates = [
+            resource_path('fonts/DejaVuSans.ttf'),
+            storage_path('fonts/DejaVuSans.ttf'),
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        ];
+        foreach ($candidates as $path) {
+            if (is_readable($path)) {
+                return $path;
+            }
+        }
+
+        return self::fontPath();
+    }
+
     private static function num(int|string $value): string
     {
         return self::fw((string) $value);
     }
 
-    /** 金額：半形數字 + 半形千分位（例：10,800） */
+    /** 金額：半形數字 + 半形千分位（例：10,800），搭配拉丁字型繪製 */
     private static function money(int $value): string
     {
         return number_format($value);
@@ -276,6 +296,21 @@ final class PaymentNoticePng
         ]);
     }
 
+    /**
+     * 畫實心圓點，回傳文字起始 X。
+     *
+     * @param  \GdImage  $img
+     */
+    private static function drawBullet($img, int $x, int $baselineY, float $fontSize, int $color): int
+    {
+        $diameter = max(6, (int) round($fontSize * 0.42));
+        $cx = $x + (int) round($diameter / 2);
+        $cy = $baselineY - (int) round($fontSize * 0.32);
+        imagefilledellipse($img, $cx, $cy, $diameter, $diameter, $color);
+
+        return $cx + (int) round($diameter / 2) + (int) round($fontSize * 0.35);
+    }
+
     private static function toRocYear(int $gregorianYear): int
     {
         return $gregorianYear - 1911;
@@ -288,10 +323,16 @@ final class PaymentNoticePng
 
     /**
      * @param  \GdImage  $img
+     * @return int 下一段文字的起始 X
      */
-    private static function text($img, float $size, int $x, int $y, int $color, string $font, string $text): void
+    private static function text($img, float $size, int $x, int $y, int $color, string $font, string $text): int
     {
+        if ($text === '') {
+            return $x;
+        }
         imagettftext($img, $size, 0, $x, $y, $color, $font, $text);
+
+        return $x + self::textWidth($size, $font, $text);
     }
 
     private static function textWidth(float $size, string $font, string $text): int
