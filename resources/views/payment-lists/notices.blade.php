@@ -70,6 +70,10 @@
             line-height: 1.4;
             white-space: nowrap;
         }
+        .subject-amount {
+            font-size: 11pt;
+            font-weight: bold;
+        }
         .bullet {
             font-family: 'NoticeLatin', 'NoticeCJK', sans-serif;
             font-size: 7.5pt;
@@ -113,7 +117,7 @@
                                                 <div class="subjects">
                                                     @foreach ($notice['subject_lines'] as $line)
                                                         <div class="subject">
-                                                            <span class="bullet">●</span>{{ $line['name'] }}：{{ $notice['prefer_label'] }}@if ($line['has_material'])含教材@endif$ {{ $line['preferential_total'] }}（原價$ {{ $line['list_price'] }}／月）@if ($line['has_material'])（教材$ {{ $line['material_semester'] }}／學期）@endif
+                                                            <span class="bullet">●</span>{{ $line['name'] }}：{{ $notice['prefer_label'] }}@if ($line['has_material'])含教材@endif$ <span class="subject-amount">{{ $line['preferential_total'] }}</span> 元（原價$ {{ $line['list_price'] }} 元／月）@if ($line['has_material'])（教材$ {{ $line['material_semester'] }} 元／學期）@endif
                                                         </div>
                                                     @endforeach
                                                 </div>
