@@ -21,6 +21,9 @@ class StudentImport
         '*年級',
         '*姓名',
         '性別',
+        '就讀學校',
+        '班級',
+        '畢業學校',
         '學生電話',
         '家長稱謂1',
         '家長電話1',
@@ -34,9 +37,6 @@ class StudentImport
         '兄弟姓名2',
         '兄弟學校2',
         '兄弟年級2',
-        '畢業國小',
-        '就讀學校',
-        '班級',
         '身分證字號',
         '縣市',
         '鄉鎮市區',
@@ -210,13 +210,23 @@ class StudentImport
                 }
             }
 
+            // 畢業學校／就讀學校：相容舊表頭「畢業國小」「現讀學校」
+            $graduateSchool = $cell('畢業學校');
+            if ($graduateSchool === '') {
+                $graduateSchool = $cell('畢業國小');
+            }
+            $currentSchool = $cell('就讀學校');
+            if ($currentSchool === '') {
+                $currentSchool = $cell('現讀學校');
+            }
+
             $payload = [
                 'name' => $name,
                 'phone' => self::nullIfEmpty($cell('學生電話')),
                 'parent_phones' => $parentPhones,
                 'siblings' => $siblings,
-                'graduate_school' => self::nullIfEmpty($cell('畢業國小')),
-                'current_school' => self::nullIfEmpty($cell('就讀學校')),
+                'graduate_school' => self::nullIfEmpty($graduateSchool),
+                'current_school' => self::nullIfEmpty($currentSchool),
                 'class_name' => self::nullIfEmpty($cell('班級')),
                 'id_number' => self::nullIfEmpty($cell('身分證字號')),
                 'address_city' => self::nullIfEmpty($cell('縣市')),
@@ -276,6 +286,9 @@ class StudentImport
             '國一',
             '王小明',
             '男',
+            '某某國中',
+            '101',
+            '某某國小',
             '0912345678',
             '母親',
             '0987654321',
@@ -289,9 +302,6 @@ class StudentImport
             '',
             '',
             '',
-            '某某國小',
-            '某某國中',
-            '101',
             '',
             '高雄市',
             '鳳山區',

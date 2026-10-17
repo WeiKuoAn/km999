@@ -47,14 +47,18 @@
 
         .line { margin: 0 0 0.55mm; }
         .name { text-decoration: underline; }
-        .subjects { margin: 0 0 0.55mm; }
-        .subject { margin: 0 0 0.55mm; font-size: 7.2pt; line-height: 1.22; }
-        .subject-main, .subject-sub { display: block; }
-        .subject-sub { padding-left: 2.8mm; margin-top: 0.1mm; }
+        .subjects { margin: 0 0 0.55mm; text-align: center; }
+        .subject {
+            margin: 0 0 0.55mm;
+            font-size: 6.8pt;
+            line-height: 1.22;
+            text-align: center;
+            white-space: nowrap;
+        }
         .bullet {
             font-family: 'NoticeLatin', 'NoticeCJK', sans-serif;
-            font-size: 7pt;
-            margin-right: 0.8mm;
+            font-size: 6.5pt;
+            margin-right: 0.5mm;
         }
         .total-line { margin: 0.6mm 0; }
         .total-slot {
@@ -89,12 +93,7 @@
                                 <div class="subjects">
                                     @foreach ($notice['subject_lines'] as $line)
                                         <div class="subject">
-                                            <span class="subject-main">
-                                                <span class="bullet">●</span>{{ $line['name'] }}：{{ $notice['prefer_label'] }}@if ($line['has_material'])含教材@endif$ {{ $line['preferential_total'] }}
-                                            </span>
-                                            <span class="subject-sub">
-                                                （原價$ {{ $line['list_price'] }}／月）@if ($line['has_material'])（教材$ {{ $line['material_semester'] }}／學期）@endif
-                                            </span>
+                                            <span class="bullet">●</span>{{ $line['name'] }}：{{ $notice['prefer_label'] }}@if ($line['has_material'])含教材@endif$ {{ $line['preferential_total'] }}（原價$ {{ $line['list_price'] }}／月）@if ($line['has_material'])（教材$ {{ $line['material_semester'] }}／學期）@endif
                                         </div>
                                     @endforeach
                                 </div>
