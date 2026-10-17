@@ -88,6 +88,8 @@
             border-bottom: 0.55pt solid #111;
             padding: 0 1mm;
             margin: 0 0.7mm;
+            font-size: 11pt;
+            font-weight: bold;
         }
         .date { text-decoration: underline; }
         .note { font-size: 8pt; margin-top: 0.7mm; color: #222; }
