@@ -81,37 +81,43 @@
             border-collapse: collapse;
             table-layout: fixed;
         }
+        /* 左右兩表列高固定，避免一邊因內容變高而錯位 */
+        thead tr,
+        tbody tr {
+            height: 34px;
+        }
         th, td {
             border: 1px solid #222;
-            padding: 7px 4px;
+            padding: 4px 3px;
             vertical-align: middle;
             text-align: center;
-            word-break: break-word;
+            height: 34px;
+            max-height: 34px;
+            overflow: hidden;
+            white-space: nowrap;
+            word-break: keep-all;
         }
         th {
             background: #f3f4f6;
             font-weight: 700;
-            font-size: 14px;
+            font-size: 13px;
         }
         td {
             font-size: 13px;
-            height: 36px;
         }
         .name { width: 18%; }
-        .subj { width: 28%; }
-        .fee { width: 15%; font-variant-numeric: tabular-nums; font-weight: 600; }
-        .note { width: 23%; }
-        .receipt { width: 16%; }
-        .subj-main { font-weight: 600; font-size: 13px; }
-        .period {
-            margin-top: 2px;
-            color: #555;
-            font-size: 12px;
-            font-weight: 400;
+        .subj { width: 24%; font-weight: 600; }
+        .fee {
+            width: 18%;
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+            white-space: nowrap;
         }
+        .receipt { width: 20%; }
+        .note { width: 20%; }
         .empty td {
-            height: 36px;
-            border: 1px solid #222;
+            height: 34px;
+            max-height: 34px;
         }
         @media print {
             .toolbar { display: none !important; }
@@ -144,16 +150,20 @@
             $padTo = max($rowCount, 20);
             $sheetIndex = $loop->iteration;
             $sheetTotal = $loop->count;
+            $periodLabels = collect($sheetRows)
+                ->pluck('period_label')
+                ->map(fn ($p) => trim((string) $p))
+                ->filter()
+                ->unique()
+                ->values();
+            $periodHeader = $periodLabels->isNotEmpty() ? $periodLabels->implode('、') : '—';
         @endphp
 
         <div class="sheet">
             <h2 class="grade-title">{{ $sheet['grade_name'] }}</h2>
             <span class="page-hint">第 {{ $sheetIndex }} / {{ $sheetTotal }} 張｜列印時各自成頁</span>
             <div class="meta">
-                繳費名單（尚未繳下一期）｜產生時間 {{ $generatedAt }}｜年份 {{ $yearLabel }}
-                ｜年級 {{ $sheet['grade_name'] }}
-                @if($q !== '')｜搜尋：{{ $q }}@endif
-                ｜共 {{ count($sheetRows) }} 人
+                {{ $periodHeader }}｜年級 {{ $sheet['grade_name'] }}｜共 {{ count($sheetRows) }} 人｜產生時間 {{ $generatedAt }}
             </div>
 
             <div class="cols">
@@ -161,11 +171,11 @@
                     <table>
                         <thead>
                             <tr>
-                                <th class="name">學生姓名</th>
-                                <th class="subj">科目月份</th>
+                                <th class="name">姓名</th>
+                                <th class="subj">科目</th>
                                 <th class="fee">費用</th>
-                                <th class="note">備註</th>
                                 <th class="receipt">收據編號</th>
+                                <th class="note">備註</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -182,13 +192,10 @@
                                 @foreach ($columnRows as $row)
                                     <tr>
                                         <td class="name">{{ $row['student_name'] }}</td>
-                                        <td class="subj">
-                                            <div class="subj-main">{{ $row['subjects_label'] }}</div>
-                                            <div class="period">{{ $row['period_label'] }}</div>
-                                        </td>
+                                        <td class="subj">{{ $row['subjects_label'] }}</td>
                                         <td class="fee">{{ number_format($row['fee']) }}</td>
-                                        <td class="note">{{ $row['note'] !== '' ? $row['note'] : '' }}</td>
                                         <td class="receipt"></td>
+                                        <td class="note"></td>
                                     </tr>
                                 @endforeach
                                 @for ($i = count($columnRows); $i < $padTo; $i++)
@@ -205,18 +212,16 @@
     @empty
         <div class="sheet">
             <div class="meta">
-                繳費名單（尚未繳下一期）｜產生時間 {{ $generatedAt }}｜年份 {{ $yearLabel }}
-                @if($q !== '')｜搜尋：{{ $q }}@endif
-                ｜共 0 人
+                —｜年級 —｜共 0 人｜產生時間 {{ $generatedAt }}
             </div>
             <table>
                 <thead>
                     <tr>
-                        <th class="name">學生姓名</th>
-                        <th class="subj">科目月份</th>
+                        <th class="name">姓名</th>
+                        <th class="subj">科目</th>
                         <th class="fee">費用</th>
-                        <th class="note">備註</th>
                         <th class="receipt">收據編號</th>
+                        <th class="note">備註</th>
                     </tr>
                 </thead>
                 <tbody>
