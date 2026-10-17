@@ -6,8 +6,7 @@ use Dompdf\Dompdf;
 use Dompdf\Options;
 
 /**
- * 繳費通知條 PDF：單筆預覽；多筆合併同一份以便列印裁剪。
- * 單條約寬 14cm、高 ≥6cm。
+ * 繳費通知條 PDF：A4 橫式，每頁 2×3＝6 格，方便列印裁剪。
  */
 final class PaymentNoticePdf
 {
@@ -21,7 +20,7 @@ final class PaymentNoticePdf
         }
 
         $fontPath = self::fontPath();
-        $fontUrl = self::fontFileUrl($fontPath);
+        $latinFontPath = self::latinFontPath();
         $notices = array_map(
             fn (array $item): array => self::normalizeNotice($item['notice'] ?? []),
             $items
@@ -29,8 +28,8 @@ final class PaymentNoticePdf
 
         $html = view('payment-lists.notices', [
             'notices' => $notices,
-            'fontUrl' => $fontUrl,
-            'single' => count($notices) === 1,
+            'fontUrl' => self::fontFileUrl($fontPath),
+            'latinFontUrl' => self::fontFileUrl($latinFontPath),
         ])->render();
 
         $options = new Options;
@@ -42,18 +41,12 @@ final class PaymentNoticePdf
             resource_path(),
             storage_path(),
             dirname($fontPath),
+            dirname($latinFontPath),
         ]);
 
         $dompdf = new Dompdf($options);
         $dompdf->loadHtml($html, 'UTF-8');
-
-        if (count($notices) === 1) {
-            // 單張：接近實體繳費條尺寸（14cm × 6.5cm）
-            $dompdf->setPaper([0.0, 0.0, self::mmToPt(140), self::mmToPt(65)]);
-        } else {
-            $dompdf->setPaper('A4', 'portrait');
-        }
-
+        $dompdf->setPaper('A4', 'landscape');
         $dompdf->render();
         $binary = $dompdf->output();
         if ($binary === null || $binary === '') {
@@ -68,14 +61,27 @@ final class PaymentNoticePdf
         return PaymentNoticePng::fontPath();
     }
 
+    /** ● 等符號用（中文字型在部分主機缺字） */
+    public static function latinFontPath(): string
+    {
+        $candidates = [
+            resource_path('fonts/DejaVuSans.ttf'),
+            storage_path('fonts/DejaVuSans.ttf'),
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        ];
+        foreach ($candidates as $path) {
+            if (is_readable($path)) {
+                return $path;
+            }
+        }
+
+        return self::fontPath();
+    }
+
     private static function fontFileUrl(string $path): string
     {
         return 'file://'.$path;
-    }
-
-    private static function mmToPt(float $mm): float
-    {
-        return $mm * 72 / 25.4;
     }
 
     /**
@@ -112,10 +118,13 @@ final class PaymentNoticePdf
                 self::lastDay($endYear, $endMonth),
             ),
             'subject_lines' => array_map(function (array $line): array {
+                $materialCharged = (int) ($line['material_charged'] ?? 0);
+
                 return [
                     'name' => (string) ($line['name'] ?? '課程'),
                     'preferential_total' => self::money((int) ($line['preferential_total'] ?? 0)),
                     'list_price' => self::money((int) ($line['list_price'] ?? 0)),
+                    'has_material' => $materialCharged > 0,
                     'material_semester' => self::money((int) ($line['material_semester'] ?? 0)),
                 ];
             }, $subjectLines),

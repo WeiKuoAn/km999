@@ -330,13 +330,14 @@ final class PaymentRosterBuilder
             'annual' => '年繳學費',
             default => '季繳學費',
         };
+        // 「含教材」依各科本期是否實際收取教材費再顯示
         $preferLabel = match ($payCycle) {
-            'monthly' => '月繳優惠含教材',
-            'annual' => '年繳優惠含教材',
-            default => '季繳優惠含教材',
+            'monthly' => '月繳優惠',
+            'annual' => '年繳優惠',
+            default => '季繳優惠',
         };
 
-        /** @var list<array{name:string, preferential_total:int, list_price:int, material_semester:int}> $subjectLines */
+        /** @var list<array{name:string, preferential_total:int, list_price:int, material_charged:int, material_semester:int}> $subjectLines */
         $subjectLines = [];
         if (is_array($quote) && ($quote['lines'] ?? []) !== []) {
             foreach ($quote['lines'] as $line) {
@@ -356,6 +357,7 @@ final class PaymentRosterBuilder
                     'name' => self::shortSubjectName($rawName),
                     'preferential_total' => $tuition + $material,
                     'list_price' => $listPrice,
+                    'material_charged' => $material,
                     'material_semester' => $materialSemester,
                 ];
             }
@@ -377,6 +379,7 @@ final class PaymentRosterBuilder
                     'name' => self::shortSubjectName($name),
                     'preferential_total' => $shareTuition + $shareMaterial,
                     'list_price' => $listPrice,
+                    'material_charged' => $shareMaterial,
                     'material_semester' => $materialSemester,
                 ];
             }
