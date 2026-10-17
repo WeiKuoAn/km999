@@ -181,7 +181,17 @@ class StudentController extends Controller
 
         $result = StudentImport::import($request->file('file'));
 
-        $message = "匯入完成：新增 {$result['created']} 人";
+        $parts = [];
+        if ($result['created'] > 0) {
+            $parts[] = "新增 {$result['created']} 人";
+        }
+        if (($result['updated'] ?? 0) > 0) {
+            $parts[] = "更新 {$result['updated']} 人";
+        }
+        if ($parts === []) {
+            $parts[] = '無新增或更新';
+        }
+        $message = '匯入完成：'.implode('，', $parts);
         if ($result['skipped'] > 0) {
             $message .= "，略過 {$result['skipped']} 列";
         }

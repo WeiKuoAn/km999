@@ -362,7 +362,7 @@ const resetFilters = () => {
                 <DialogHeader>
                     <DialogTitle>Excel 匯入學生</DialogTitle>
                     <DialogDescription>
-                        下載範本、填好後上傳。學號會依學年與年級自動產生。
+                        下載範本、填好後上傳。新學生會自動產生學號；同學年同年級同名則覆蓋更新。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -424,7 +424,8 @@ const resetFilters = () => {
                             </li>
                             <li>狀態：在學／停課／已畢業（留白＝在學）</li>
                             <li>
-                                同學年、同年級已有同名學生會略過，不會覆蓋
+                                同學年、同年級、同名：以本次 Excel
+                                覆蓋該生資料（學號不變）；空白欄位會清空對應內容
                             </li>
                         </ul>
                     </div>

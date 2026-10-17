@@ -50,25 +50,25 @@ class StudentImport
     private const SIBLING_RELATIONS = ['哥哥', '姊姊', '弟弟', '妹妹'];
 
     /**
-     * @return array{created:int, skipped:int, errors:list<string>}
+     * @return array{created:int, updated:int, skipped:int, errors:list<string>}
      */
     public static function import(UploadedFile $file): array
     {
         $path = $file->getRealPath();
         if ($path === false || $path === '') {
-            return ['created' => 0, 'skipped' => 0, 'errors' => ['無法讀取上傳檔案。']];
+            return ['created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => ['無法讀取上傳檔案。']];
         }
 
         try {
             $spreadsheet = IOFactory::load($path);
         } catch (\Throwable $e) {
-            return ['created' => 0, 'skipped' => 0, 'errors' => ['無法讀取 Excel：'.$e->getMessage()]];
+            return ['created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => ['無法讀取 Excel：'.$e->getMessage()]];
         }
 
         $sheet = $spreadsheet->getActiveSheet();
         $rows = $sheet->toArray(null, true, true, false);
         if ($rows === []) {
-            return ['created' => 0, 'skipped' => 0, 'errors' => ['檔案沒有資料。']];
+            return ['created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => ['檔案沒有資料。']];
         }
 
         $headerRow = array_shift($rows);
@@ -80,6 +80,7 @@ class StudentImport
         if (! isset($map['姓名'], $map['年級'], $map['學年'])) {
             return [
                 'created' => 0,
+                'updated' => 0,
                 'skipped' => 0,
                 'errors' => ['表頭必須包含「*學年」「*年級」「*姓名」。請先下載範本再填寫。'],
             ];
@@ -92,6 +93,7 @@ class StudentImport
         $grades = GradeLevel::query()->where('is_active', true)->get()->keyBy('name');
 
         $created = 0;
+        $updated = 0;
         $skipped = 0;
         $errors = [];
 
@@ -193,17 +195,11 @@ class StudentImport
                 continue;
             }
 
-            $exists = Student::query()
+            $existing = Student::query()
                 ->where('academic_year_id', $year->id)
                 ->where('grade_level_id', $grade->id)
                 ->where('name', $name)
-                ->exists();
-            if ($exists) {
-                $errors[] = "第 {$line} 列（{$name}）：同學年、同年級已有同名學生，已略過。";
-                $skipped++;
-
-                continue;
-            }
+                ->first();
 
             $parentPhones = [];
             for ($i = 1; $i <= 2; $i++) {
@@ -237,19 +233,28 @@ class StudentImport
             $payload = self::preparePayload($payload);
 
             try {
-                DB::transaction(function () use ($payload, $year, $grade): void {
-                    $payload['student_code'] = StudentCodeGenerator::allocate($year, $grade);
-                    $payload['school_segment'] = null;
-                    Student::query()->create($payload);
-                });
-                $created++;
+                if ($existing !== null) {
+                    // 同學年、同年級、同名 → 覆蓋基本資料（學號不變）
+                    DB::transaction(function () use ($existing, $payload): void {
+                        unset($payload['academic_year_id'], $payload['grade_level_id'], $payload['name']);
+                        $existing->update($payload);
+                    });
+                    $updated++;
+                } else {
+                    DB::transaction(function () use ($payload, $year, $grade): void {
+                        $payload['student_code'] = StudentCodeGenerator::allocate($year, $grade);
+                        $payload['school_segment'] = null;
+                        Student::query()->create($payload);
+                    });
+                    $created++;
+                }
             } catch (\Throwable $e) {
                 $errors[] = "第 {$line} 列（{$name}）：寫入失敗（{$e->getMessage()}）。";
                 $skipped++;
             }
         }
 
-        return compact('created', 'skipped', 'errors');
+        return compact('created', 'updated', 'skipped', 'errors');
     }
 
     public static function templateResponse(): StreamedResponse
