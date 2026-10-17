@@ -274,16 +274,6 @@ const materialPeriodYear = computed(() => {
     return new Date().getFullYear();
 });
 
-const suggestedHalfFromStart = computed(() => {
-    if (!startDate.value || startDate.value.length < 7) {
-        return 'H2';
-    }
-
-    const month = Number(startDate.value.slice(5, 7));
-
-    return month <= 6 ? 'H1' : 'H2';
-});
-
 const selectedYearMonths = computed(() =>
     selectedMonthKeys.value
         .map((key) => key.split('-').map(Number))
@@ -321,21 +311,12 @@ const courseYearMonths = (courseId: number) =>
               .map(([y, m]) => ({ y, m }))
         : selectedYearMonths.value;
 
-/** 該科帳期含 1 月或 7 月，或為起算月所屬半年 → 預設要收 */
+/** 僅當帳期有勾該半年的 1 月（H1）或 7 月（H2）才預設加收教材 */
 const isHalfSuggested = (period: HalfPeriod, courseId: number) => {
-    const startMonth = period.half === 'H1' ? 1 : 7;
+    const gateMonth = period.half === 'H1' ? 1 : 7;
 
-    if (
-        courseYearMonths(courseId).some(
-            ({ y, m }) => y === period.year && m === startMonth,
-        )
-    ) {
-        return true;
-    }
-
-    return (
-        period.year === materialPeriodYear.value &&
-        period.half === suggestedHalfFromStart.value
+    return courseYearMonths(courseId).some(
+        ({ y, m }) => y === period.year && m === gateMonth,
     );
 };
 
@@ -617,16 +598,17 @@ const sortMonthKeys = (keys: string[]) =>
         .filter((key) => monthKeyIndex(key) > 0)
         .sort((a, b) => monthKeyIndex(a) - monthKeyIndex(b));
 
-/** 寫入各科月份，並把聯集同步到 selectedMonthKeys；新加入的科目沿用目前全部月份 */
+/** 寫入各科月份，並把聯集同步到 selectedMonthKeys；允許某科月份為空（不強制留一個） */
 const applyCourseMonths = (next: Record<number, string[]>) => {
     const cleaned: Record<number, string[]> = {};
 
     for (const id of selected.value) {
-        const keys = sortMonthKeys(next[id] ?? selectedMonthKeys.value);
-
-        if (keys.length > 0) {
-            cleaned[id] = keys;
-        }
+        const hasOwn = Object.prototype.hasOwnProperty.call(next, id);
+        // 明確傳入（含 []）就照用；新選的科才沿用目前聯集
+        const raw = hasOwn
+            ? (next[id] ?? [])
+            : (courseMonthKeys.value[id] ?? selectedMonthKeys.value);
+        cleaned[id] = sortMonthKeys(raw);
     }
 
     courseMonthKeys.value = cleaned;
@@ -720,10 +702,6 @@ const toggleBillingMonth = (key: string) => {
     const idx = selectedMonthKeys.value.indexOf(key);
 
     if (idx >= 0) {
-        if (selectedMonthKeys.value.length <= 1) {
-            return;
-        }
-
         selectedMonthKeys.value = selectedMonthKeys.value.filter((k) => k !== key);
     } else {
         const next = [...selectedMonthKeys.value, key];
@@ -759,10 +737,6 @@ const toggleCourseMonth = (courseId: number, key: string) => {
     let next: string[];
 
     if (current.includes(key)) {
-        if (current.length <= 1) {
-            return;
-        }
-
         next = current.filter((k) => k !== key);
     } else {
         next = [...current, key];
@@ -835,8 +809,10 @@ const refillSessionDates = () => {
     }
 
     if (splitByCourse.value && !isGrade9PackageMode.value) {
-        const ids = Object.keys(courseMonthKeys.value).map(Number).sort();
-        const sel = [...selected.value].sort();
+        const ids = Object.keys(courseMonthKeys.value)
+            .map(Number)
+            .sort((a, b) => a - b);
+        const sel = [...selected.value].sort((a, b) => a - b);
 
         if (ids.join(',') !== sel.join(',')) {
             applyCourseMonths(courseMonthKeys.value);
@@ -871,8 +847,11 @@ const refillSessionDates = () => {
         return;
     }
 
+    // 使用者可全部取消月份；不要再自動補回預設
     if (selectedMonthKeys.value.length === 0) {
-        syncSuggestedMonths();
+        sessions.value = [];
+
+        return;
     }
 
     sessions.value = buildDefaultSessionEntries(
@@ -2420,7 +2399,7 @@ defineOptions({
                                     <span
                                         class="mt-0.5 block text-sm text-amber-900/80"
                                     >
-                                        勾選後為各科收上／下半年教材（可同時勾兩段）；金額預設年費一半，可改。
+                                        帳期有勾 1 月或 7 月才自動帶入該半年教材；也可手動勾選，金額預設年費一半。
                                     </span>
                                 </span>
                             </label>

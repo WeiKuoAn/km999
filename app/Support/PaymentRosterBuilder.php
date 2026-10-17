@@ -292,30 +292,13 @@ final class PaymentRosterBuilder
     }
 
     /**
-     * 6×14cm 繳費條用欄位。
+     * 繳費條用欄位（各科條列：優惠含教材／原價／教材學期價）。
      *
      * @param  list<string>  $subjects
      * @param  array<int, array<string, mixed>>  $subjectsById
      * @param  list<int>  $courseIds
      * @param  array<string, mixed>|null  $quote
-     * @return array{
-     *   student_name:string,
-     *   subjects_label:string,
-     *   pay_cycle_label:string,
-     *   plan_label:string,
-     *   list_price:int,
-     *   start_year:int,
-     *   start_month:int,
-     *   end_year:int,
-     *   end_month:int,
-     *   tuition_unit:int,
-     *   month_count:int,
-     *   tuition_total:int,
-     *   material_label:string,
-     *   grand_total:int,
-     *   deadline_month:int,
-     *   deadline_day:int
-     * }
+     * @return array<string, mixed>
      */
     private static function buildNotice(
         string $studentName,
@@ -332,69 +315,115 @@ final class PaymentRosterBuilder
         ?array $quote,
         int $monthCount,
     ): array {
-        $monthCount = max(1, $monthCount);
         $cycleLabel = BillingRenewal::payCycleLabel($payCycle);
         $subjectsLabel = $subjects === [] ? '課程' : implode('、', $subjects);
         $subjectShort = implode('', array_map(
-            fn (string $name): string => mb_substr($name, 0, 1),
+            fn (string $name): string => mb_substr(self::shortSubjectName($name), 0, 1),
             $subjects
         ));
         if ($subjectShort === '') {
             $subjectShort = '課';
         }
 
-        $listPrices = [];
-        foreach ($courseIds as $cid) {
-            $list = (int) ($subjectsById[$cid]['list'] ?? 0);
-            if ($list > 0) {
-                $listPrices[] = $list;
-            }
-        }
-        $listPrice = 0;
-        if ($listPrices !== []) {
-            $counts = array_count_values($listPrices);
-            arsort($counts);
-            $listPrice = (int) array_key_first($counts);
-        }
+        $tuitionHeading = match ($payCycle) {
+            'monthly' => '月繳學費',
+            'annual' => '年繳學費',
+            default => '季繳學費',
+        };
+        $preferLabel = match ($payCycle) {
+            'monthly' => '月繳優惠含教材',
+            'annual' => '年繳優惠含教材',
+            default => '季繳優惠含教材',
+        };
 
-        $tuitionTotal = $fee;
-        $materialTotal = 0;
-        if (is_array($quote)) {
-            $tuitionTotal = (int) array_sum(array_column($quote['lines'] ?? [], 'tuition'));
-            $materialTotal = (int) ($quote['material_total'] ?? 0);
-            if ($tuitionTotal <= 0) {
-                $tuitionTotal = max(0, $fee - $materialTotal);
+        /** @var list<array{name:string, preferential_total:int, list_price:int, material_semester:int}> $subjectLines */
+        $subjectLines = [];
+        if (is_array($quote) && ($quote['lines'] ?? []) !== []) {
+            foreach ($quote['lines'] as $line) {
+                $cid = (int) ($line['course_id'] ?? 0);
+                $rawName = (string) ($line['course_name'] ?? ($subjectsById[$cid]['name'] ?? '課程'));
+                // 列表顯示用類別名時，優先對應 courseIds 順序的 subjects 標籤
+                $labelIndex = array_search($cid, $courseIds, true);
+                if ($labelIndex !== false && isset($subjects[$labelIndex])) {
+                    $rawName = $subjects[$labelIndex];
+                }
+                $tuition = (int) ($line['tuition'] ?? 0);
+                $material = (int) ($line['material'] ?? 0);
+                $listPrice = (int) ($subjectsById[$cid]['list'] ?? 0);
+                $materialSemester = self::materialSemesterAmount($subjectsById[$cid] ?? []);
+
+                $subjectLines[] = [
+                    'name' => self::shortSubjectName($rawName),
+                    'preferential_total' => $tuition + $material,
+                    'list_price' => $listPrice,
+                    'material_semester' => $materialSemester,
+                ];
             }
-        } elseif (preg_match('/含教材\s*([\d,]+)/u', $note, $m)) {
-            $materialTotal = (int) str_replace(',', '', $m[1]);
+        } else {
+            // 已有未繳帳單、無試算明細時：平均攤到各科（教材從備註拆）
+            $materialTotal = 0;
+            if (preg_match('/含教材\s*([\d,]+)/u', $note, $m)) {
+                $materialTotal = (int) str_replace(',', '', $m[1]);
+            }
+            $n = max(1, count($courseIds));
             $tuitionTotal = max(0, $fee - $materialTotal);
+            foreach ($courseIds as $i => $cid) {
+                $listPrice = (int) ($subjectsById[$cid]['list'] ?? 0);
+                $materialSemester = self::materialSemesterAmount($subjectsById[$cid] ?? []);
+                $name = $subjects[$i] ?? (string) ($subjectsById[$cid]['name'] ?? '課程');
+                $shareTuition = (int) floor($tuitionTotal / $n) + ($i === 0 ? $tuitionTotal % $n : 0);
+                $shareMaterial = (int) floor($materialTotal / $n) + ($i === 0 ? $materialTotal % $n : 0);
+                $subjectLines[] = [
+                    'name' => self::shortSubjectName($name),
+                    'preferential_total' => $shareTuition + $shareMaterial,
+                    'list_price' => $listPrice,
+                    'material_semester' => $materialSemester,
+                ];
+            }
         }
 
-        $tuitionUnit = (int) round($tuitionTotal / $monthCount);
-
-        // 繳費期限：開課月前一個月的 20 日（例：10 月開課 → 9/20）
         $deadline = Carbon::create($startYear, $startMonth, 1)->subMonth();
-        $materialLabel = $materialTotal > 0
-            ? number_format($materialTotal).' 元'
-            : '無須繳納';
 
         return [
             'student_name' => $studentName,
             'subjects_label' => $subjectsLabel,
             'pay_cycle_label' => $cycleLabel,
+            'tuition_heading' => $tuitionHeading,
+            'prefer_label' => $preferLabel,
             'plan_label' => $subjectShort.$cycleLabel,
-            'list_price' => $listPrice,
             'start_year' => $startYear,
             'start_month' => $startMonth,
             'end_year' => $endYear,
             'end_month' => $endMonth,
-            'tuition_unit' => $tuitionUnit,
-            'month_count' => $monthCount,
-            'tuition_total' => $tuitionTotal,
-            'material_label' => $materialLabel,
+            'subject_lines' => $subjectLines,
             'grand_total' => $fee,
             'deadline_month' => (int) $deadline->month,
             'deadline_day' => 20,
+            'month_count' => max(1, $monthCount),
         ];
+    }
+
+    /** @param  array<string, mixed>  $subject */
+    private static function materialSemesterAmount(array $subject): int
+    {
+        $fee = (int) ($subject['material'] ?? 0);
+        if ($fee <= 0) {
+            return 0;
+        }
+        $unit = (string) ($subject['material_unit'] ?? 'term');
+
+        // 耗材按日：顯示日單價；其餘為年費÷2＝學期（半年）價
+        if ($unit === 'class_day') {
+            return $fee;
+        }
+
+        return EnrollmentPricing::semiAnnualMaterialFee($fee);
+    }
+
+    private static function shortSubjectName(string $name): string
+    {
+        $trimmed = preg_replace('/(課|班)$/u', '', trim($name));
+
+        return $trimmed !== null && $trimmed !== '' ? $trimmed : $name;
     }
 }
