@@ -23,7 +23,7 @@
 
         body {
             font-family: 'NoticeCJK', 'NoticeLatin', sans-serif;
-            font-size: 8pt;
+            font-size: 9.5pt;
             color: #111;
             line-height: 1.4;
         }
@@ -66,13 +66,13 @@
         .subjects { margin: 0 0 0.9mm; }
         .subject {
             margin: 0 0 0.9mm;
-            font-size: 6.8pt;
+            font-size: 8pt;
             line-height: 1.4;
             white-space: nowrap;
         }
         .bullet {
             font-family: 'NoticeLatin', 'NoticeCJK', sans-serif;
-            font-size: 6.5pt;
+            font-size: 7.5pt;
             margin-right: 0.5mm;
             vertical-align: middle;
         }
@@ -86,7 +86,7 @@
             margin: 0 0.7mm;
         }
         .date { text-decoration: underline; }
-        .note { font-size: 6.5pt; margin-top: 0.7mm; color: #222; }
+        .note { font-size: 8pt; margin-top: 0.7mm; color: #222; }
     </style>
 </head>
 <body>
