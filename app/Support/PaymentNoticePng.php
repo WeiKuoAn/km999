@@ -82,7 +82,7 @@ final class PaymentNoticePng
         $startM = self::num((int) $notice['start_month']);
         $endM = self::num((int) $notice['end_month']);
         $endD = self::num(self::lastDay((int) $notice['end_year'], (int) $notice['end_month']));
-        $grand = self::num((int) $notice['grand_total']);
+        $grand = self::money((int) $notice['grand_total']);
         $dlM = self::num((int) $notice['deadline_month']);
         $dlD = self::num((int) $notice['deadline_day']);
 
@@ -112,16 +112,20 @@ final class PaymentNoticePng
         $y += $lineH;
         self::text($img, $sizeMain, $padX, $y, $black, $font, self::fw($tuitionHeading.'：'));
 
-        // 4) 各科條列
+        // 4) 各科條列（金額維持半形千分位，如 10,800）
         foreach ($subjectLines as $line) {
             $y += $subjectLineH;
             $subjectName = (string) ($line['name'] ?? '課程');
-            $preferTotal = self::num((int) ($line['preferential_total'] ?? 0));
-            $listPrice = self::num((int) ($line['list_price'] ?? 0));
-            $material = self::num((int) ($line['material_semester'] ?? 0));
-            $text = self::fw(
-                "{$subjectName}：{$preferLabel}\${$preferTotal}，（原價\${$listPrice}／月）（教材\${$material}／學期）"
-            );
+            $preferTotal = self::money((int) ($line['preferential_total'] ?? 0));
+            $listPrice = self::money((int) ($line['list_price'] ?? 0));
+            $material = self::money((int) ($line['material_semester'] ?? 0));
+            $text = self::fw("● {$subjectName}：{$preferLabel}＄")
+                .$preferTotal
+                .self::fw('，（原價＄')
+                .$listPrice
+                .self::fw('／月）（教材＄')
+                .$material
+                .self::fw('／學期）');
             self::text($img, $sizeSubject, $padX + (int) round(0.15 / 2.54 * self::DPI), $y, $black, $font, $text);
         }
 
@@ -245,6 +249,12 @@ final class PaymentNoticePng
     private static function num(int|string $value): string
     {
         return self::fw((string) $value);
+    }
+
+    /** 金額：半形數字 + 半形千分位（例：10,800） */
+    private static function money(int $value): string
+    {
+        return number_format($value);
     }
 
     private static function fw(string $text): string
