@@ -4,6 +4,9 @@ namespace App\Support;
 
 /**
  * 繳費通知條：寬 14cm；高度依科目列數伸展（單科約 6cm）。
+ *
+ * 金額一律用「全形數字」（與日期相同，主機中文字型可顯示）＋繪製半形千分位逗號，
+ * 避免半形 0–9 / ● 在部分主機缺字變 □。
  */
 final class PaymentNoticePng
 {
@@ -32,7 +35,6 @@ final class PaymentNoticePng
     public static function render(array $notice): string
     {
         $font = self::fontPath();
-        $latinFont = self::latinFontPath();
         $subjectLines = $notice['subject_lines'] ?? [];
         if ($subjectLines === []) {
             $subjectLines = [[
@@ -53,7 +55,6 @@ final class PaymentNoticePng
         $subjectLineH = (int) round(0.74 / 2.54 * self::DPI);
         $footerGap = (int) round(0.18 / 2.54 * self::DPI);
 
-        // 姓名、期間、學費標題、各科、合計、期限、備註
         $contentH = $padTop
             + $lineH * 3
             + $subjectLineH * count($subjectLines)
@@ -83,7 +84,7 @@ final class PaymentNoticePng
         $startM = self::num((int) $notice['start_month']);
         $endM = self::num((int) $notice['end_month']);
         $endD = self::num(self::lastDay((int) $notice['end_year'], (int) $notice['end_month']));
-        $grand = self::money((int) $notice['grand_total']);
+        $grandTotal = (int) $notice['grand_total'];
         $dlM = self::num((int) $notice['deadline_month']);
         $dlD = self::num((int) $notice['deadline_day']);
 
@@ -113,21 +114,18 @@ final class PaymentNoticePng
         $y += $lineH;
         self::text($img, $sizeMain, $padX, $y, $black, $font, self::fw($tuitionHeading.'：'));
 
-        // 4) 各科條列（金額用拉丁字型畫半形 10,800；● 用圓點繪製）
+        // 4) 各科條列
         foreach ($subjectLines as $line) {
             $y += $subjectLineH;
             $subjectName = (string) ($line['name'] ?? '課程');
-            $preferTotal = self::money((int) ($line['preferential_total'] ?? 0));
-            $listPrice = self::money((int) ($line['list_price'] ?? 0));
-            $material = self::money((int) ($line['material_semester'] ?? 0));
             $lineX = $padX + (int) round(0.15 / 2.54 * self::DPI);
             $lineX = self::drawBullet($img, $lineX, $y, $sizeSubject, $black);
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw("{$subjectName}：{$preferLabel}＄"));
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $latinFont, $preferTotal);
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('，（原價＄'));
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $latinFont, $listPrice);
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／月）（教材＄'));
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $latinFont, $material);
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw("{$subjectName}：{$preferLabel}＄ "));
+            $lineX = self::drawMoney($img, $sizeSubject, $lineX, $y, $black, $font, (int) ($line['preferential_total'] ?? 0));
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('（原價＄ '));
+            $lineX = self::drawMoney($img, $sizeSubject, $lineX, $y, $black, $font, (int) ($line['list_price'] ?? 0));
+            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／月）（教材＄ '));
+            $lineX = self::drawMoney($img, $sizeSubject, $lineX, $y, $black, $font, (int) ($line['material_semester'] ?? 0));
             self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／學期）'));
         }
 
@@ -138,9 +136,9 @@ final class PaymentNoticePng
         self::text($img, $sizeMain, $padX, $y, $black, $font, $totalPrefix);
         $totalX = $padX + self::textWidth($sizeMain, $font, $totalPrefix);
         $slotW = (int) round($width * 0.34);
-        $totalW = self::textWidth($sizeMain, $latinFont, $grand);
+        $totalW = self::moneyWidth($sizeMain, $font, $grandTotal);
         $totalTextX = $totalX + (int) max(0, ($slotW - $totalW) / 2);
-        self::text($img, $sizeMain, $totalTextX, $y, $black, $latinFont, $grand);
+        self::drawMoney($img, $sizeMain, $totalTextX, $y, $black, $font, $grandTotal);
         self::underline($img, $totalX, $y + 5, $slotW, $black);
         self::text($img, $sizeMain, $totalX + $slotW, $y, $black, $font, $totalSuffix);
 
@@ -248,33 +246,9 @@ final class PaymentNoticePng
         throw new \RuntimeException('找不到可顯示中文的字型，請將 DroidSansFallbackFull.ttf 放到 resources/fonts/。');
     }
 
-    /** 半形數字／千分位用（中文字型在部分主機缺拉丁字元） */
-    public static function latinFontPath(): string
-    {
-        $candidates = [
-            resource_path('fonts/DejaVuSans.ttf'),
-            storage_path('fonts/DejaVuSans.ttf'),
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-        ];
-        foreach ($candidates as $path) {
-            if (is_readable($path)) {
-                return $path;
-            }
-        }
-
-        return self::fontPath();
-    }
-
     private static function num(int|string $value): string
     {
         return self::fw((string) $value);
-    }
-
-    /** 金額：半形數字 + 半形千分位（例：10,800），搭配拉丁字型繪製 */
-    private static function money(int $value): string
-    {
-        return number_format($value);
     }
 
     private static function fw(string $text): string
@@ -297,8 +271,66 @@ final class PaymentNoticePng
     }
 
     /**
-     * 畫實心圓點，回傳文字起始 X。
+     * 金額：全形數字 + 繪製千分位逗號（外觀近似 10,800）。
      *
+     * @param  \GdImage  $img
+     */
+    private static function drawMoney($img, float $size, int $x, int $y, int $color, string $font, int $value): int
+    {
+        $formatted = number_format(max(0, $value));
+        $len = strlen($formatted);
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $formatted[$i];
+            if ($ch === ',') {
+                $x = self::drawThousandComma($img, $x, $y, $size, $color);
+            } else {
+                $x = self::text($img, $size, $x, $y, $color, $font, mb_convert_kana($ch, 'N', 'UTF-8'));
+            }
+        }
+
+        return $x;
+    }
+
+    private static function moneyWidth(float $size, string $font, int $value): int
+    {
+        $formatted = number_format(max(0, $value));
+        $width = 0;
+        $len = strlen($formatted);
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $formatted[$i];
+            if ($ch === ',') {
+                $width += max(4, (int) round($size * 0.28));
+            } else {
+                $width += self::textWidth($size, $font, mb_convert_kana($ch, 'N', 'UTF-8'));
+            }
+        }
+
+        return $width;
+    }
+
+    /**
+     * @param  \GdImage  $img
+     */
+    private static function drawThousandComma($img, int $x, int $baselineY, float $fontSize, int $color): int
+    {
+        $advance = max(4, (int) round($fontSize * 0.28));
+        $cx = $x + (int) round($advance * 0.4);
+        $cy = $baselineY - (int) round($fontSize * 0.06);
+        $r = max(2, (int) round($fontSize * 0.09));
+        imagefilledellipse($img, $cx, $cy, $r * 2, $r * 2, $color);
+        imageline(
+            $img,
+            $cx,
+            $cy + $r,
+            $cx - max(1, (int) round($r * 0.7)),
+            $cy + (int) round($r * 2.4),
+            $color
+        );
+
+        return $x + $advance;
+    }
+
+    /**
      * @param  \GdImage  $img
      */
     private static function drawBullet($img, int $x, int $baselineY, float $fontSize, int $color): int

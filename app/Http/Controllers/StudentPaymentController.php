@@ -12,7 +12,7 @@ use App\Support\BillingRenewal;
 use App\Support\EnrollmentPricing;
 use App\Support\Grade9AnnualPackage;
 use App\Support\MaterialHalfYear;
-use App\Support\PaymentNoticePng;
+use App\Support\PaymentNoticePdf;
 use App\Support\PaymentRosterBuilder;
 use App\Support\PromotionCourses;
 use Carbon\Carbon;
@@ -224,8 +224,8 @@ class StudentPaymentController extends Controller
         ]);
     }
 
-    /** 繳費通知條 PNG（6×14cm，多筆打包 ZIP） */
-    public function rosterNoticePng(Request $request)
+    /** 繳費通知條 PDF（單筆預覽；多筆合併同一份以便列印裁剪） */
+    public function rosterNoticePdf(Request $request)
     {
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
@@ -259,7 +259,7 @@ class StudentPaymentController extends Controller
             $code = trim((string) ($row['student_code'] ?? ''));
             $name = (string) $row['student_name'];
             $items[] = [
-                'filename' => ($code !== '' ? $code.'_' : '').$name.'_'.$notice['plan_label'],
+                'filename' => ($code !== '' ? $code.'_' : '').$name.'_'.($notice['plan_label'] ?? '繳費條'),
                 'notice' => $notice,
             ];
         }
@@ -268,23 +268,14 @@ class StudentPaymentController extends Controller
             abort(404, '繳費條資料不完整，無法匯出。');
         }
 
-        if (count($items) === 1) {
-            $png = PaymentNoticePng::render($items[0]['notice']);
-            $filename = $items[0]['filename'].'.png';
+        $pdf = PaymentNoticePdf::render($items);
+        $filename = count($items) === 1
+            ? $items[0]['filename'].'.pdf'
+            : 'payment-notices_'.now()->format('Ymd_His').'.pdf';
 
-            // inline：新分頁可直接預覽；仍可用另存新檔下載
-            return response($png, 200, [
-                'Content-Type' => 'image/png',
-                'Content-Disposition' => 'inline; filename="'.rawurlencode($filename).'"; filename*=UTF-8\'\''.rawurlencode($filename),
-            ]);
-        }
-
-        $zip = PaymentNoticePng::zip($items);
-        $zipName = 'payment-notices_'.now()->format('Ymd_His').'.zip';
-
-        return response($zip, 200, [
-            'Content-Type' => 'application/zip',
-            'Content-Disposition' => 'attachment; filename="'.$zipName.'"',
+        return response($pdf, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="'.rawurlencode($filename).'"; filename*=UTF-8\'\''.rawurlencode($filename),
         ]);
     }
 

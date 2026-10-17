@@ -96,8 +96,8 @@ const pdfHref = () => {
 const noticesHref = () => {
     const qs = listQuery();
     return qs
-        ? `/payment-lists/notices.png?${qs}`
-        : '/payment-lists/notices.png';
+        ? `/payment-lists/notices.pdf?${qs}`
+        : '/payment-lists/notices.pdf';
 };
 
 const noticeHref = (row: Row) => {
@@ -105,7 +105,7 @@ const noticeHref = (row: Row) => {
     params.set('student_id', String(row.student_id));
     if (q.value.trim()) params.set('q', q.value.trim());
     if (year.value.trim()) params.set('year', year.value.trim());
-    return `/payment-lists/notices.png?${params.toString()}`;
+    return `/payment-lists/notices.pdf?${params.toString()}`;
 };
 
 defineOptions({
@@ -132,7 +132,7 @@ defineOptions({
                 <Button variant="outline" as-child>
                     <a :href="noticesHref()" target="_blank" rel="noopener">
                         <FileDown class="size-4" />
-                        匯出繳費條 PNG
+                        匯出繳費條 PDF
                     </a>
                 </Button>
                 <Button as-child>
@@ -261,7 +261,7 @@ defineOptions({
                                     rel="noopener"
                                     class="text-primary underline-offset-4 hover:underline"
                                 >
-                                    繳費條 PNG
+                                    繳費條 PDF
                                 </a>
                                 <Link
                                     :href="detailHref(row)"
