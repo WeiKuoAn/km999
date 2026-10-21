@@ -33,7 +33,25 @@ final class PaymentRosterBuilder
      *   course_ids:list<int>
      * }>
      */
-    public static function build(?string $q = null, ?int $year = null): array
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public static function build(?string $q = null, ?int $year = null, ?string $periodStart = null): array
+    {
+        return self::buildRoster($q, $year, $periodStart)['rows'];
+    }
+
+    /**
+     * 依「帳期起始月」分批：預設只列最早起始月那一批科目（費用只算該批），
+     * 傳入 'all' 則列全部；傳入 'YYYY-MM' 則只列該月開始的科目。
+     *
+     * @return array{
+     *   rows:list<array<string, mixed>>,
+     *   period_options:list<array{value:string, label:string}>,
+     *   selected_period:string
+     * }
+     */
+    public static function buildRoster(?string $q = null, ?int $year = null, ?string $periodStart = null): array
     {
         $q = $q !== null ? trim($q) : '';
 
@@ -46,7 +64,7 @@ final class PaymentRosterBuilder
             ->all();
 
         if ($studentIds === []) {
-            return [];
+            return ['rows' => [], 'period_options' => [], 'selected_period' => ''];
         }
 
         $students = Student::query()
@@ -62,7 +80,8 @@ final class PaymentRosterBuilder
             ->orderBy('name')
             ->get();
 
-        $rows = [];
+        /** @var list<array{student:Student, pay_cycle:string, course_ids:list<int>, plan:array<string, mixed>, months_by_course:array<int, list<array{y:int,m:int}>>}> $candidates */
+        $candidates = [];
 
         foreach ($students as $student) {
             $snapshot = BillingRenewal::lastPaidRenewalSnapshot($student);
@@ -86,8 +105,111 @@ final class PaymentRosterBuilder
                 $payCycle,
                 true,
             );
-            $startDate = $plan['start_date'];
-            $months = $plan['months'];
+            if ($plan['months'] === []) {
+                continue;
+            }
+
+            /** @var array<int, list<array{y:int,m:int}>> $monthsByCourse */
+            $monthsByCourse = [];
+            foreach ($plan['course_months'] as $cid => $labels) {
+                $monthsByCourse[(int) $cid] = array_map(function (string $label): array {
+                    [$y, $m] = array_map('intval', explode('-', $label));
+
+                    return ['y' => $y, 'm' => $m];
+                }, $labels);
+            }
+
+            $candidates[] = [
+                'student' => $student,
+                'pay_cycle' => $payCycle,
+                'course_ids' => $courseIds,
+                'plan' => $plan,
+                'months_by_course' => $monthsByCourse,
+            ];
+        }
+
+        // 所有科目的「下一期起始月」選項（受年份篩選影響）
+        $startKeys = [];
+        foreach ($candidates as $candidate) {
+            foreach ($candidate['months_by_course'] as $courseMonths) {
+                if ($courseMonths === []) {
+                    continue;
+                }
+                $first = $courseMonths[0];
+                $last = $courseMonths[array_key_last($courseMonths)];
+                if ($year !== null && (int) $first['y'] !== $year && (int) $last['y'] !== $year) {
+                    continue;
+                }
+                $startKeys[(int) $first['y'] * 12 + (int) $first['m']] = true;
+            }
+        }
+        $startKeys = array_keys($startKeys);
+        sort($startKeys);
+
+        $periodOptions = array_map(function (int $key): array {
+            $y = intdiv($key - 1, 12);
+            $m = (($key - 1) % 12) + 1;
+
+            return [
+                'value' => sprintf('%04d-%02d', $y, $m),
+                'label' => sprintf('%d/%d 起', $y, $m),
+            ];
+        }, $startKeys);
+
+        // 解析所選起始月：null＝最早一批、'all'＝全部、'YYYY-MM'＝指定月
+        $periodStart = $periodStart !== null ? trim($periodStart) : null;
+        $selectedPeriod = '';
+        $selectedKey = null;
+        if ($periodStart === 'all') {
+            $selectedPeriod = 'all';
+        } elseif ($periodStart !== null && $periodStart !== '' && preg_match('/^(\d{4})-(\d{1,2})$/', $periodStart, $mm)) {
+            $selectedKey = ((int) $mm[1]) * 12 + (int) $mm[2];
+            $selectedPeriod = sprintf('%04d-%02d', (int) $mm[1], (int) $mm[2]);
+        } elseif ($startKeys !== []) {
+            $selectedKey = $startKeys[0];
+            $y = intdiv($selectedKey - 1, 12);
+            $m = (($selectedKey - 1) % 12) + 1;
+            $selectedPeriod = sprintf('%04d-%02d', $y, $m);
+        }
+
+        $rows = [];
+
+        foreach ($candidates as $candidate) {
+            $student = $candidate['student'];
+            $payCycle = $candidate['pay_cycle'];
+            $plan = $candidate['plan'];
+            $allMonthsByCourse = $candidate['months_by_course'];
+
+            // 依起始月篩選科目
+            $monthsByCourse = [];
+            $courseIds = [];
+            foreach ($candidate['course_ids'] as $cid) {
+                $courseMonths = $allMonthsByCourse[$cid] ?? [];
+                if ($courseMonths === []) {
+                    continue;
+                }
+                if ($selectedPeriod !== 'all' && $selectedKey !== null) {
+                    $first = $courseMonths[0];
+                    if ((int) $first['y'] * 12 + (int) $first['m'] !== $selectedKey) {
+                        continue;
+                    }
+                }
+                $monthsByCourse[$cid] = $courseMonths;
+                $courseIds[] = $cid;
+            }
+            if ($courseIds === [] || $monthsByCourse === []) {
+                continue;
+            }
+
+            // 篩選後帳期（各科月份聯集）
+            $monthMap = [];
+            foreach ($monthsByCourse as $courseMonths) {
+                foreach ($courseMonths as $month) {
+                    $monthMap[(int) $month['y'] * 12 + (int) $month['m']] = $month;
+                }
+            }
+            ksort($monthMap);
+            $months = array_values($monthMap);
             if ($months === []) {
                 continue;
             }
@@ -101,15 +223,18 @@ final class PaymentRosterBuilder
                 continue;
             }
 
-            /** @var array<int, list<array{y:int,m:int}>> $monthsByCourse */
-            $monthsByCourse = [];
-            foreach ($plan['course_months'] as $cid => $labels) {
-                $monthsByCourse[(int) $cid] = array_map(function (string $label): array {
-                    [$y, $m] = array_map('intval', explode('-', $label));
-
-                    return ['y' => $y, 'm' => $m];
-                }, $labels);
+            $startDate = sprintf('%04d-%02d-01', $startYear, $startMonth);
+            $filteredCourseMonths = [];
+            foreach ($monthsByCourse as $cid => $courseMonths) {
+                $filteredCourseMonths[$cid] = array_map(
+                    fn (array $month): string => ((int) $month['y']).'-'.((int) $month['m']),
+                    $courseMonths
+                );
             }
+            $isSplit = count(array_unique(array_map(
+                fn (array $courseMonths): int => (int) $courseMonths[0]['y'] * 12 + (int) $courseMonths[0]['m'],
+                $monthsByCourse
+            ))) > 1;
 
             // 下一期已繳 → 不列入
             $conflict = false;
@@ -151,11 +276,14 @@ final class PaymentRosterBuilder
                 $fee = (int) $unpaid->sum('expected_amount');
                 $feeSource = 'unpaid';
             } else {
-                $sessions = $plan['sessions'];
+                $sessions = array_values(array_filter(
+                    $plan['sessions'],
+                    fn (array $session): bool => in_array((int) ($session['course_id'] ?? 0), $courseIds, true)
+                ));
                 if ($sessions === []) {
                     continue;
                 }
-                $materialCharges = MaterialHalfYear::autoChargesForCourseMonths($student, $plan['course_months'], $subjectsById);
+                $materialCharges = MaterialHalfYear::autoChargesForCourseMonths($student, $filteredCourseMonths, $subjectsById);
                 $quote = EnrollmentPricing::quote(
                     $student,
                     $courseIds,
@@ -165,7 +293,7 @@ final class PaymentRosterBuilder
                     $startDate,
                     [],
                     $materialCharges,
-                    $plan['split'] ? $plan['course_months'] : null,
+                    $isSplit ? $filteredCourseMonths : null,
                 );
                 $fee = (int) ($quote['grand_total'] ?? 0);
                 if ($fee <= 0 || ($quote['lines'] ?? []) === []) {
@@ -182,7 +310,7 @@ final class PaymentRosterBuilder
             }
 
             $subjects = self::subjectLabels($courseIds);
-            $periodLabel = $plan['split']
+            $periodLabel = $isSplit
                 ? self::splitPeriodLabel($monthsByCourse)
                 : self::periodLabel($startYear, $startMonth, $endYear, $endMonth);
 
@@ -228,7 +356,11 @@ final class PaymentRosterBuilder
                 <=> [$b['start_year'], $b['start_month'], $b['student_name']];
         });
 
-        return $rows;
+        return [
+            'rows' => $rows,
+            'period_options' => $periodOptions,
+            'selected_period' => $selectedPeriod,
+        ];
     }
 
     /**

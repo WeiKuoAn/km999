@@ -7,6 +7,7 @@ use App\Models\Course;
 use App\Models\CourseBundle;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
+use App\Support\CustomBillingPeriod;
 use App\Support\PricingGroup;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -24,7 +25,7 @@ class FeePlanController extends Controller
         $gradeFilter = $request->string('grade')->toString();
 
         $query = FeePlan::query()
-            ->with(['gradeLevel:id,name,code', 'academicYear:id,year_code,name', 'courses:id,name,color,status'])
+            ->with(['gradeLevel:id,name,code', 'academicYear:id,year_code,name', 'courses:id,name,color,status', 'periods'])
             ->orderBy('sort_order')
             ->orderBy('id');
 
@@ -73,11 +74,13 @@ class FeePlanController extends Controller
         $validated = $this->validatePlan($request);
         $courseIds = $validated['course_ids'];
         $bundles = $validated['bundles'] ?? [];
-        unset($validated['course_ids'], $validated['bundles']);
+        $periods = $validated['periods'] ?? [];
+        unset($validated['course_ids'], $validated['bundles'], $validated['periods']);
 
-        DB::transaction(function () use ($validated, $courseIds, $bundles): void {
+        DB::transaction(function () use ($validated, $courseIds, $bundles, $periods): void {
             $plan = FeePlan::query()->create($validated);
             $plan->courses()->sync($courseIds);
+            $this->syncPeriods($plan, $periods);
             $this->syncBundles($plan, $bundles, []);
         });
 
@@ -86,7 +89,7 @@ class FeePlanController extends Controller
 
     public function edit(FeePlan $feePlan): Response
     {
-        $feePlan->load(['gradeLevel', 'academicYear', 'courses']);
+        $feePlan->load(['gradeLevel', 'academicYear', 'courses', 'periods']);
 
         return Inertia::render('FeePlans/Edit', [
             'plan' => [
@@ -107,20 +110,43 @@ class FeePlanController extends Controller
         $validated = $this->validatePlan($request, $feePlan);
         $courseIds = $validated['course_ids'];
         $bundles = $validated['bundles'] ?? [];
-        unset($validated['course_ids'], $validated['bundles']);
+        $periods = $validated['periods'] ?? [];
+        unset($validated['course_ids'], $validated['bundles'], $validated['periods']);
 
         $previousBundleIds = $this->matchingBundles(
             $feePlan->load('courses:id'),
             CourseBundle::query()->with('courses:id')->get()
         )->pluck('id')->all();
 
-        DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $previousBundleIds): void {
+        DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $periods, $previousBundleIds): void {
             $feePlan->update($validated);
             $feePlan->courses()->sync($courseIds);
+            $this->syncPeriods($feePlan, $periods);
             $this->syncBundles($feePlan, $bundles, $previousBundleIds);
         });
 
         return to_route('fee-plans.index');
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     */
+    private function syncPeriods(FeePlan $plan, array $rows): void
+    {
+        $plan->periods()->delete();
+
+        if ($plan->unit !== 'custom_period') {
+            return;
+        }
+
+        foreach (array_values($rows) as $i => $row) {
+            $plan->periods()->create([
+                'start_month' => (int) $row['start_month'],
+                'end_month' => (int) $row['end_month'],
+                'total_price' => (int) $row['total_price'],
+                'sort_order' => $i,
+            ]);
+        }
     }
 
     /**
@@ -225,8 +251,12 @@ class FeePlanController extends Controller
             'course_ids.*' => ['required', 'integer', 'distinct', 'exists:courses,id'],
             'group_name' => ['required', 'string', 'max:64'],
             'pricing_group' => ['required', 'string', Rule::in(PricingGroup::keys())],
-            'unit' => ['required', 'in:month,session_block'],
+            'unit' => ['required', 'in:month,session_block,custom_period'],
             'session_block_size' => ['nullable', 'integer', 'min:1', 'max:99'],
+            'periods' => ['nullable', 'array'],
+            'periods.*.start_month' => ['required', 'integer', 'between:1,12'],
+            'periods.*.end_month' => ['required', 'integer', 'between:1,12'],
+            'periods.*.total_price' => ['required', 'integer', 'min:1'],
             'list_price' => ['required', 'integer', 'min:0'],
             'quarter_price' => ['nullable', 'integer', 'min:0'],
             'quarter_single_price' => ['nullable', 'integer', 'min:0'],
@@ -271,6 +301,33 @@ class FeePlanController extends Controller
         }
         if ($bundleErrors !== []) {
             throw ValidationException::withMessages($bundleErrors);
+        }
+
+        // 自訂期別：至少一期、月份不可重疊
+        if (($validated['unit'] ?? '') === 'custom_period') {
+            $periods = $validated['periods'] ?? [];
+            if ($periods === []) {
+                throw ValidationException::withMessages([
+                    'periods' => '自訂期別請至少新增一期（起始月、結束月、一期總價）。',
+                ]);
+            }
+            $seenMonths = [];
+            $periodErrors = [];
+            foreach ($periods as $i => $period) {
+                foreach (CustomBillingPeriod::monthNumbers((int) $period['start_month'], (int) $period['end_month']) as $month) {
+                    if (isset($seenMonths[$month])) {
+                        $periodErrors["periods.{$i}.start_month"] = '期別月份重疊：'.$month.' 月已被其他期別使用。';
+                        break;
+                    }
+                    $seenMonths[$month] = true;
+                }
+            }
+            if ($periodErrors !== []) {
+                throw ValidationException::withMessages($periodErrors);
+            }
+            $validated['periods'] = array_values($periods);
+        } else {
+            $validated['periods'] = [];
         }
 
         if (($validated['unit'] ?? '') === 'session_block') {
@@ -413,10 +470,18 @@ class FeePlanController extends Controller
             'quarter_label' => $plan->quarterLabel(),
             'material_label' => $plan->materialLabel(),
             'unit_label' => match (true) {
+                $plan->unit === 'custom_period' => '自訂期別',
                 $plan->unit === 'month' => '按月',
                 (int) ($plan->session_block_size ?? 3) === 3 => '按季',
                 default => '每 '.(int) ($plan->session_block_size ?? 4).' 個月',
             },
+            'periods' => $plan->relationLoaded('periods')
+                ? $plan->periods->map(fn ($period): array => [
+                    'start_month' => (int) $period->start_month,
+                    'end_month' => (int) $period->end_month,
+                    'total_price' => (int) $period->total_price,
+                ])->values()->all()
+                : [],
         ];
     }
 

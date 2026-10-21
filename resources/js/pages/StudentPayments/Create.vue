@@ -37,6 +37,11 @@ type Subject = {
     pricing_group_label: string;
     unit: string;
     session_block_size?: number | null;
+    periods?: Array<{
+        start_month: number;
+        end_month: number;
+        total_price: number;
+    }>;
     list: number;
     q_single: number;
     material: number;
@@ -615,6 +620,111 @@ const applyCourseMonths = (next: Record<number, string[]>) => {
     selectedMonthKeys.value = sortMonthKeys(Object.values(cleaned).flat());
 };
 
+/* ── 自訂期別（與後端 CustomBillingPeriod 對齊） ─────────────────── */
+type CustomPeriod = { start_month: number; end_month: number; total_price: number };
+
+const isCustomSubject = (s: Subject | undefined | null): boolean =>
+    !!s && s.unit === 'custom_period' && Array.isArray(s.periods) && s.periods.length > 0;
+
+const periodMonthNumbers = (start: number, end: number): number[] => {
+    const months: number[] = [];
+    let month = start;
+    for (let i = 0; i < 12; i++) {
+        months.push(month);
+        if (month === end) break;
+        month = (month % 12) + 1;
+    }
+    return months;
+};
+
+const periodForMonth = (
+    periods: CustomPeriod[],
+    y: number,
+    m: number,
+): { total_price: number; month_count: number; start_key: number; end_key: number; label: string } | null => {
+    for (const period of periods) {
+        const numbers = periodMonthNumbers(period.start_month, period.end_month);
+        if (!numbers.includes(m)) continue;
+        const crosses = period.start_month > period.end_month;
+        const startYear = crosses && m < period.start_month ? y - 1 : y;
+        const endYear = crosses ? startYear + 1 : startYear;
+        return {
+            total_price: period.total_price,
+            month_count: numbers.length,
+            start_key: startYear * 12 + period.start_month,
+            end_key: endYear * 12 + period.end_month,
+            label:
+                period.start_month === period.end_month
+                    ? `${period.start_month}月`
+                    : `${period.start_month}–${period.end_month}月`,
+        };
+    }
+    return null;
+};
+
+/** 從 fromKey 起到該期結束的月份（期中加入＝剩餘月份）；不在期別內則往後找最近一期 */
+const customRemainingMonthKeys = (s: Subject, fromKey: number): string[] => {
+    const periods = (s.periods ?? []) as CustomPeriod[];
+    for (let probe = fromKey; probe < fromKey + 12; probe++) {
+        const y = Math.floor((probe - 1) / 12);
+        const m = ((probe - 1) % 12) + 1;
+        const period = periodForMonth(periods, y, m);
+        if (!period) continue;
+        const labels: string[] = [];
+        for (let key = probe; key <= period.end_key; key++) {
+            labels.push(monthKey(Math.floor((key - 1) / 12), ((key - 1) % 12) + 1));
+        }
+        return labels;
+    }
+    return [];
+};
+
+const customPeriodsLabel = (s: Subject): string =>
+    ((s.periods ?? []) as CustomPeriod[])
+        .map(
+            (p) =>
+                `${p.start_month === p.end_month ? `${p.start_month}月` : `${p.start_month}–${p.end_month}月`} $${p.total_price.toLocaleString()}`,
+        )
+        .join('；');
+
+/** 整數分配（最大餘數法，與後端 allocateRoundedAmounts 一致） */
+const allocateRounded = (exacts: number[]): number[] => {
+    if (exacts.length === 0) return [];
+    const target = Math.round(exacts.reduce((a, b) => a + b, 0));
+    const floors = exacts.map((v) => Math.floor(v + 1e-9));
+    const fracs = exacts.map((v, i) => v - floors[i]);
+    let need = target - floors.reduce((a, b) => a + b, 0);
+    const order = exacts.map((_, i) => i).sort((a, b) => fracs[b] - fracs[a] || a - b);
+    for (let i = 0; i < need; i++) floors[order[i]]++;
+    return floors;
+};
+
+/** 自訂期別各月金額：依選取月份分組到各期，總價 ÷ 期月數折算 */
+const customMonthAllocations = (s: Subject): Map<string, number> => {
+    const out = new Map<string, number>();
+    const periods = (s.periods ?? []) as CustomPeriod[];
+    const groups = new Map<string, { total: number; count: number; keys: string[] }>();
+    for (const month of courseBillingMonths(s.id)) {
+        const key = monthKey(month.y, month.m);
+        out.set(key, 0);
+        const period = periodForMonth(periods, month.y, month.m);
+        if (!period) continue;
+        const groupKey = `${period.start_key}-${period.end_key}`;
+        if (!groups.has(groupKey)) {
+            groups.set(groupKey, { total: period.total_price, count: period.month_count, keys: [] });
+        }
+        groups.get(groupKey)!.keys.push(key);
+    }
+    for (const group of groups.values()) {
+        const amounts = allocateRounded(group.keys.map(() => group.total / group.count));
+        group.keys.forEach((key, i) => out.set(key, amounts[i]));
+    }
+    return out;
+};
+
+const customTuition = (s: Subject): number =>
+    [...customMonthAllocations(s).values()].reduce((a, b) => a + b, 0);
+
 /** 編輯或建議帶入的各科月份不一致時，自動開啟分科模式 */
 const splitSource = (): Record<number, string[]> | null => {
     const source = props.edit?.course_months ?? props.suggested_course_months;
@@ -627,13 +737,22 @@ const splitSource = (): Record<number, string[]> | null => {
         .map(([id, keys]) => [Number(id), sortMonthKeys(keys)] as const)
         .filter(([id, keys]) => selected.value.includes(id) && keys.length > 0);
 
-    if (entries.length < 2) {
+    if (entries.length === 0) {
+        return null;
+    }
+
+    // 自訂期別科目：即使只有一科或月份相同，也要分科帶入期別月份
+    const hasCustom = entries.some(([id]) =>
+        isCustomSubject(props.subjects.find((s) => s.id === id)),
+    );
+
+    if (entries.length < 2 && !hasCustom) {
         return null;
     }
 
     const first = entries[0][1].join(',');
 
-    if (entries.every(([, keys]) => keys.join(',') === first)) {
+    if (!hasCustom && entries.every(([, keys]) => keys.join(',') === first)) {
         return null;
     }
 
@@ -645,6 +764,15 @@ const syncSuggestedMonths = () => {
         selectedMonthKeys.value = [];
 
         return;
+    }
+
+    // 有自訂期別科目時強制分科（各科月份依期別計算）
+    if (
+        !splitByCourse.value &&
+        !isGrade9PackageMode.value &&
+        selected.value.some((id) => isCustomSubject(props.subjects.find((s) => s.id === id)))
+    ) {
+        splitByCourse.value = true;
     }
 
     if (splitByCourse.value && !isGrade9PackageMode.value) {
@@ -661,7 +789,17 @@ const syncSuggestedMonths = () => {
         const next: Record<number, string[]> = {};
 
         for (const id of selected.value) {
+            const subject = props.subjects.find((s) => s.id === id);
             const first = sortMonthKeys(courseMonthKeys.value[id] ?? [])[0];
+            const firstIndex = first ? monthKeyIndex(first) : 0;
+            const fromKey = firstIndex > startIndex ? firstIndex : startIndex;
+
+            if (isCustomSubject(subject)) {
+                // 自訂期別：從起算月到該期結束（期中加入只帶剩餘月份）
+                next[id] = customRemainingMonthKeys(subject!, fromKey);
+                continue;
+            }
+
             const from =
                 first && monthKeyIndex(first) > startIndex
                     ? `${first.split('-')[0]}-${first.split('-')[1].padStart(2, '0')}-01`
@@ -924,6 +1062,29 @@ watch(isGrade9PackageMode, (active) => {
 watch(
     selected,
     () => {
+        // 勾到自訂期別科目：切分科並帶入該期剩餘月份
+        if (
+            !isGrade9PackageMode.value &&
+            startDate.value &&
+            selected.value.some((id) => isCustomSubject(props.subjects.find((s) => s.id === id)))
+        ) {
+            splitByCourse.value = true;
+            const startIndex = monthKeyIndex(startDate.value.slice(0, 7));
+            applyCourseMonths(
+                Object.fromEntries(
+                    selected.value.map((id) => {
+                        const subject = props.subjects.find((s) => s.id === id);
+                        return [
+                            id,
+                            isCustomSubject(subject)
+                                ? customRemainingMonthKeys(subject!, startIndex)
+                                : (courseMonthKeys.value[id] ?? selectedMonthKeys.value),
+                        ];
+                    }),
+                ),
+            );
+        }
+
         refillSessionDates();
 
         if (isGrade9PackageMode.value) {
@@ -1118,6 +1279,10 @@ const bundleByCourse = computed(() => {
 });
 
 const appliedBundle = (s: Subject) => {
+    if (isCustomSubject(s)) {
+        return null;
+    }
+
     if (payCycle.value === 'monthly') {
 return null;
 }
@@ -1136,8 +1301,21 @@ const appliedBundleNames = computed(() => [
     ),
 ]);
 
-/** 一個月單價（定價／優惠／組合優惠） */
+/** 一個月單價（定價／優惠／組合優惠）；自訂期別為期別總價 ÷ 期月數 */
 const unitPrice = (s: Subject) => {
+    if (isCustomSubject(s)) {
+        const periods = (s.periods ?? []) as CustomPeriod[];
+        const first = courseBillingMonths(s.id)[0];
+        const period = first ? periodForMonth(periods, first.y, first.m) : null;
+        const fallback = periods[0];
+        const total = period?.total_price ?? fallback?.total_price ?? 0;
+        const count =
+            period?.month_count ??
+            (fallback ? periodMonthNumbers(fallback.start_month, fallback.end_month).length : 1);
+
+        return count > 0 ? Math.round(total / count) : total;
+    }
+
     if (payCycle.value === 'monthly') {
         return s.list;
     }
@@ -1190,6 +1368,11 @@ return false;
     }).length;
 
 const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
+    if (isCustomSubject(s)) {
+        // 自訂期別：不依出席，該月金額為期別折算分配
+        return customMonthAllocations(s).get(monthKey(y, m)) ?? 0;
+    }
+
     const price = unitPrice(s);
     const attended = countSessionsInMonth(s.id, y, m);
 
@@ -1205,6 +1388,10 @@ const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
 };
 
 const lineTuition = (s: Subject) => {
+    if (isCustomSubject(s)) {
+        return customTuition(s);
+    }
+
     if (s.unit === 'session_block') {
         return blockTuition(s);
     }
@@ -2160,8 +2347,13 @@ defineOptions({
                                     >
                                 </div>
                                 <div class="text-xs text-muted-foreground">
-                                    定價 {{ s.list.toLocaleString() }}/月｜季繳
-                                    {{ s.q_single.toLocaleString() }}/月
+                                    <template v-if="isCustomSubject(s)">
+                                        自訂期別｜{{ customPeriodsLabel(s) }}
+                                    </template>
+                                    <template v-else>
+                                        定價 {{ s.list.toLocaleString() }}/月｜季繳
+                                        {{ s.q_single.toLocaleString() }}/月
+                                    </template>
                                     <span
                                         v-if="appliedBundle(s)"
                                         class="text-emerald-700"

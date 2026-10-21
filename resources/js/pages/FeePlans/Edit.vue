@@ -22,7 +22,12 @@ const props = defineProps<{
         course_ids: number[];
         group_name: string;
         pricing_group: string;
-        unit: 'month' | 'session_block';
+        unit: 'month' | 'session_block' | 'custom_period';
+        periods: Array<{
+            start_month: number;
+            end_month: number;
+            total_price: number;
+        }>;
         session_block_size: number | null;
         list_price: number;
         quarter_price: number | null;
@@ -73,6 +78,11 @@ const form = useForm<FeePlanFormData>({
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
     is_active: props.plan.is_active,
+    periods: (props.plan.periods ?? []).map((period) => ({
+        start_month: period.start_month,
+        end_month: period.end_month,
+        total_price: period.total_price,
+    })),
     bundles: props.plan.bundles.map((bundle): FeePlanBundleRow => {
         const courseIds = [...bundle.course_ids];
         const prices = emptyCoursePrices(courseIds);

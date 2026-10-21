@@ -45,6 +45,7 @@ final class EnrollmentPricing
                 'coursePrices:id,course_id,level',
                 'feePlans' => function ($query) use ($student): void {
                     $query
+                        ->with('periods')
                         ->where('is_active', true)
                         ->where(function ($builder) use ($student): void {
                             $builder
@@ -121,6 +122,13 @@ final class EnrollmentPricing
                 'session_block_size' => $plan?->unit === 'session_block'
                     ? max(1, (int) ($plan->session_block_size ?? 3))
                     : null,
+                'periods' => $plan?->unit === 'custom_period'
+                    ? $plan->periods->map(fn ($period): array => [
+                        'start_month' => (int) $period->start_month,
+                        'end_month' => (int) $period->end_month,
+                        'total_price' => (int) $period->total_price,
+                    ])->values()->all()
+                    : [],
                 'list' => $list,
                 'q_single' => $qSingle,
                 'material' => $material,
@@ -345,7 +353,8 @@ final class EnrollmentPricing
         $exactByMonth = [];
 
         foreach ($selected as $subject) {
-            $bundle = $payCycle === 'monthly' ? null : ($bundlePrices[(int) $subject['id']] ?? null);
+            $isCustom = ($subject['unit'] ?? 'month') === 'custom_period';
+            $bundle = $isCustom || $payCycle === 'monthly' ? null : ($bundlePrices[(int) $subject['id']] ?? null);
             if ($bundle !== null && $bundle['price'] >= (int) $subject['q_single']) {
                 $bundle = null;
             }
@@ -370,8 +379,52 @@ final class EnrollmentPricing
             $tuitionMonths = [];
             $isBlock = ($subject['unit'] ?? 'month') === 'session_block';
             $monthsUsed = $monthCount;
+            $tuition = 0;
 
-            if ($isBlock) {
+            if ($isCustom) {
+                // 自訂期別：一期總價；期中加入依剩餘月份折算（總價 ÷ 期月數 × 選取月數）
+                $periods = is_array($subject['periods'] ?? null) ? $subject['periods'] : [];
+                /** @var array<string, array{total:int, count:int, keys:list<string>}> $groups */
+                $groups = [];
+                foreach ($subjectMonths as $month) {
+                    $y = (int) $month['y'];
+                    $m = (int) $month['m'];
+                    $key = $y.'-'.$m;
+                    $attended = self::countDatesInMonth($subjectDates, $y, $m);
+                    $tuitionMonths[$key] = [
+                        'amount' => 0,
+                        'attended' => $attended,
+                        'baseline' => $baseline,
+                    ];
+                    $period = CustomBillingPeriod::periodForMonth($periods, $y, $m);
+                    if ($period === null) {
+                        continue;
+                    }
+                    $groupKey = $period['start_key'].'-'.$period['end_key'];
+                    $groups[$groupKey] ??= [
+                        'total' => $period['total_price'],
+                        'count' => $period['month_count'],
+                        'keys' => [],
+                    ];
+                    $groups[$groupKey]['keys'][] = $key;
+                    if ($unitPrice === (int) $subject['list'] || $groups[$groupKey]['keys'] === [$key]) {
+                        $unitPrice = $period['month_count'] > 0
+                            ? (int) round($period['total_price'] / $period['month_count'])
+                            : $period['total_price'];
+                    }
+                }
+                foreach ($groups as $group) {
+                    if ($group['count'] <= 0 || $group['keys'] === []) {
+                        continue;
+                    }
+                    $perMonthExact = $group['total'] / $group['count'];
+                    $amounts = self::allocateRoundedAmounts(array_fill(0, count($group['keys']), $perMonthExact));
+                    foreach ($group['keys'] as $index => $key) {
+                        $tuitionMonths[$key]['amount'] = (int) $amounts[$index];
+                        $tuition += (int) $amounts[$index];
+                    }
+                }
+            } elseif ($isBlock) {
                 // 按期：不依出席比例，每月收滿額月價
                 $tuition = $unitPrice * max(0, $monthCount);
                 foreach ($subjectMonths as $month) {
@@ -433,13 +486,13 @@ final class EnrollmentPricing
                 'course_name' => (string) $subject['name'],
                 'unit_price' => $unitPrice,
                 'months' => $monthsUsed,
-                'tuition' => $isBlock ? ($unitPrice * max(0, $monthCount)) : 0,
+                'tuition' => $isBlock || $isCustom ? $tuition : 0,
                 'material' => $material,
                 'material_unit' => (string) ($subject['material_unit'] ?? 'term'),
                 'material_months' => $materialMonths,
                 'tuition_months' => $tuitionMonths,
                 'material_note' => $materialNote,
-                'is_block' => $isBlock,
+                'is_block' => $isBlock || $isCustom,
                 'billing_months' => $subjectMonths,
                 'bundle_name' => $bundle['name'] ?? null,
             ];

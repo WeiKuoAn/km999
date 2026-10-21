@@ -19,8 +19,14 @@ export type FeePlanBundleRow = {
     min_courses: number;
 };
 
+export type FeePlanPeriodRow = {
+    start_month: number | '';
+    end_month: number | '';
+    total_price: number | '';
+};
+
 /** 表單上的收費方式（存檔時 quarter／other → session_block） */
-export type FeePlanBillingKind = 'month' | 'quarter' | 'other';
+export type FeePlanBillingKind = 'month' | 'quarter' | 'other' | 'custom';
 
 export type FeePlanFormData = {
     academic_year_id: string;
@@ -40,6 +46,7 @@ export type FeePlanFormData = {
     material_unit: 'term' | 'subject' | 'class_day';
     sort_order: number;
     is_active: boolean;
+    periods: FeePlanPeriodRow[];
     bundles: FeePlanBundleRow[];
 };
 
@@ -47,9 +54,13 @@ const emptyToNull = (v: number | string | undefined) =>
     v === '' || v === undefined || Number.isNaN(Number(v)) ? null : Number(v);
 
 export function billingKindFromPlan(
-    unit: 'month' | 'session_block',
+    unit: 'month' | 'session_block' | 'custom_period',
     sessionBlockSize: number | null,
 ): FeePlanBillingKind {
+    if (unit === 'custom_period') {
+        return 'custom';
+    }
+
     if (unit !== 'session_block') {
         return 'month';
     }
@@ -63,6 +74,9 @@ export function periodMonths(kind: FeePlanBillingKind, blockSize: number | ''): 
     }
     if (kind === 'quarter') {
         return 3;
+    }
+    if (kind === 'custom') {
+        return 0;
     }
 
     return Math.max(1, Number(blockSize) || 4);
@@ -85,11 +99,29 @@ export function feePlanPayload(data: FeePlanFormData) {
         course_ids: data.course_ids.map(Number),
         group_name: data.group_name,
         pricing_group: data.pricing_group,
-        unit: data.billing_kind === 'month' ? 'month' : 'session_block',
+        unit:
+            data.billing_kind === 'custom'
+                ? 'custom_period'
+                : data.billing_kind === 'month'
+                  ? 'month'
+                  : 'session_block',
         session_block_size:
-            data.billing_kind === 'month' ? null : months,
+            data.billing_kind === 'month' || data.billing_kind === 'custom'
+                ? null
+                : months,
         list_price: Number(data.list_price || 0),
-        quarter_price: emptyToNull(data.quarter_price),
+        quarter_price:
+            data.billing_kind === 'custom' ? null : emptyToNull(data.quarter_price),
+        periods:
+            data.billing_kind === 'custom'
+                ? data.periods.map((period) => ({
+                      start_month:
+                          period.start_month === '' ? '' : Number(period.start_month),
+                      end_month: period.end_month === '' ? '' : Number(period.end_month),
+                      total_price:
+                          period.total_price === '' ? '' : Number(period.total_price),
+                  }))
+                : [],
         quarter_single_price: null,
         quarter_double_price: null,
         material_fee: Number(data.material_fee || 0),

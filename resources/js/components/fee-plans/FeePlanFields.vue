@@ -35,7 +35,32 @@ const months = computed(() =>
     periodMonths(props.form.billing_kind, props.form.session_block_size),
 );
 
-const isPeriodBilling = computed(() => props.form.billing_kind !== 'month');
+const isPeriodBilling = computed(
+    () => props.form.billing_kind !== 'month' && props.form.billing_kind !== 'custom',
+);
+
+const isCustomBilling = computed(() => props.form.billing_kind === 'custom');
+
+const monthOptions = Array.from({ length: 12 }, (_, i) => i + 1);
+
+const periodMonthsPreview = (period: {
+    start_month: number | '';
+    end_month: number | '';
+}): number => {
+    const start = Number(period.start_month);
+    const end = Number(period.end_month);
+    if (!start || !end || start < 1 || start > 12 || end < 1 || end > 12) {
+        return 0;
+    }
+    let count = 0;
+    let month = start;
+    for (let i = 0; i < 12; i++) {
+        count++;
+        if (month === end) break;
+        month = (month % 12) + 1;
+    }
+    return count;
+};
 
 const periodListTotal = computed(() =>
     Math.round(Number(props.form.list_price || 0) * months.value),
@@ -55,6 +80,12 @@ const periodQuarterTotal = computed(() => {
 
 const onBillingKindChange = (kind: FeePlanBillingKind) => {
     props.form.billing_kind = kind;
+    if (kind === 'custom') {
+        if (props.form.periods.length === 0) {
+            props.form.periods.push({ start_month: 7, end_month: 8, total_price: '' });
+        }
+        return;
+    }
     if (kind === 'quarter') {
         props.form.session_block_size = 3;
     } else if (
@@ -220,6 +251,7 @@ if (props.form.material_unit === 'subject') {
             <option value="month">按月</option>
             <option value="quarter">按季（一次繳 3 個月）</option>
             <option value="other">其他（自訂月份）</option>
+            <option value="custom">自訂期別（如生物：7–8、9–12、1–3、4–6 月）</option>
         </select>
         <p class="text-xs text-muted-foreground">
             <template v-if="form.billing_kind === 'month'">
@@ -228,10 +260,99 @@ if (props.form.material_unit === 'subject') {
             <template v-else-if="form.billing_kind === 'quarter'">
                 一次繳 3 個月。請填「一個月」的原價與優惠價，下方會自動顯示 ×3。
             </template>
+            <template v-else-if="form.billing_kind === 'custom'">
+                每年固定循環的期別，每期填「一期總價」；期中加入依剩餘月份折算，繳費名單會先算好下一期預收。
+            </template>
             <template v-else>
                 一次繳自訂月數。請填「一個月」的原價與優惠價，下方會自動顯示 ×月數。
             </template>
         </p>
+    </div>
+
+    <div v-if="isCustomBilling" class="space-y-3 rounded-lg border p-3">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+            <div>
+                <p class="text-sm font-medium">期別設定（每年循環）</p>
+                <p class="text-xs text-muted-foreground">
+                    例：7–8 月一期、9–12 月一期、1–3 月一期、4–6 月一期。月份不可重疊；每期填一期總價。
+                </p>
+            </div>
+            <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                @click="form.periods.push({ start_month: '', end_month: '', total_price: '' })"
+            >
+                <Plus class="size-4" />
+                新增一期
+            </Button>
+        </div>
+
+        <div
+            v-for="(period, i) in form.periods"
+            :key="i"
+            class="flex flex-wrap items-end gap-2 rounded-md border bg-muted/30 p-3"
+        >
+            <div class="grid gap-1.5">
+                <Label :for="`period-start-${i}`">起始月</Label>
+                <select
+                    :id="`period-start-${i}`"
+                    v-model.number="period.start_month"
+                    class="h-9 rounded-md border px-2"
+                    required
+                >
+                    <option value="">選擇</option>
+                    <option v-for="m in monthOptions" :key="m" :value="m">{{ m }} 月</option>
+                </select>
+            </div>
+            <div class="grid gap-1.5">
+                <Label :for="`period-end-${i}`">結束月</Label>
+                <select
+                    :id="`period-end-${i}`"
+                    v-model.number="period.end_month"
+                    class="h-9 rounded-md border px-2"
+                    required
+                >
+                    <option value="">選擇</option>
+                    <option v-for="m in monthOptions" :key="m" :value="m">{{ m }} 月</option>
+                </select>
+            </div>
+            <div class="grid gap-1.5">
+                <Label :for="`period-price-${i}`">一期總價（元）</Label>
+                <Input
+                    :id="`period-price-${i}`"
+                    v-model.number="period.total_price"
+                    type="number"
+                    min="1"
+                    class="w-40"
+                    required
+                />
+            </div>
+            <p class="pb-2 text-xs text-muted-foreground">
+                <template v-if="periodMonthsPreview(period)">
+                    共 {{ periodMonthsPreview(period) }} 個月
+                    <template v-if="Number(period.total_price) > 0">
+                        （每月約 ${{
+                            Math.round(Number(period.total_price) / periodMonthsPreview(period)).toLocaleString('zh-TW')
+                        }}）
+                    </template>
+                </template>
+                <template v-else>請選擇起訖月</template>
+            </p>
+            <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                class="text-destructive"
+                @click="form.periods.splice(i, 1)"
+            >
+                <Trash2 class="size-4" />
+                刪除
+            </Button>
+            <InputError :message="(form.errors as Record<string, string | undefined>)[`periods.${i}.start_month`]" />
+            <InputError :message="(form.errors as Record<string, string | undefined>)[`periods.${i}.total_price`]" />
+        </div>
+        <InputError :message="(form.errors as Record<string, string | undefined>).periods" />
     </div>
 
     <div v-if="form.billing_kind === 'other'" class="grid max-w-xs gap-2">
@@ -261,7 +382,7 @@ if (props.form.material_unit === 'subject') {
             />
             <InputError :message="form.errors.list_price" />
         </div>
-        <div class="grid gap-2">
+        <div v-if="!isCustomBilling" class="grid gap-2">
             <Label for="quarter_price">{{
                 isPeriodBilling ? '一個月優惠價' : '優惠價'
             }}</Label>

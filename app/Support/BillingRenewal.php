@@ -270,8 +270,9 @@ final class BillingRenewal
         array $courseIds,
         string $startDate,
         string $payCycle,
+        ?int $spanOverride = null,
     ): array {
-        $span = self::monthSpan($payCycle);
+        $span = $spanOverride !== null && $spanOverride > 0 ? $spanOverride : self::monthSpan($payCycle);
         $start = Carbon::parse($startDate)->startOfDay();
         $end = Carbon::create($start->year, $start->month, 1)
             ->addMonths($span)
@@ -383,6 +384,8 @@ final class BillingRenewal
         $fallback = Carbon::parse($fallbackStart)->startOfDay();
         $fallbackKey = (int) $fallback->year * 12 + (int) $fallback->month;
         $lastKeys = self::courseLastBillingKeys($student, $courseIds, $paidOnly);
+        $subjectsById = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id');
+        $anyCustom = false;
 
         $courseMonths = [];
         $sessions = [];
@@ -394,6 +397,40 @@ final class BillingRenewal
             $startKey = $last !== null && $last + 1 < $fallbackKey && $last + 1 >= $fallbackKey - $span
                 ? $last + 1
                 : $fallbackKey;
+
+            $subject = $subjectsById->get($courseId);
+            $isCustom = is_array($subject) && ($subject['unit'] ?? 'month') === 'custom_period';
+
+            if ($isCustom) {
+                $anyCustom = true;
+                $periods = is_array($subject['periods'] ?? null) ? $subject['periods'] : [];
+                $labels = CustomBillingPeriod::remainingMonthLabels($periods, $startKey);
+                if ($labels === []) {
+                    // 不在任何期別內（期別未涵蓋該月）：往後找最近的期別起始
+                    for ($probe = $startKey; $probe < $startKey + 12; $probe++) {
+                        $candidate = CustomBillingPeriod::remainingMonthLabels($periods, $probe);
+                        if ($candidate !== []) {
+                            $labels = $candidate;
+                            $startKey = $probe;
+                            break;
+                        }
+                    }
+                }
+                if ($labels === []) {
+                    $labels = [self::monthKeyLabel($startKey)];
+                }
+                $courseMonths[$courseId] = $labels;
+                [$sy, $sm] = array_map('intval', explode('-', $labels[0]));
+                $startDate = Carbon::create($sy, $sm, 1)->toDateString();
+                $startKeys[$courseId] = $sy * 12 + $sm;
+                $startDates[] = $startDate;
+                foreach (self::defaultSessions($student, [$courseId], $startDate, $payCycle, count($labels)) as $session) {
+                    $sessions[] = $session;
+                }
+
+                continue;
+            }
+
             $startDate = $startKey === $fallbackKey
                 ? $fallback->toDateString()
                 : Carbon::create(intdiv($startKey - 1, 12), (($startKey - 1) % 12) + 1, 1)->toDateString();
@@ -423,9 +460,11 @@ final class BillingRenewal
         ksort($monthKeys);
         sort($startDates);
 
+        $monthSets = array_map(fn (array $labels): string => implode(',', $labels), $courseMonths);
+
         return [
             'start_date' => $startDates[0] ?? $fallback->toDateString(),
-            'split' => count(array_unique($startKeys)) > 1,
+            'split' => $anyCustom || count(array_unique($startKeys)) > 1 || count(array_unique($monthSets)) > 1,
             'course_months' => $courseMonths,
             'months' => array_values($monthKeys),
             'sessions' => $sessions,

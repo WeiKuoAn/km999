@@ -172,13 +172,15 @@ class StudentPaymentController extends Controller
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
             'year' => ['nullable', 'integer', 'between:2000,2100'],
+            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
         ]);
 
         $q = trim((string) ($validated['q'] ?? ''));
         $year = isset($validated['year']) ? (int) $validated['year'] : null;
+        $periodStart = isset($validated['period_start']) ? trim((string) $validated['period_start']) : null;
 
-        $allRows = PaymentRosterBuilder::build($q === '' ? null : $q, $year);
-        $allRows = $this->filterRosterRowsForTeacher($allRows);
+        $result = PaymentRosterBuilder::buildRoster($q === '' ? null : $q, $year, $periodStart);
+        $allRows = $this->filterRosterRowsForTeacher($result['rows']);
         $page = max(1, (int) $request->input('page', 1));
         $perPage = 50;
         $slice = array_slice($allRows, ($page - 1) * $perPage, $perPage);
@@ -196,9 +198,11 @@ class StudentPaymentController extends Controller
         return Inertia::render('StudentPayments/Roster', [
             'rows' => $paginator,
             'total_count' => count($allRows),
+            'period_options' => $result['period_options'],
             'filters' => [
                 'q' => $q,
                 'year' => $year === null ? '' : (string) $year,
+                'period_start' => $result['selected_period'],
             ],
         ]);
     }
@@ -209,11 +213,13 @@ class StudentPaymentController extends Controller
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
             'year' => ['nullable', 'integer', 'between:2000,2100'],
+            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
         ]);
 
         $q = trim((string) ($validated['q'] ?? ''));
         $year = isset($validated['year']) ? (int) $validated['year'] : null;
-        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year);
+        $periodStart = isset($validated['period_start']) ? trim((string) $validated['period_start']) : null;
+        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year, $periodStart);
         $rows = $this->filterRosterRowsForTeacher($rows);
 
         return response()->view('payment-lists.print', [
@@ -231,11 +237,13 @@ class StudentPaymentController extends Controller
             'q' => ['nullable', 'string', 'max:255'],
             'year' => ['nullable', 'integer', 'between:2000,2100'],
             'student_id' => ['nullable', 'integer', 'exists:students,id'],
+            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
         ]);
 
         $q = trim((string) ($validated['q'] ?? ''));
         $year = isset($validated['year']) ? (int) $validated['year'] : null;
-        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year);
+        $periodStart = isset($validated['period_start']) ? trim((string) $validated['period_start']) : null;
+        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year, $periodStart);
         $rows = $this->filterRosterRowsForTeacher($rows);
 
         if (isset($validated['student_id'])) {

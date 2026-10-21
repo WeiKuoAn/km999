@@ -28,6 +28,7 @@ const form = useForm<FeePlanFormData>({
     material_unit: 'term',
     sort_order: 0,
     is_active: true,
+    periods: [],
     bundles: [],
 });
 

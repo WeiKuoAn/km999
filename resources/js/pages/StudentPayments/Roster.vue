@@ -38,20 +38,24 @@ type Paginated<T> = {
 const props = defineProps<{
     rows: Paginated<Row>;
     total_count?: number;
+    period_options?: Array<{ value: string; label: string }>;
     filters: {
         q: string;
         year: string;
+        period_start?: string;
     };
 }>();
 
 const q = ref(props.filters.q ?? '');
 const year = ref(props.filters.year ?? '');
+const periodStart = ref(props.filters.period_start ?? '');
 
 watch(
     () => props.filters,
     (filters) => {
         q.value = filters.q ?? '';
         year.value = filters.year ?? '';
+        periodStart.value = filters.period_start ?? '';
     },
 );
 
@@ -72,6 +76,7 @@ const detailHref = (row: Row) => {
 const filterParams = () => ({
     q: q.value.trim() || undefined,
     year: year.value.trim() || undefined,
+    period_start: periodStart.value || undefined,
 });
 
 const applyFilters = () => {
@@ -85,6 +90,7 @@ const listQuery = () => {
     const params = new URLSearchParams();
     if (q.value.trim()) params.set('q', q.value.trim());
     if (year.value.trim()) params.set('year', year.value.trim());
+    if (periodStart.value) params.set('period_start', periodStart.value);
     return params.toString();
 };
 
@@ -105,6 +111,7 @@ const noticeHref = (row: Row) => {
     params.set('student_id', String(row.student_id));
     if (q.value.trim()) params.set('q', q.value.trim());
     if (year.value.trim()) params.set('year', year.value.trim());
+    if (periodStart.value) params.set('period_start', periodStart.value);
     return `/payment-lists/notices.pdf?${params.toString()}`;
 };
 
@@ -120,7 +127,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="繳費名單"
-            description="列出「下一期尚未繳費」的學生。例如已繳 7–9 月，會出現 10–12 月待繳；費用依繳別與科目自動試算（首期可不足三個月）。"
+            description="列出「下一期尚未繳費」的學生。預設只顯示最早起始月那一批科目（費用只算該批）；切換帳期起始月可查看其他批次，或選「全部」。"
         >
             <template #actions>
                 <Button variant="outline" as-child>
@@ -159,6 +166,24 @@ defineOptions({
                     max="2100"
                     placeholder="全部"
                 />
+            </div>
+            <div class="grid gap-2 sm:w-44">
+                <Label for="period_start">帳期起始月</Label>
+                <select
+                    id="period_start"
+                    v-model="periodStart"
+                    class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    @change="applyFilters"
+                >
+                    <option
+                        v-for="option in period_options ?? []"
+                        :key="option.value"
+                        :value="option.value"
+                    >
+                        {{ option.label }}
+                    </option>
+                    <option value="all">全部</option>
+                </select>
             </div>
             <Button type="submit">查詢</Button>
         </form>

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class FeePlan extends Model
 {
@@ -54,8 +55,24 @@ class FeePlan extends Model
         return $this->belongsToMany(Course::class);
     }
 
+    public function periods(): HasMany
+    {
+        return $this->hasMany(FeePlanPeriod::class)
+            ->orderBy('sort_order')
+            ->orderBy('start_month');
+    }
+
+    public function isCustomPeriod(): bool
+    {
+        return $this->unit === 'custom_period';
+    }
+
     public function unitLabel(): string
     {
+        if ($this->unit === 'custom_period') {
+            return '自訂期別';
+        }
+
         if ($this->unit !== 'session_block') {
             return '月';
         }
@@ -82,6 +99,17 @@ class FeePlan extends Model
 
     public function quarterLabel(): string
     {
+        if ($this->isCustomPeriod()) {
+            $periods = $this->relationLoaded('periods') ? $this->periods : $this->periods()->get();
+            if ($periods->isEmpty()) {
+                return '—';
+            }
+
+            return $periods
+                ->map(fn (FeePlanPeriod $period): string => $period->label().' $'.number_format($period->total_price))
+                ->implode('；');
+        }
+
         $quarterPrice = $this->quarter_single_price ?? $this->quarter_price;
 
         if ($quarterPrice !== null) {
