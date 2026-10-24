@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Jobs\GeneratePaymentNoticesPdfJob;
 use App\Models\FeeDiscount;
+use App\Models\FeePlan;
 use App\Models\GradeLevel;
 use App\Models\Reconciliation;
 use App\Models\Student;
@@ -231,7 +232,7 @@ class StudentPaymentController extends Controller
                 ])
                 ->values()
                 ->all(),
-            'period_options' => $this->rosterPeriodMonthOptions(),
+            'period_options' => $this->rosterPeriodMonthOptions($gradeLevelId),
             'filters' => [
                 'q' => $q,
                 'grade_level_id' => $gradeLevelId === null ? '' : (string) $gradeLevelId,
@@ -398,20 +399,84 @@ class StudentPaymentController extends Controller
     }
 
     /**
-     * 帳期起始月選項（前後各一段月份，不必掃全校才能選）。
+     * 依年級收費設定列出可選帳期起始月（自訂期別／按季），不列出全部月份。
      *
      * @return list<array{value:string, label:string}>
      */
-    private function rosterPeriodMonthOptions(): array
+    private function rosterPeriodMonthOptions(?int $gradeLevelId): array
     {
+        if ($gradeLevelId === null) {
+            return [];
+        }
+
+        $plans = FeePlan::query()
+            ->with('periods')
+            ->where('is_active', true)
+            ->where(function ($query) use ($gradeLevelId): void {
+                $query->where('grade_level_id', $gradeLevelId)
+                    ->orWhereNull('grade_level_id');
+            })
+            ->get();
+
+        /** @var array<int, string> $monthLabels 起始月 → 期別標籤 */
+        $monthLabels = [];
+
+        foreach ($plans as $plan) {
+            if ($plan->unit === 'custom_period') {
+                foreach ($plan->periods as $period) {
+                    $start = (int) $period->start_month;
+                    if ($start < 1 || $start > 12) {
+                        continue;
+                    }
+                    $monthLabels[$start] = $period->label();
+                }
+
+                continue;
+            }
+
+            if ($plan->unit === 'session_block') {
+                $size = max(1, (int) ($plan->session_block_size ?? 3));
+                $month = 7;
+                for ($i = 0; $i < 12; $i++) {
+                    $end = (($month - 1 + $size - 1) % 12) + 1;
+                    $monthLabels[$month] = $month === $end
+                        ? $month.'月'
+                        : $month.'–'.$end.'月';
+                    $month = (($month - 1 + $size) % 12) + 1;
+                    if ($month === 7) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if ($monthLabels === []) {
+            return [];
+        }
+
+        // 學年順序：7 月起
+        $ordered = [];
+        foreach ([7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6] as $month) {
+            if (isset($monthLabels[$month])) {
+                $ordered[$month] = $monthLabels[$month];
+            }
+        }
+
+        $nowKey = ((int) now()->format('Y')) * 12 + (int) now()->format('n');
+        $minKey = $nowKey - 2;
+        $maxKey = $nowKey + 14;
         $options = [];
-        $cursor = now()->startOfMonth()->subMonths(6);
-        for ($i = 0; $i < 24; $i++) {
+
+        for ($key = $minKey; $key <= $maxKey; $key++) {
+            $year = intdiv($key - 1, 12);
+            $month = (($key - 1) % 12) + 1;
+            if (! isset($ordered[$month])) {
+                continue;
+            }
             $options[] = [
-                'value' => $cursor->format('Y-m'),
-                'label' => $cursor->format('Y/n').' 起',
+                'value' => sprintf('%04d-%02d', $year, $month),
+                'label' => sprintf('%d/%d 起（%s）', $year, $month, $ordered[$month]),
             ];
-            $cursor = $cursor->copy()->addMonth();
         }
 
         return $options;

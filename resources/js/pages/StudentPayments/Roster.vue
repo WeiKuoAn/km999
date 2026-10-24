@@ -62,8 +62,38 @@ watch(
     },
 );
 
+/** 換年級時清掉月份，並向後端載入該年級對應的帳期選項（不產生名單） */
+watch(gradeLevelId, (id, previous) => {
+    if (id === previous) {
+        return;
+    }
+    periodStart.value = '';
+    router.get(
+        '/payment-lists',
+        {
+            q: q.value.trim() || undefined,
+            grade_level_id: id || undefined,
+        },
+        {
+            preserveState: true,
+            replace: true,
+            only: [
+                'period_options',
+                'filters',
+                'previewed',
+                'rows',
+                'total_count',
+            ],
+        },
+    );
+});
+
 const canPreview = computed(
-    () => gradeLevelId.value !== '' && periodStart.value !== '',
+    () =>
+        gradeLevelId.value !== '' &&
+        periodStart.value !== '' &&
+        (props.period_options?.some((o) => o.value === periodStart.value) ??
+            false),
 );
 
 const formatMoney = (n: number) => n.toLocaleString('zh-TW');
@@ -231,7 +261,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="繳費名單"
-            description="先選年級與帳期起始月再產生名單（只算該年級、該月開始的待繳），速度會快很多。"
+            description="先選年級，帳期會依該年級收費設定列出對應期別；再選起始月後按「預覽名單」。"
         >
             <template #actions>
                 <Button variant="outline" as-child :disabled="!canPreview || !previewed">
@@ -304,15 +334,24 @@ defineOptions({
                     </option>
                 </select>
             </div>
-            <div class="grid gap-2 sm:w-44">
+            <div class="grid gap-2 sm:min-w-[14rem] sm:flex-1">
                 <Label for="period_start">帳期起始月</Label>
                 <select
                     id="period_start"
                     v-model="periodStart"
-                    class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                    :disabled="!gradeLevelId"
                     required
                 >
-                    <option value="">請選擇</option>
+                    <option value="">
+                        {{
+                            !gradeLevelId
+                                ? '請先選年級'
+                                : (period_options?.length ?? 0) === 0
+                                  ? '此年級尚無收費期別'
+                                  : '請選擇'
+                        }}
+                    </option>
                     <option
                         v-for="option in period_options ?? []"
                         :key="option.value"
@@ -340,7 +379,7 @@ defineOptions({
             <p
                 class="rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground"
             >
-                請先選擇年級與帳期起始月，再按「預覽名單」。
+                請先選擇年級（會帶出對應帳期），再選起始月後按「預覽名單」。
             </p>
         </template>
 
