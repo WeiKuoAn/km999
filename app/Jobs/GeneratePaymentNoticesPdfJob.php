@@ -27,6 +27,7 @@ class GeneratePaymentNoticesPdfJob implements ShouldQueue
         public ?int $year,
         public ?string $periodStart,
         public ?int $studentId = null,
+        public ?int $gradeLevelId = null,
     ) {}
 
     public function handle(): void
@@ -62,6 +63,7 @@ class GeneratePaymentNoticesPdfJob implements ShouldQueue
             $this->periodStart,
             $user,
             $this->studentId,
+            $this->gradeLevelId,
         );
 
         if ($items === []) {

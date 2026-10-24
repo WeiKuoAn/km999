@@ -19,13 +19,14 @@ final class PaymentNoticeExport
         ?string $periodStart,
         User $user,
         ?int $studentId = null,
+        ?int $gradeLevelId = null,
     ): array {
         $q = $q !== null ? trim($q) : null;
         if ($q === '') {
             $q = null;
         }
 
-        $rows = PaymentRosterBuilder::build($q, $year, $periodStart);
+        $rows = PaymentRosterBuilder::build($q, $year, $periodStart, $gradeLevelId);
         $rows = self::filterRowsForUser($rows, $user);
 
         if ($studentId !== null) {

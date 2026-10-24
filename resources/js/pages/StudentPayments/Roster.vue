@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Head, Link, router } from '@inertiajs/vue3';
 import { FileDown, LoaderCircle } from 'lucide-vue-next';
-import { onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
@@ -38,25 +38,32 @@ type Paginated<T> = {
 const props = defineProps<{
     rows: Paginated<Row>;
     total_count?: number;
+    previewed?: boolean;
+    grade_levels?: Array<{ id: number; name: string }>;
     period_options?: Array<{ value: string; label: string }>;
     filters: {
         q: string;
-        year: string;
+        grade_level_id?: string;
         period_start?: string;
+        year?: string;
     };
 }>();
 
 const q = ref(props.filters.q ?? '');
-const year = ref(props.filters.year ?? '');
+const gradeLevelId = ref(props.filters.grade_level_id ?? '');
 const periodStart = ref(props.filters.period_start ?? '');
 
 watch(
     () => props.filters,
     (filters) => {
         q.value = filters.q ?? '';
-        year.value = filters.year ?? '';
+        gradeLevelId.value = filters.grade_level_id ?? '';
         periodStart.value = filters.period_start ?? '';
     },
+);
+
+const canPreview = computed(
+    () => gradeLevelId.value !== '' && periodStart.value !== '',
 );
 
 const formatMoney = (n: number) => n.toLocaleString('zh-TW');
@@ -75,11 +82,14 @@ const detailHref = (row: Row) => {
 
 const filterParams = () => ({
     q: q.value.trim() || undefined,
-    year: year.value.trim() || undefined,
+    grade_level_id: gradeLevelId.value || undefined,
     period_start: periodStart.value || undefined,
 });
 
 const applyFilters = () => {
+    if (!canPreview.value) {
+        return;
+    }
     router.get('/payment-lists', filterParams(), {
         preserveState: true,
         replace: true,
@@ -89,7 +99,7 @@ const applyFilters = () => {
 const listQuery = () => {
     const params = new URLSearchParams();
     if (q.value.trim()) params.set('q', q.value.trim());
-    if (year.value.trim()) params.set('year', year.value.trim());
+    if (gradeLevelId.value) params.set('grade_level_id', gradeLevelId.value);
     if (periodStart.value) params.set('period_start', periodStart.value);
     return params.toString();
 };
@@ -103,7 +113,7 @@ const noticeHref = (row: Row) => {
     const params = new URLSearchParams();
     params.set('student_id', String(row.student_id));
     if (q.value.trim()) params.set('q', q.value.trim());
-    if (year.value.trim()) params.set('year', year.value.trim());
+    if (gradeLevelId.value) params.set('grade_level_id', gradeLevelId.value);
     if (periodStart.value) params.set('period_start', periodStart.value);
     return `/payment-lists/notices.pdf?${params.toString()}`;
 };
@@ -166,7 +176,7 @@ const pollNoticesExport = async (id: string) => {
 };
 
 const startNoticesExport = async () => {
-    if (noticesExporting.value) {
+    if (noticesExporting.value || !canPreview.value) {
         return;
     }
     clearNoticesPoll();
@@ -185,8 +195,8 @@ const startNoticesExport = async () => {
             credentials: 'same-origin',
             body: JSON.stringify({
                 q: q.value.trim() || null,
-                year: year.value.trim() ? Number(year.value.trim()) : null,
-                period_start: periodStart.value || null,
+                grade_level_id: Number(gradeLevelId.value),
+                period_start: periodStart.value,
             }),
         });
         if (!res.ok) {
@@ -221,19 +231,28 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="繳費名單"
-            description="列出「下一期尚未繳費」的學生。預設只顯示最早起始月那一批科目（費用只算該批）；切換帳期起始月可查看其他批次，或選「全部」。"
+            description="先選年級與帳期起始月再產生名單（只算該年級、該月開始的待繳），速度會快很多。"
         >
             <template #actions>
-                <Button variant="outline" as-child>
-                    <a :href="pdfHref()" target="_blank" rel="noopener">
+                <Button variant="outline" as-child :disabled="!canPreview || !previewed">
+                    <a
+                        v-if="canPreview && previewed"
+                        :href="pdfHref()"
+                        target="_blank"
+                        rel="noopener"
+                    >
                         <FileDown class="size-4" />
                         匯出 PDF
                     </a>
+                    <span v-else class="inline-flex items-center gap-2">
+                        <FileDown class="size-4" />
+                        匯出 PDF
+                    </span>
                 </Button>
                 <Button
                     variant="outline"
                     type="button"
-                    :disabled="noticesExporting"
+                    :disabled="noticesExporting || !canPreview || !previewed"
                     @click="startNoticesExport"
                 >
                     <LoaderCircle
@@ -264,23 +283,26 @@ defineOptions({
         </p>
 
         <form
-            class="mb-4 flex flex-col gap-3 rounded-xl border border-sidebar-border/70 bg-card p-4 sm:flex-row sm:items-end"
+            class="mb-4 flex flex-col gap-3 rounded-xl border border-sidebar-border/70 bg-card p-4 sm:flex-row sm:flex-wrap sm:items-end"
             @submit.prevent="applyFilters"
         >
-            <div class="grid flex-1 gap-2">
-                <Label for="q">搜尋學生</Label>
-                <Input id="q" v-model="q" placeholder="學號或姓名" />
-            </div>
-            <div class="grid gap-2 sm:w-36">
-                <Label for="year">待繳年份</Label>
-                <Input
-                    id="year"
-                    v-model="year"
-                    type="number"
-                    min="2000"
-                    max="2100"
-                    placeholder="全部"
-                />
+            <div class="grid gap-2 sm:w-40">
+                <Label for="grade_level_id">年級</Label>
+                <select
+                    id="grade_level_id"
+                    v-model="gradeLevelId"
+                    class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    required
+                >
+                    <option value="">請選擇</option>
+                    <option
+                        v-for="grade in grade_levels ?? []"
+                        :key="grade.id"
+                        :value="String(grade.id)"
+                    >
+                        {{ grade.name }}
+                    </option>
+                </select>
             </div>
             <div class="grid gap-2 sm:w-44">
                 <Label for="period_start">帳期起始月</Label>
@@ -288,8 +310,9 @@ defineOptions({
                     id="period_start"
                     v-model="periodStart"
                     class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    @change="applyFilters"
+                    required
                 >
+                    <option value="">請選擇</option>
                     <option
                         v-for="option in period_options ?? []"
                         :key="option.value"
@@ -297,133 +320,153 @@ defineOptions({
                     >
                         {{ option.label }}
                     </option>
-                    <option value="all">全部</option>
                 </select>
             </div>
-            <Button type="submit">查詢</Button>
+            <div class="grid flex-1 gap-2 sm:min-w-[10rem]">
+                <Label for="q">搜尋學生（選填）</Label>
+                <Input id="q" v-model="q" placeholder="學號或姓名" />
+            </div>
+            <Button type="submit" :disabled="!canPreview">預覽名單</Button>
         </form>
 
-        <p v-if="typeof total_count === 'number'" class="mb-3 text-sm text-muted-foreground">
+        <p
+            v-if="previewed && typeof total_count === 'number'"
+            class="mb-3 text-sm text-muted-foreground"
+        >
             共 {{ total_count }} 位待繳
         </p>
 
-        <div class="mobile-card-list">
-            <MobileRecordCard
-                v-for="row in rows.data"
-                :key="`${row.student_id}-${row.start_year}-${row.start_month}`"
-                :title="row.student_name"
-                :subtitle="row.subjects_months"
-            >
-                <MobileRecordField label="學號">{{
-                    row.student_code ?? '—'
-                }}</MobileRecordField>
-                <MobileRecordField label="費用">{{
-                    formatMoney(row.fee)
-                }}</MobileRecordField>
-                <MobileRecordField label="繳別">{{
-                    row.pay_cycle_label ?? '—'
-                }}</MobileRecordField>
-                <MobileRecordField v-if="row.note" label="備註">{{
-                    row.note
-                }}</MobileRecordField>
-                <template #actions>
-                    <div class="mobile-card-actions">
-                        <Button variant="outline" size="sm" as-child>
-                            <a
-                                :href="noticeHref(row)"
-                                target="_blank"
-                                rel="noopener"
-                                >繳費條</a
-                            >
-                        </Button>
-                        <Button variant="outline" size="sm" as-child>
-                            <Link :href="detailHref(row)">確認收款</Link>
-                        </Button>
-                    </div>
-                </template>
-            </MobileRecordCard>
+        <template v-if="!previewed">
             <p
-                v-if="rows.data.length === 0"
                 class="rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground"
             >
-                目前沒有待繳名單（可能下一期已繳清，或尚無已繳紀錄可推算）。
+                請先選擇年級與帳期起始月，再按「預覽名單」。
             </p>
-        </div>
+        </template>
 
-        <div
-            class="desktop-table-wrap rounded-xl border border-sidebar-border/70"
-        >
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="border-b bg-muted/30">
-                        <th class="px-3 py-2 text-left">學生姓名</th>
-                        <th class="px-3 py-2 text-left">科目月份</th>
-                        <th class="px-3 py-2 text-right">費用</th>
-                        <th class="px-3 py-2 text-left">備註</th>
-                        <th class="px-3 py-2 text-left">操作</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr
-                        v-for="row in rows.data"
-                        :key="`${row.student_id}-${row.start_year}-${row.start_month}`"
-                        class="border-b"
-                    >
-                        <td class="px-3 py-2.5">
-                            <div class="font-medium">{{ row.student_name }}</div>
-                            <div class="text-xs text-muted-foreground">
-                                {{ row.student_code ?? '—' }}
-                                <span v-if="row.grade_name">
-                                    · {{ row.grade_name }}
-                                </span>
-                            </div>
-                        </td>
-                        <td class="px-3 py-2.5">
-                            <div>{{ row.subjects_label }}</div>
-                            <div class="text-xs text-muted-foreground">
-                                {{ row.period_label }}
-                                <span v-if="row.pay_cycle_label">
-                                    · {{ row.pay_cycle_label }}
-                                </span>
-                            </div>
-                        </td>
-                        <td class="px-3 py-2.5 text-right tabular-nums font-medium">
-                            {{ formatMoney(row.fee) }}
-                        </td>
-                        <td class="px-3 py-2.5 text-muted-foreground">
-                            {{ row.note || '—' }}
-                        </td>
-                        <td class="px-3 py-2.5">
-                            <div class="flex flex-col gap-1">
+        <template v-else>
+            <div class="mobile-card-list">
+                <MobileRecordCard
+                    v-for="row in rows.data"
+                    :key="`${row.student_id}-${row.start_year}-${row.start_month}`"
+                    :title="row.student_name"
+                    :subtitle="row.subjects_months"
+                >
+                    <MobileRecordField label="學號">{{
+                        row.student_code ?? '—'
+                    }}</MobileRecordField>
+                    <MobileRecordField label="費用">{{
+                        formatMoney(row.fee)
+                    }}</MobileRecordField>
+                    <MobileRecordField label="繳別">{{
+                        row.pay_cycle_label ?? '—'
+                    }}</MobileRecordField>
+                    <MobileRecordField v-if="row.note" label="備註">{{
+                        row.note
+                    }}</MobileRecordField>
+                    <template #actions>
+                        <div class="mobile-card-actions">
+                            <Button variant="outline" size="sm" as-child>
                                 <a
                                     :href="noticeHref(row)"
                                     target="_blank"
                                     rel="noopener"
-                                    class="text-primary underline-offset-4 hover:underline"
+                                    >繳費條</a
                                 >
-                                    繳費條 PDF
-                                </a>
-                                <Link
-                                    :href="detailHref(row)"
-                                    class="text-primary underline-offset-4 hover:underline"
-                                >
-                                    確認收款
-                                </Link>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr v-if="rows.data.length === 0">
-                        <td
-                            colspan="5"
-                            class="px-3 py-10 text-center text-muted-foreground"
-                        >
-                            目前沒有待繳名單。
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+                            </Button>
+                            <Button variant="outline" size="sm" as-child>
+                                <Link :href="detailHref(row)">確認收款</Link>
+                            </Button>
+                        </div>
+                    </template>
+                </MobileRecordCard>
+                <p
+                    v-if="rows.data.length === 0"
+                    class="rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground"
+                >
+                    此年級／帳期目前沒有待繳名單（可能下一期已繳清，或尚無已繳紀錄可推算）。
+                </p>
+            </div>
 
-        <ListPagination :links="rows.links" class="mt-4" />
+            <div
+                class="desktop-table-wrap rounded-xl border border-sidebar-border/70"
+            >
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="border-b bg-muted/30">
+                            <th class="px-3 py-2 text-left">學生姓名</th>
+                            <th class="px-3 py-2 text-left">科目月份</th>
+                            <th class="px-3 py-2 text-right">費用</th>
+                            <th class="px-3 py-2 text-left">備註</th>
+                            <th class="px-3 py-2 text-left">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr
+                            v-for="row in rows.data"
+                            :key="`${row.student_id}-${row.start_year}-${row.start_month}`"
+                            class="border-b"
+                        >
+                            <td class="px-3 py-2.5">
+                                <div class="font-medium">
+                                    {{ row.student_name }}
+                                </div>
+                                <div class="text-xs text-muted-foreground">
+                                    {{ row.student_code ?? '—' }}
+                                    <span v-if="row.grade_name">
+                                        · {{ row.grade_name }}
+                                    </span>
+                                </div>
+                            </td>
+                            <td class="px-3 py-2.5">
+                                <div>{{ row.subjects_label }}</div>
+                                <div class="text-xs text-muted-foreground">
+                                    {{ row.period_label }}
+                                    <span v-if="row.pay_cycle_label">
+                                        · {{ row.pay_cycle_label }}
+                                    </span>
+                                </div>
+                            </td>
+                            <td
+                                class="px-3 py-2.5 text-right tabular-nums font-medium"
+                            >
+                                {{ formatMoney(row.fee) }}
+                            </td>
+                            <td class="px-3 py-2.5 text-muted-foreground">
+                                {{ row.note || '—' }}
+                            </td>
+                            <td class="px-3 py-2.5">
+                                <div class="flex flex-col gap-1">
+                                    <a
+                                        :href="noticeHref(row)"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="text-primary underline-offset-4 hover:underline"
+                                    >
+                                        繳費條 PDF
+                                    </a>
+                                    <Link
+                                        :href="detailHref(row)"
+                                        class="text-primary underline-offset-4 hover:underline"
+                                    >
+                                        確認收款
+                                    </Link>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr v-if="rows.data.length === 0">
+                            <td
+                                colspan="5"
+                                class="px-3 py-10 text-center text-muted-foreground"
+                            >
+                                此年級／帳期目前沒有待繳名單。
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <ListPagination :links="rows.links" class="mt-4" />
+        </template>
     </div>
 </template>

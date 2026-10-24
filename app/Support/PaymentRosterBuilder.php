@@ -36,14 +36,18 @@ final class PaymentRosterBuilder
     /**
      * @return list<array<string, mixed>>
      */
-    public static function build(?string $q = null, ?int $year = null, ?string $periodStart = null): array
-    {
-        return self::buildRoster($q, $year, $periodStart)['rows'];
+    public static function build(
+        ?string $q = null,
+        ?int $year = null,
+        ?string $periodStart = null,
+        ?int $gradeLevelId = null,
+    ): array {
+        return self::buildRoster($q, $year, $periodStart, $gradeLevelId)['rows'];
     }
 
     /**
-     * 依「帳期起始月」分批：預設只列最早起始月那一批科目（費用只算該批），
-     * 傳入 'all' 則列全部；傳入 'YYYY-MM' 則只列該月開始的科目。
+     * 依「帳期起始月」分批：傳入 'YYYY-MM' 只列該月開始的科目；'all' 列全部。
+     * 建議搭配 grade_level_id，避免一次掃全校。
      *
      * @return array{
      *   rows:list<array<string, mixed>>,
@@ -51,34 +55,42 @@ final class PaymentRosterBuilder
      *   selected_period:string
      * }
      */
-    public static function buildRoster(?string $q = null, ?int $year = null, ?string $periodStart = null): array
-    {
+    public static function buildRoster(
+        ?string $q = null,
+        ?int $year = null,
+        ?string $periodStart = null,
+        ?int $gradeLevelId = null,
+    ): array {
         $q = $q !== null ? trim($q) : '';
 
-        $studentIds = Reconciliation::query()
-            ->where('status', 'paid')
-            ->whereNotNull('course_id')
-            ->distinct()
-            ->pluck('student_id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
-
-        if ($studentIds === []) {
-            return ['rows' => [], 'period_options' => [], 'selected_period' => ''];
-        }
-
-        $students = Student::query()
+        $studentsQuery = Student::query()
             ->with(['gradeLevel:id,name', 'academicYear:id,year_code,name'])
-            ->whereIn('id', $studentIds)
             ->where('status', 'active')
+            ->whereExists(function ($query): void {
+                $query->selectRaw('1')
+                    ->from('reconciliations')
+                    ->whereColumn('reconciliations.student_id', 'students.id')
+                    ->where('reconciliations.status', 'paid')
+                    ->whereNotNull('reconciliations.course_id');
+            })
+            ->when($gradeLevelId !== null, fn ($builder) => $builder->where('grade_level_id', $gradeLevelId))
             ->when($q !== '', function ($builder) use ($q): void {
                 $builder->where(function ($inner) use ($q): void {
                     $inner->where('name', 'like', '%'.$q.'%')
                         ->orWhere('student_code', 'like', '%'.$q.'%');
                 });
             })
-            ->orderBy('name')
-            ->get();
+            ->orderBy('name');
+
+        $students = $studentsQuery->get();
+
+        if ($students->isEmpty()) {
+            return [
+                'rows' => [],
+                'period_options' => [],
+                'selected_period' => self::normalizePeriodStart($periodStart) ?? '',
+            ];
+        }
 
         /** @var list<array{student:Student, pay_cycle:string, course_ids:list<int>, plan:array<string, mixed>, months_by_course:array<int, list<array{y:int,m:int}>>}> $candidates */
         $candidates = [];
@@ -156,20 +168,24 @@ final class PaymentRosterBuilder
             ];
         }, $startKeys);
 
-        // 解析所選起始月：null＝最早一批、'all'＝全部、'YYYY-MM'＝指定月
-        $periodStart = $periodStart !== null ? trim($periodStart) : null;
+        // 解析所選起始月：'all'＝全部、'YYYY-MM'＝指定月；未指定則不列（由控制器要求先選）
+        $normalizedPeriod = self::normalizePeriodStart($periodStart);
         $selectedPeriod = '';
         $selectedKey = null;
-        if ($periodStart === 'all') {
+        if ($normalizedPeriod === 'all') {
             $selectedPeriod = 'all';
-        } elseif ($periodStart !== null && $periodStart !== '' && preg_match('/^(\d{4})-(\d{1,2})$/', $periodStart, $mm)) {
-            $selectedKey = ((int) $mm[1]) * 12 + (int) $mm[2];
-            $selectedPeriod = sprintf('%04d-%02d', (int) $mm[1], (int) $mm[2]);
-        } elseif ($startKeys !== []) {
-            $selectedKey = $startKeys[0];
-            $y = intdiv($selectedKey - 1, 12);
-            $m = (($selectedKey - 1) % 12) + 1;
-            $selectedPeriod = sprintf('%04d-%02d', $y, $m);
+        } elseif ($normalizedPeriod !== null) {
+            [$py, $pm] = array_map('intval', explode('-', $normalizedPeriod));
+            $selectedKey = $py * 12 + $pm;
+            $selectedPeriod = $normalizedPeriod;
+        }
+
+        if ($selectedPeriod === '' || ($selectedPeriod !== 'all' && $selectedKey === null)) {
+            return [
+                'rows' => [],
+                'period_options' => $periodOptions,
+                'selected_period' => '',
+            ];
         }
 
         $rows = [];
@@ -560,5 +576,26 @@ final class PaymentRosterBuilder
         $trimmed = preg_replace('/(課|班)$/u', '', trim($name));
 
         return $trimmed !== null && $trimmed !== '' ? $trimmed : $name;
+    }
+
+    /** @return 'all'|string|null YYYY-MM 或 all；無效則 null */
+    public static function normalizePeriodStart(?string $periodStart): ?string
+    {
+        if ($periodStart === null) {
+            return null;
+        }
+        $periodStart = trim($periodStart);
+        if ($periodStart === '' || $periodStart === 'all') {
+            return $periodStart === 'all' ? 'all' : null;
+        }
+        if (! preg_match('/^(\d{4})-(\d{1,2})$/', $periodStart, $mm)) {
+            return null;
+        }
+        $month = (int) $mm[2];
+        if ($month < 1 || $month > 12) {
+            return null;
+        }
+
+        return sprintf('%04d-%02d', (int) $mm[1], $month);
     }
 }

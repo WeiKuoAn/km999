@@ -173,21 +173,35 @@ class StudentPaymentController extends Controller
 
     /**
      * 繳費名單：已繳過費、但下一期尚未繳的學生（例：已繳 7–9 → 列出 10–12）。
+     * 須先選年級與帳期起始月再產生，避免一次掃全校。
      */
     public function roster(Request $request): Response
     {
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
-            'year' => ['nullable', 'integer', 'between:2000,2100'],
-            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2})$/'],
         ]);
 
         $q = trim((string) ($validated['q'] ?? ''));
-        $year = isset($validated['year']) ? (int) $validated['year'] : null;
-        $periodStart = isset($validated['period_start']) ? trim((string) $validated['period_start']) : null;
+        $gradeLevelId = isset($validated['grade_level_id']) ? (int) $validated['grade_level_id'] : null;
+        $periodStart = PaymentRosterBuilder::normalizePeriodStart(
+            isset($validated['period_start']) ? (string) $validated['period_start'] : null
+        );
+        $previewed = $gradeLevelId !== null && $periodStart !== null && $periodStart !== 'all';
 
-        $result = PaymentRosterBuilder::buildRoster($q === '' ? null : $q, $year, $periodStart);
-        $allRows = $this->filterRosterRowsForTeacher($result['rows']);
+        if ($previewed) {
+            $result = PaymentRosterBuilder::buildRoster(
+                $q === '' ? null : $q,
+                null,
+                $periodStart,
+                $gradeLevelId,
+            );
+            $allRows = $this->filterRosterRowsForTeacher($result['rows']);
+        } else {
+            $allRows = [];
+        }
+
         $page = max(1, (int) $request->input('page', 1));
         $perPage = 50;
         $slice = array_slice($allRows, ($page - 1) * $perPage, $perPage);
@@ -205,11 +219,23 @@ class StudentPaymentController extends Controller
         return Inertia::render('StudentPayments/Roster', [
             'rows' => $paginator,
             'total_count' => count($allRows),
-            'period_options' => $result['period_options'],
+            'previewed' => $previewed,
+            'grade_levels' => GradeLevel::query()
+                ->where('is_active', true)
+                ->orderBy('sort_order')
+                ->orderBy('code')
+                ->get(['id', 'name'])
+                ->map(fn (GradeLevel $g): array => [
+                    'id' => (int) $g->id,
+                    'name' => (string) $g->name,
+                ])
+                ->values()
+                ->all(),
+            'period_options' => $this->rosterPeriodMonthOptions(),
             'filters' => [
                 'q' => $q,
-                'year' => $year === null ? '' : (string) $year,
-                'period_start' => $result['selected_period'],
+                'grade_level_id' => $gradeLevelId === null ? '' : (string) $gradeLevelId,
+                'period_start' => $periodStart ?? '',
             ],
         ]);
     }
@@ -219,20 +245,31 @@ class StudentPaymentController extends Controller
     {
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
-            'year' => ['nullable', 'integer', 'between:2000,2100'],
-            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
+            'grade_level_id' => ['required', 'integer', 'exists:grade_levels,id'],
+            'period_start' => ['required', 'string', 'regex:/^(\d{4}-\d{1,2})$/'],
         ]);
 
         $q = trim((string) ($validated['q'] ?? ''));
-        $year = isset($validated['year']) ? (int) $validated['year'] : null;
-        $periodStart = isset($validated['period_start']) ? trim((string) $validated['period_start']) : null;
-        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year, $periodStart);
+        $gradeLevelId = (int) $validated['grade_level_id'];
+        $periodStart = PaymentRosterBuilder::normalizePeriodStart((string) $validated['period_start']);
+        if ($periodStart === null || $periodStart === 'all') {
+            abort(422, '請選擇帳期起始月。');
+        }
+
+        $rows = PaymentRosterBuilder::build(
+            $q === '' ? null : $q,
+            null,
+            $periodStart,
+            $gradeLevelId,
+        );
         $rows = $this->filterRosterRowsForTeacher($rows);
+
+        $gradeName = GradeLevel::query()->whereKey($gradeLevelId)->value('name');
 
         return response()->view('payment-lists.print', [
             'gradeSheets' => $this->groupRosterRowsByGrade($rows),
             'generatedAt' => now()->format('Y-m-d H:i'),
-            'yearLabel' => $year === null ? '全部' : (string) $year,
+            'yearLabel' => ($gradeName ?: '').' · '.$periodStart,
             'q' => $q,
         ]);
     }
@@ -245,19 +282,20 @@ class StudentPaymentController extends Controller
     {
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
-            'year' => ['nullable', 'integer', 'between:2000,2100'],
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'student_id' => ['required', 'integer', 'exists:students,id'],
-            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
+            'period_start' => ['required', 'string', 'regex:/^(\d{4}-\d{1,2})$/'],
         ]);
 
         /** @var User $user */
         $user = $request->user();
         $items = PaymentNoticeExport::buildItems(
             isset($validated['q']) ? trim((string) $validated['q']) : null,
-            isset($validated['year']) ? (int) $validated['year'] : null,
-            isset($validated['period_start']) ? trim((string) $validated['period_start']) : null,
+            null,
+            PaymentRosterBuilder::normalizePeriodStart((string) $validated['period_start']),
             $user,
             (int) $validated['student_id'],
+            isset($validated['grade_level_id']) ? (int) $validated['grade_level_id'] : null,
         );
 
         if ($items === []) {
@@ -283,13 +321,17 @@ class StudentPaymentController extends Controller
     {
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
-            'year' => ['nullable', 'integer', 'between:2000,2100'],
-            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
+            'grade_level_id' => ['required', 'integer', 'exists:grade_levels,id'],
+            'period_start' => ['required', 'string', 'regex:/^(\d{4}-\d{1,2})$/'],
         ]);
 
         /** @var User $user */
         $user = $request->user();
         $exportId = (string) Str::uuid();
+        $periodStart = PaymentRosterBuilder::normalizePeriodStart((string) $validated['period_start']);
+        if ($periodStart === null) {
+            return response()->json(['message' => '請選擇帳期起始月。'], 422);
+        }
 
         Cache::put(PaymentNoticeExport::cacheKey($exportId), [
             'status' => 'queued',
@@ -302,8 +344,10 @@ class StudentPaymentController extends Controller
             $exportId,
             $user->id,
             isset($validated['q']) ? trim((string) $validated['q']) : null,
-            isset($validated['year']) ? (int) $validated['year'] : null,
-            isset($validated['period_start']) ? trim((string) $validated['period_start']) : null,
+            null,
+            $periodStart,
+            null,
+            (int) $validated['grade_level_id'],
         )->afterResponse();
 
         return response()->json([
@@ -351,6 +395,26 @@ class StudentPaymentController extends Controller
         return Storage::disk('local')->download($path, $filename, [
             'Content-Type' => 'application/pdf',
         ]);
+    }
+
+    /**
+     * 帳期起始月選項（前後各一段月份，不必掃全校才能選）。
+     *
+     * @return list<array{value:string, label:string}>
+     */
+    private function rosterPeriodMonthOptions(): array
+    {
+        $options = [];
+        $cursor = now()->startOfMonth()->subMonths(6);
+        for ($i = 0; $i < 24; $i++) {
+            $options[] = [
+                'value' => $cursor->format('Y-m'),
+                'label' => $cursor->format('Y/n').' 起',
+            ];
+            $cursor = $cursor->copy()->addMonth();
+        }
+
+        return $options;
     }
 
     /**
