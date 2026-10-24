@@ -282,12 +282,8 @@ class FeePlanController extends Controller
     {
         $validated = $request->validate([
             'academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
-            // 新增必須指定年級；舊的「全年級」仍可編輯保留
-            'grade_level_id' => [
-                $currentPlan === null ? 'required' : 'nullable',
-                'integer',
-                'exists:grade_levels,id',
-            ],
+            // null＝全年級（統一價／同期別可用）；價格或期別不同請分年級建
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'course_ids' => ['required', 'array', 'min:1'],
             'course_ids.*' => ['required', 'integer', 'distinct', 'exists:courses,id'],
             'group_name' => ['required', 'string', 'max:64'],

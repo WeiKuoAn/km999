@@ -55,36 +55,66 @@ final class PaymentRosterBuilder
      *   selected_period:string
      * }
      */
+    /**
+     * 依該年級學生「實際下一期起始月」列出選項（已繳到幾月就從下個月起算）。
+     * 不跑費用試算，只推算帳期，給篩選下拉用。
+     *
+     * @return list<array{value:string, label:string}>
+     */
+    public static function periodOptionsForGrade(int $gradeLevelId, ?string $q = null): array
+    {
+        $candidates = self::collectPendingCandidates($q, $gradeLevelId);
+        /** @var array<int, array{start_y:int, start_m:int, end_m:int, student_ids:array<int, true>}> $meta */
+        $meta = [];
+
+        foreach ($candidates as $candidate) {
+            $studentId = (int) $candidate['student']->id;
+            foreach ($candidate['months_by_course'] as $courseMonths) {
+                if ($courseMonths === []) {
+                    continue;
+                }
+                $first = $courseMonths[0];
+                $last = $courseMonths[array_key_last($courseMonths)];
+                $key = (int) $first['y'] * 12 + (int) $first['m'];
+                if (! isset($meta[$key])) {
+                    $meta[$key] = [
+                        'start_y' => (int) $first['y'],
+                        'start_m' => (int) $first['m'],
+                        'end_m' => (int) $last['m'],
+                        'student_ids' => [],
+                    ];
+                }
+                $meta[$key]['student_ids'][$studentId] = true;
+            }
+        }
+
+        ksort($meta);
+        $options = [];
+        foreach ($meta as $row) {
+            $count = count($row['student_ids']);
+            $options[] = [
+                'value' => sprintf('%04d-%02d', $row['start_y'], $row['start_m']),
+                'label' => sprintf(
+                    '%d/%d 起（%d 人待繳）',
+                    $row['start_y'],
+                    $row['start_m'],
+                    $count
+                ),
+            ];
+        }
+
+        return $options;
+    }
+
     public static function buildRoster(
         ?string $q = null,
         ?int $year = null,
         ?string $periodStart = null,
         ?int $gradeLevelId = null,
     ): array {
-        $q = $q !== null ? trim($q) : '';
+        $candidates = self::collectPendingCandidates($q, $gradeLevelId);
 
-        $studentsQuery = Student::query()
-            ->with(['gradeLevel:id,name', 'academicYear:id,year_code,name'])
-            ->where('status', 'active')
-            ->whereExists(function ($query): void {
-                $query->selectRaw('1')
-                    ->from('reconciliations')
-                    ->whereColumn('reconciliations.student_id', 'students.id')
-                    ->where('reconciliations.status', 'paid')
-                    ->whereNotNull('reconciliations.course_id');
-            })
-            ->when($gradeLevelId !== null, fn ($builder) => $builder->where('grade_level_id', $gradeLevelId))
-            ->when($q !== '', function ($builder) use ($q): void {
-                $builder->where(function ($inner) use ($q): void {
-                    $inner->where('name', 'like', '%'.$q.'%')
-                        ->orWhere('student_code', 'like', '%'.$q.'%');
-                });
-            })
-            ->orderBy('name');
-
-        $students = $studentsQuery->get();
-
-        if ($students->isEmpty()) {
+        if ($candidates === []) {
             return [
                 'rows' => [],
                 'period_options' => [],
@@ -92,56 +122,8 @@ final class PaymentRosterBuilder
             ];
         }
 
-        /** @var list<array{student:Student, pay_cycle:string, course_ids:list<int>, plan:array<string, mixed>, months_by_course:array<int, list<array{y:int,m:int}>>}> $candidates */
-        $candidates = [];
-
-        foreach ($students as $student) {
-            $snapshot = BillingRenewal::lastPaidRenewalSnapshot($student);
-            if ($snapshot === null) {
-                continue;
-            }
-
-            $intended = is_array($student->intended_course_ids) ? $student->intended_course_ids : [];
-            $courseIds = $intended !== []
-                ? array_values(array_unique(array_map('intval', $intended)))
-                : $snapshot['course_ids'];
-            if ($courseIds === []) {
-                continue;
-            }
-
-            $payCycle = $snapshot['pay_cycle'];
-            $plan = BillingRenewal::perCourseNextPeriod(
-                $student,
-                $courseIds,
-                BillingRenewal::nextStartDate($snapshot['end_year'], $snapshot['end_month']),
-                $payCycle,
-                true,
-            );
-            if ($plan['months'] === []) {
-                continue;
-            }
-
-            /** @var array<int, list<array{y:int,m:int}>> $monthsByCourse */
-            $monthsByCourse = [];
-            foreach ($plan['course_months'] as $cid => $labels) {
-                $monthsByCourse[(int) $cid] = array_map(function (string $label): array {
-                    [$y, $m] = array_map('intval', explode('-', $label));
-
-                    return ['y' => $y, 'm' => $m];
-                }, $labels);
-            }
-
-            $candidates[] = [
-                'student' => $student,
-                'pay_cycle' => $payCycle,
-                'course_ids' => $courseIds,
-                'plan' => $plan,
-                'months_by_course' => $monthsByCourse,
-            ];
-        }
-
         // 所有科目的「下一期起始月」選項（受年份篩選影響）
-        $startKeys = [];
+        $startMeta = [];
         foreach ($candidates as $candidate) {
             foreach ($candidate['months_by_course'] as $courseMonths) {
                 if ($courseMonths === []) {
@@ -152,21 +134,25 @@ final class PaymentRosterBuilder
                 if ($year !== null && (int) $first['y'] !== $year && (int) $last['y'] !== $year) {
                     continue;
                 }
-                $startKeys[(int) $first['y'] * 12 + (int) $first['m']] = true;
+                $key = (int) $first['y'] * 12 + (int) $first['m'];
+                if (! isset($startMeta[$key])) {
+                    $startMeta[$key] = [
+                        'start_y' => (int) $first['y'],
+                        'start_m' => (int) $first['m'],
+                        'end_m' => (int) $last['m'],
+                    ];
+                }
             }
         }
-        $startKeys = array_keys($startKeys);
-        sort($startKeys);
+        ksort($startMeta);
 
-        $periodOptions = array_map(function (int $key): array {
-            $y = intdiv($key - 1, 12);
-            $m = (($key - 1) % 12) + 1;
-
-            return [
-                'value' => sprintf('%04d-%02d', $y, $m),
-                'label' => sprintf('%d/%d 起', $y, $m),
+        $periodOptions = [];
+        foreach ($startMeta as $row) {
+            $periodOptions[] = [
+                'value' => sprintf('%04d-%02d', $row['start_y'], $row['start_m']),
+                'label' => sprintf('%d/%d 起', $row['start_y'], $row['start_m']),
             ];
-        }, $startKeys);
+        }
 
         // 解析所選起始月：'all'＝全部、'YYYY-MM'＝指定月；未指定則不列（由控制器要求先選）
         $normalizedPeriod = self::normalizePeriodStart($periodStart);
@@ -597,5 +583,102 @@ final class PaymentRosterBuilder
         }
 
         return sprintf('%04d-%02d', (int) $mm[1], $month);
+    }
+
+    /**
+     * 蒐集「有下一期待繳」的學生（只推算帳期，不算費用）。
+     *
+     * @return list<array{
+     *   student:Student,
+     *   pay_cycle:string,
+     *   course_ids:list<int>,
+     *   plan:array<string, mixed>,
+     *   months_by_course:array<int, list<array{y:int,m:int}>>
+     * }>
+     */
+    private static function collectPendingCandidates(?string $q, ?int $gradeLevelId): array
+    {
+        $q = $q !== null ? trim($q) : '';
+
+        $students = Student::query()
+            ->with(['gradeLevel:id,name', 'academicYear:id,year_code,name'])
+            ->where('status', 'active')
+            ->whereExists(function ($query): void {
+                $query->selectRaw('1')
+                    ->from('reconciliations')
+                    ->whereColumn('reconciliations.student_id', 'students.id')
+                    ->where('reconciliations.status', 'paid')
+                    ->whereNotNull('reconciliations.course_id');
+            })
+            ->when($gradeLevelId !== null, fn ($builder) => $builder->where('grade_level_id', $gradeLevelId))
+            ->when($q !== '', function ($builder) use ($q): void {
+                $builder->where(function ($inner) use ($q): void {
+                    $inner->where('name', 'like', '%'.$q.'%')
+                        ->orWhere('student_code', 'like', '%'.$q.'%');
+                });
+            })
+            ->orderBy('name')
+            ->get();
+
+        $candidates = [];
+
+        foreach ($students as $student) {
+            $snapshot = BillingRenewal::lastPaidRenewalSnapshot($student);
+            if ($snapshot === null) {
+                continue;
+            }
+
+            $intended = is_array($student->intended_course_ids) ? $student->intended_course_ids : [];
+            $courseIds = $intended !== []
+                ? array_values(array_unique(array_map('intval', $intended)))
+                : $snapshot['course_ids'];
+            if ($courseIds === []) {
+                continue;
+            }
+
+            $payCycle = $snapshot['pay_cycle'];
+            $plan = BillingRenewal::perCourseNextPeriod(
+                $student,
+                $courseIds,
+                BillingRenewal::nextStartDate($snapshot['end_year'], $snapshot['end_month']),
+                $payCycle,
+                true,
+            );
+            if ($plan['months'] === []) {
+                continue;
+            }
+
+            /** @var array<int, list<array{y:int,m:int}>> $monthsByCourse */
+            $monthsByCourse = [];
+            foreach ($plan['course_months'] as $cid => $labels) {
+                $monthsByCourse[(int) $cid] = array_map(function (string $label): array {
+                    [$y, $m] = array_map('intval', explode('-', $label));
+
+                    return ['y' => $y, 'm' => $m];
+                }, $labels);
+            }
+
+            // 下一期已繳 → 不列入選項／名單
+            $conflict = false;
+            foreach ($monthsByCourse as $cid => $courseMonthList) {
+                if (BillingRenewal::hasPaidConflicts($student, [$cid], $courseMonthList)) {
+                    $conflict = true;
+                    break;
+                }
+            }
+            if ($conflict) {
+                continue;
+            }
+
+            $candidates[] = [
+                'student' => $student,
+                'pay_cycle' => $payCycle,
+                'course_ids' => $courseIds,
+                'plan' => $plan,
+                'months_by_course' => $monthsByCourse,
+            ];
+        }
+
+        return $candidates;
     }
 }

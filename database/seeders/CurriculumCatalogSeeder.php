@@ -8,6 +8,7 @@ use App\Models\CourseBundle;
 use App\Models\CourseCategory;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
+use App\Support\FeePlanCustomPeriodConverter;
 use App\Support\PricingGroup;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
@@ -379,8 +380,14 @@ class CurriculumCatalogSeeder extends Seeder
                         'is_active' => true,
                         'sort_order' => $row['sort_order'],
                     ]
-                )->courses()->sync($courseIds);
+                )->courses()->sync(
+                    collect($courseIds)->mapWithKeys(
+                        fn (int $id): array => [$id => ['price' => $row['bundle_price']]]
+                    )->all()
+                );
             }
         }
+
+        FeePlanCustomPeriodConverter::convertAll(force: true);
     }
 }

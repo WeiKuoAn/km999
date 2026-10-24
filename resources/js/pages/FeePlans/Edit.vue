@@ -178,7 +178,6 @@ const submit = () =>
                 :academic-years="academicYears"
                 :grade-levels="gradeLevels"
                 :courses="courses"
-                :allow-all-grades="props.plan.grade_level_id === null"
             />
 
             <div class="flex gap-2">

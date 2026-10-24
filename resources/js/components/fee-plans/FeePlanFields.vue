@@ -26,8 +26,6 @@ const props = defineProps<{
     academicYears: Array<{ id: number; year_code: string; name: string }>;
     gradeLevels: Array<{ id: number; name: string }>;
     courses: FeePlanCourseOption[];
-    /** 允許「全年級」（僅舊資料編輯時保留） */
-    allowAllGrades?: boolean;
 }>();
 
 const selectedGradeName = computed(() => {
@@ -202,8 +200,7 @@ if (props.form.material_unit === 'subject') {
     <div
         class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
     >
-        依「年級」各建一筆。先選年級與課目，再在收費方式裡填單科／雙科／三科價格（勾 2
-        門以上才會出現雙科欄）。新開的班請先到
+        先選年級（或全年級統一價）與課目，再填收費方式。國一／二／三價格或期別不同時請分年級建；新開的班請先到
         <Link href="/courses" class="font-medium underline underline-offset-4"
             >課程管理</Link
         >
@@ -227,12 +224,7 @@ if (props.form.material_unit === 'subject') {
                     required
                 >
                     <option value="">請選擇年級</option>
-                    <option
-                        v-if="allowAllGrades || form.grade_level_id === 'all'"
-                        value="all"
-                    >
-                        全年級（不建議，價格不同請分年級）
-                    </option>
+                    <option value="all">全年級（各年級統一價／同期別）</option>
                     <option
                         v-for="g in gradeLevels"
                         :key="g.id"
@@ -242,7 +234,7 @@ if (props.form.material_unit === 'subject') {
                     </option>
                 </select>
                 <p class="text-xs text-muted-foreground">
-                    國一、國二、國三價格或期別不同時，請各建一筆。
+                    統一價可選全年級；價格或期別不同時，請依年級各建一筆。
                 </p>
                 <InputError :message="form.errors.grade_level_id" />
             </div>

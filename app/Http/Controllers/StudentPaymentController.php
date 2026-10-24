@@ -232,7 +232,9 @@ class StudentPaymentController extends Controller
                 ])
                 ->values()
                 ->all(),
-            'period_options' => $this->rosterPeriodMonthOptions($gradeLevelId),
+            'period_options' => $gradeLevelId !== null
+                ? PaymentRosterBuilder::periodOptionsForGrade($gradeLevelId, $q === '' ? null : $q)
+                : [],
             'filters' => [
                 'q' => $q,
                 'grade_level_id' => $gradeLevelId === null ? '' : (string) $gradeLevelId,

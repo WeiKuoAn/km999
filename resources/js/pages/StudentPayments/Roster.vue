@@ -261,7 +261,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="繳費名單"
-            description="先選年級帶出對應帳期；選好起始月會自動產生名單。"
+            description="先選年級，帳期會依「已繳下一期實際起始月」列出；選好即自動產生名單。"
         >
             <template #actions>
                 <Button variant="outline" as-child :disabled="!canPreview || !previewed">
