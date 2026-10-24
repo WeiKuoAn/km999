@@ -13,8 +13,13 @@ import type {
     FeePlanBillingKind,
     FeePlanCourseOption,
     FeePlanFormData,
+    FeePlanPeriodCoursePrice,
 } from '@/lib/feePlanForm';
-import { periodMonths } from '@/lib/feePlanForm';
+import {
+    emptyPeriodCoursePrice,
+    emptyPeriodCoursePrices,
+    periodMonths,
+} from '@/lib/feePlanForm';
 
 const props = defineProps<{
     form: InertiaForm<FeePlanFormData>;
@@ -95,15 +100,25 @@ const periodMonthsPreview = (period: {
     return count;
 };
 
+const ensurePeriodCoursePrices = () => {
+    const ids = props.form.course_ids.map(Number);
+    for (const period of props.form.periods) {
+        const next: Record<number, FeePlanPeriodCoursePrice> = {};
+        for (const id of ids) {
+            next[id] = period.course_prices?.[id] ?? emptyPeriodCoursePrice();
+        }
+        period.course_prices = next;
+    }
+};
+
 const addPeriod = () => {
     props.form.periods.push({
         start_month: '',
         end_month: '',
-        total_price: '',
-        double_price: '',
-        triple_price: '',
+        course_prices: emptyPeriodCoursePrices(props.form.course_ids.map(Number)),
     });
 };
+
 
 const periodListTotal = computed(() =>
     Math.round(Number(props.form.list_price || 0) * months.value),
@@ -150,18 +165,30 @@ watch(
     { immediate: true },
 );
 
+watch(
+    () => [...props.form.course_ids],
+    () => {
+        ensurePeriodCoursePrices();
+    },
+    { immediate: true },
+);
+
 watch(planCourseCount, (count) => {
     if (count < 2) {
         props.form.double_monthly = '';
         props.form.triple_monthly = '';
         for (const period of props.form.periods) {
-            period.double_price = '';
-            period.triple_price = '';
+            for (const row of Object.values(period.course_prices ?? {})) {
+                row.double_price = '';
+                row.triple_price = '';
+            }
         }
     } else if (count < 3) {
         props.form.triple_monthly = '';
         for (const period of props.form.periods) {
-            period.triple_price = '';
+            for (const row of Object.values(period.course_prices ?? {})) {
+                row.triple_price = '';
+            }
         }
     }
 });
@@ -282,7 +309,7 @@ if (props.form.material_unit === 'subject') {
                     )
                 "
             >
-                <option value="custom">自訂期別（推薦：各期填總價）</option>
+                <option value="custom">自訂期別（推薦：各期依科填總價）</option>
                 <option value="month">按月</option>
                 <option value="quarter">按季（一次繳 3 個月）</option>
                 <option value="other">其他（自訂月數 × 月價）</option>
@@ -308,7 +335,7 @@ if (props.form.material_unit === 'subject') {
                 <div>
                     <p class="text-sm font-medium">期別設定（每年循環）</p>
                     <p class="text-xs text-muted-foreground">
-                        月份不可重疊。學生報幾科就用對應欄（雙／三科留白＝用單科總價）。
+                        月份不可重疊。請依勾選科目分別填本期金額；雙／三科欄留白＝用該科單科總價。
                     </p>
                 </div>
                 <Button type="button" variant="outline" size="sm" @click="addPeriod">
@@ -369,58 +396,84 @@ if (props.form.material_unit === 'subject') {
                     </Button>
                 </div>
 
-                <div
-                    class="grid gap-3"
-                    :class="
-                        showTripleTier
-                            ? 'sm:grid-cols-3'
-                            : showDoubleTier
-                              ? 'sm:grid-cols-2'
-                              : 'sm:grid-cols-1'
-                    "
-                >
-                    <div class="grid gap-1.5">
-                        <Label :for="`period-single-${i}`">單科總價（元）</Label>
-                        <Input
-                            :id="`period-single-${i}`"
-                            v-model.number="period.total_price"
-                            type="number"
-                            min="1"
-                            required
-                        />
-                    </div>
-                    <div v-if="showDoubleTier" class="grid gap-1.5">
-                        <Label :for="`period-double-${i}`">雙科／每科總價</Label>
-                        <Input
-                            :id="`period-double-${i}`"
-                            v-model.number="period.double_price"
-                            type="number"
-                            min="1"
-                            placeholder="留白＝單科價"
-                        />
-                    </div>
-                    <div v-if="showTripleTier" class="grid gap-1.5">
-                        <Label :for="`period-triple-${i}`">三科／每科總價</Label>
-                        <Input
-                            :id="`period-triple-${i}`"
-                            v-model.number="period.triple_price"
-                            type="number"
-                            min="1"
-                            placeholder="留白＝單科價"
-                        />
-                    </div>
+                <div v-if="selectedCourses.length === 0" class="text-sm text-muted-foreground">
+                    請先在上方勾選適用科目，再為各科填寫本期金額。
+                </div>
+                <div v-else class="overflow-x-auto rounded-md border">
+                    <table class="w-full min-w-[28rem] text-sm">
+                        <thead class="bg-muted/50 text-left text-xs text-muted-foreground">
+                            <tr>
+                                <th class="px-3 py-2 font-medium">科目</th>
+                                <th class="px-3 py-2 font-medium">單科總價（元）</th>
+                                <th v-if="showDoubleTier" class="px-3 py-2 font-medium">
+                                    雙科／該科總價
+                                </th>
+                                <th v-if="showTripleTier" class="px-3 py-2 font-medium">
+                                    三科／該科總價
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr
+                                v-for="course in selectedCourses"
+                                :key="`${i}-${course.id}`"
+                                class="border-t"
+                            >
+                                <td class="px-3 py-2 font-medium">{{ course.name }}</td>
+                                <td class="px-3 py-2">
+                                    <Input
+                                        v-if="period.course_prices[course.id]"
+                                        :id="`period-${i}-course-${course.id}-single`"
+                                        v-model.number="
+                                            period.course_prices[course.id].total_price
+                                        "
+                                        type="number"
+                                        min="1"
+                                        class="h-9"
+                                        required
+                                    />
+                                    <InputError
+                                        :message="
+                                            (form.errors as Record<string, string | undefined>)[
+                                                `periods.${i}.course_prices.${course.id}.total_price`
+                                            ]
+                                        "
+                                    />
+                                </td>
+                                <td v-if="showDoubleTier" class="px-3 py-2">
+                                    <Input
+                                        v-if="period.course_prices[course.id]"
+                                        :id="`period-${i}-course-${course.id}-double`"
+                                        v-model.number="
+                                            period.course_prices[course.id].double_price
+                                        "
+                                        type="number"
+                                        min="1"
+                                        class="h-9"
+                                        placeholder="留白＝單科價"
+                                    />
+                                </td>
+                                <td v-if="showTripleTier" class="px-3 py-2">
+                                    <Input
+                                        v-if="period.course_prices[course.id]"
+                                        :id="`period-${i}-course-${course.id}-triple`"
+                                        v-model.number="
+                                            period.course_prices[course.id].triple_price
+                                        "
+                                        type="number"
+                                        min="1"
+                                        class="h-9"
+                                        placeholder="留白＝單科價"
+                                    />
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
                 <InputError
                     :message="
                         (form.errors as Record<string, string | undefined>)[
                             `periods.${i}.start_month`
-                        ]
-                    "
-                />
-                <InputError
-                    :message="
-                        (form.errors as Record<string, string | undefined>)[
-                            `periods.${i}.total_price`
                         ]
                     "
                 />

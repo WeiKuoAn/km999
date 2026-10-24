@@ -106,7 +106,23 @@ class FeePlan extends Model
             }
 
             return $periods
-                ->map(fn (FeePlanPeriod $period): string => $period->label().' $'.number_format($period->total_price))
+                ->map(function (FeePlanPeriod $period): string {
+                    if ($period->relationLoaded('coursePrices') && $period->coursePrices->isNotEmpty()) {
+                        $amounts = $period->coursePrices
+                            ->pluck('total_price')
+                            ->map(fn ($price): int => (int) $price)
+                            ->unique()
+                            ->sort()
+                            ->values();
+                        $label = $amounts->count() === 1
+                            ? '$'.number_format((int) $amounts[0])
+                            : '$'.number_format((int) $amounts->first()).'～'.number_format((int) $amounts->last());
+
+                        return $period->label().' '.$label;
+                    }
+
+                    return $period->label().' $'.number_format($period->total_price);
+                })
                 ->implode('；');
         }
 

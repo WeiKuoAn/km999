@@ -25,7 +25,7 @@ class FeePlanController extends Controller
         $gradeFilter = $request->string('grade')->toString();
 
         $query = FeePlan::query()
-            ->with(['gradeLevel:id,name,code', 'academicYear:id,year_code,name', 'courses:id,name,color,status', 'periods'])
+            ->with(['gradeLevel:id,name,code', 'academicYear:id,year_code,name', 'courses:id,name,color,status', 'periods.coursePrices'])
             ->orderBy('sort_order')
             ->orderBy('id');
 
@@ -80,7 +80,7 @@ class FeePlanController extends Controller
         DB::transaction(function () use ($validated, $courseIds, $bundles, $periods): void {
             $plan = FeePlan::query()->create($validated);
             $plan->courses()->sync($courseIds);
-            $this->syncPeriods($plan, $periods);
+            $this->syncPeriods($plan, $periods, $courseIds);
             $this->syncBundles($plan, $bundles, []);
         });
 
@@ -89,7 +89,7 @@ class FeePlanController extends Controller
 
     public function edit(FeePlan $feePlan): Response
     {
-        $feePlan->load(['gradeLevel', 'academicYear', 'courses', 'periods']);
+        $feePlan->load(['gradeLevel', 'academicYear', 'courses', 'periods.coursePrices']);
 
         return Inertia::render('FeePlans/Edit', [
             'plan' => [
@@ -121,7 +121,7 @@ class FeePlanController extends Controller
         DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $periods, $previousBundleIds): void {
             $feePlan->update($validated);
             $feePlan->courses()->sync($courseIds);
-            $this->syncPeriods($feePlan, $periods);
+            $this->syncPeriods($feePlan, $periods, $courseIds);
             $this->syncBundles($feePlan, $bundles, $previousBundleIds);
         });
 
@@ -130,8 +130,9 @@ class FeePlanController extends Controller
 
     /**
      * @param  list<array<string, mixed>>  $rows
+     * @param  list<int>  $courseIds
      */
-    private function syncPeriods(FeePlan $plan, array $rows): void
+    private function syncPeriods(FeePlan $plan, array $rows, array $courseIds): void
     {
         $plan->periods()->delete();
 
@@ -140,16 +141,47 @@ class FeePlanController extends Controller
         }
 
         foreach (array_values($rows) as $i => $row) {
-            $double = $row['double_price'] ?? null;
-            $triple = $row['triple_price'] ?? null;
-            $plan->periods()->create([
+            $coursePriceRows = is_array($row['course_prices'] ?? null) ? $row['course_prices'] : [];
+            $singles = [];
+            $normalized = [];
+
+            foreach ($courseIds as $courseId) {
+                $raw = $coursePriceRows[$courseId] ?? $coursePriceRows[(string) $courseId] ?? null;
+                if (! is_array($raw)) {
+                    continue;
+                }
+                $total = (int) ($raw['total_price'] ?? 0);
+                if ($total < 1) {
+                    continue;
+                }
+                $double = $raw['double_price'] ?? null;
+                $triple = $raw['triple_price'] ?? null;
+                $singles[] = $total;
+                $normalized[$courseId] = [
+                    'total_price' => $total,
+                    'double_price' => $double === null || $double === '' ? null : (int) $double,
+                    'triple_price' => $triple === null || $triple === '' ? null : (int) $triple,
+                ];
+            }
+
+            $period = $plan->periods()->create([
                 'start_month' => (int) $row['start_month'],
                 'end_month' => (int) $row['end_month'],
-                'total_price' => (int) $row['total_price'],
-                'double_price' => $double === null || $double === '' ? null : (int) $double,
-                'triple_price' => $triple === null || $triple === '' ? null : (int) $triple,
+                // 列表摘要用：各科單科最低價（相容舊欄位）
+                'total_price' => $singles === [] ? 0 : min($singles),
+                'double_price' => null,
+                'triple_price' => null,
                 'sort_order' => $i,
             ]);
+
+            foreach ($normalized as $courseId => $prices) {
+                $period->coursePrices()->create([
+                    'course_id' => $courseId,
+                    'total_price' => $prices['total_price'],
+                    'double_price' => $prices['double_price'],
+                    'triple_price' => $prices['triple_price'],
+                ]);
+            }
         }
     }
 
@@ -265,9 +297,10 @@ class FeePlanController extends Controller
             'periods' => ['nullable', 'array'],
             'periods.*.start_month' => ['required', 'integer', 'between:1,12'],
             'periods.*.end_month' => ['required', 'integer', 'between:1,12'],
-            'periods.*.total_price' => ['required', 'integer', 'min:1'],
-            'periods.*.double_price' => ['nullable', 'integer', 'min:1'],
-            'periods.*.triple_price' => ['nullable', 'integer', 'min:1'],
+            'periods.*.course_prices' => ['required', 'array'],
+            'periods.*.course_prices.*.total_price' => ['required', 'integer', 'min:1'],
+            'periods.*.course_prices.*.double_price' => ['nullable', 'integer', 'min:1'],
+            'periods.*.course_prices.*.triple_price' => ['nullable', 'integer', 'min:1'],
             'list_price' => ['required', 'integer', 'min:0'],
             'quarter_price' => ['nullable', 'integer', 'min:0'],
             'quarter_single_price' => ['nullable', 'integer', 'min:0'],
@@ -319,11 +352,12 @@ class FeePlanController extends Controller
             $periods = $validated['periods'] ?? [];
             if ($periods === []) {
                 throw ValidationException::withMessages([
-                    'periods' => '自訂期別請至少新增一期（起始月、結束月、一期總價）。',
+                    'periods' => '自訂期別請至少新增一期（起始月、結束月、各科一期總價）。',
                 ]);
             }
             $seenMonths = [];
             $periodErrors = [];
+            $planCourseIds = array_map('intval', $validated['course_ids']);
             foreach ($periods as $i => $period) {
                 foreach (CustomBillingPeriod::monthNumbers((int) $period['start_month'], (int) $period['end_month']) as $month) {
                     if (isset($seenMonths[$month])) {
@@ -331,6 +365,14 @@ class FeePlanController extends Controller
                         break;
                     }
                     $seenMonths[$month] = true;
+                }
+                $prices = is_array($period['course_prices'] ?? null) ? $period['course_prices'] : [];
+                foreach ($planCourseIds as $courseId) {
+                    $raw = $prices[$courseId] ?? $prices[(string) $courseId] ?? null;
+                    $total = is_array($raw) ? ($raw['total_price'] ?? null) : null;
+                    if ($total === null || $total === '' || (int) $total < 1) {
+                        $periodErrors["periods.{$i}.course_prices.{$courseId}.total_price"] = '請為每一科填寫單科一期總價。';
+                    }
                 }
             }
             if ($periodErrors !== []) {
@@ -487,13 +529,36 @@ class FeePlanController extends Controller
                 default => '每 '.(int) ($plan->session_block_size ?? 4).' 個月',
             },
             'periods' => $plan->relationLoaded('periods')
-                ? $plan->periods->map(fn ($period): array => [
-                    'start_month' => (int) $period->start_month,
-                    'end_month' => (int) $period->end_month,
-                    'total_price' => (int) $period->total_price,
-                    'double_price' => $period->double_price !== null ? (int) $period->double_price : null,
-                    'triple_price' => $period->triple_price !== null ? (int) $period->triple_price : null,
-                ])->values()->all()
+                ? $plan->periods->map(function ($period): array {
+                    $coursePrices = [];
+                    if ($period->relationLoaded('coursePrices')) {
+                        foreach ($period->coursePrices as $row) {
+                            $coursePrices[(int) $row->course_id] = [
+                                'total_price' => (int) $row->total_price,
+                                'double_price' => $row->double_price !== null ? (int) $row->double_price : null,
+                                'triple_price' => $row->triple_price !== null ? (int) $row->triple_price : null,
+                            ];
+                        }
+                    }
+
+                    // 相容：尚無分科價時，把期別統一價當成每一科
+                    if ($coursePrices === [] && (int) $period->total_price > 0) {
+                        foreach ($plan->courses as $course) {
+                            $coursePrices[(int) $course->id] = [
+                                'total_price' => (int) $period->total_price,
+                                'double_price' => $period->double_price !== null ? (int) $period->double_price : null,
+                                'triple_price' => $period->triple_price !== null ? (int) $period->triple_price : null,
+                            ];
+                        }
+                    }
+
+                    return [
+                        'start_month' => (int) $period->start_month,
+                        'end_month' => (int) $period->end_month,
+                        'total_price' => (int) $period->total_price,
+                        'course_prices' => $coursePrices,
+                    ];
+                })->values()->all()
                 : [],
         ];
     }

@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import {
     billingKindFromPlan,
     emptyCoursePrices,
+    emptyPeriodCoursePrice,
+    emptyPeriodCoursePrices,
     feePlanPayload,
     monthlyTiersFromBundles,
     periodMonths,
@@ -13,6 +15,7 @@ import type {
     FeePlanBundleRow,
     FeePlanCourseOption,
     FeePlanFormData,
+    FeePlanPeriodCoursePrice,
 } from '@/lib/feePlanForm';
 
 const props = defineProps<{
@@ -27,9 +30,15 @@ const props = defineProps<{
         periods: Array<{
             start_month: number;
             end_month: number;
-            total_price: number;
-            double_price: number | null;
-            triple_price: number | null;
+            total_price?: number;
+            course_prices: Record<
+                number,
+                {
+                    total_price: number;
+                    double_price: number | null;
+                    triple_price: number | null;
+                }
+            >;
         }>;
         session_block_size: number | null;
         list_price: number;
@@ -87,13 +96,43 @@ const form = useForm<FeePlanFormData>({
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
     is_active: props.plan.is_active,
-    periods: (props.plan.periods ?? []).map((period) => ({
-        start_month: period.start_month,
-        end_month: period.end_month,
-        total_price: period.total_price,
-        double_price: period.double_price ?? '',
-        triple_price: period.triple_price ?? '',
-    })),
+    periods: (props.plan.periods ?? []).map((period) => {
+        const courseIds = [...props.plan.course_ids];
+        const prices = emptyPeriodCoursePrices(courseIds);
+        for (const id of courseIds) {
+            const raw =
+                period.course_prices?.[id] ??
+                (
+                    period.course_prices as Record<
+                        string,
+                        {
+                            total_price: number;
+                            double_price: number | null;
+                            triple_price: number | null;
+                        }
+                    >
+                )?.[String(id)];
+            if (raw) {
+                prices[id] = {
+                    total_price: raw.total_price,
+                    double_price: raw.double_price ?? '',
+                    triple_price: raw.triple_price ?? '',
+                } satisfies FeePlanPeriodCoursePrice;
+            } else if (period.total_price) {
+                // 舊資料尚未分科價：用期別統一價帶入
+                prices[id] = {
+                    ...emptyPeriodCoursePrice(),
+                    total_price: period.total_price,
+                };
+            }
+        }
+
+        return {
+            start_month: period.start_month,
+            end_month: period.end_month,
+            course_prices: prices,
+        };
+    }),
     bundles: props.plan.bundles.map((bundle): FeePlanBundleRow => {
         const courseIds = [...bundle.course_ids];
         const prices = emptyCoursePrices(courseIds);

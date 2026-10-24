@@ -19,16 +19,34 @@ export type FeePlanBundleRow = {
     min_courses: number;
 };
 
+/** 某一期裡某一科的價格 */
+export type FeePlanPeriodCoursePrice = {
+    /** 該科單科一期總價 */
+    total_price: number | '';
+    /** 雙科時該科一期總價；留白＝用單科總價 */
+    double_price: number | '';
+    /** 三科時該科一期總價；留白＝用單科／雙科 */
+    triple_price: number | '';
+};
+
 export type FeePlanPeriodRow = {
     start_month: number | '';
     end_month: number | '';
-    /** 單科一期總價 */
-    total_price: number | '';
-    /** 雙科時每科一期總價；留白＝用單科總價 */
-    double_price: number | '';
-    /** 三科時每科一期總價；留白＝用單科／雙科 */
-    triple_price: number | '';
+    /** 依勾選科目分別設定金額 */
+    course_prices: Record<number, FeePlanPeriodCoursePrice>;
 };
+
+export function emptyPeriodCoursePrice(): FeePlanPeriodCoursePrice {
+    return { total_price: '', double_price: '', triple_price: '' };
+}
+
+export function emptyPeriodCoursePrices(
+    courseIds: number[],
+): Record<number, FeePlanPeriodCoursePrice> {
+    return Object.fromEntries(
+        courseIds.map((id) => [id, emptyPeriodCoursePrice()]),
+    );
+}
 
 /** 表單上的收費方式（存檔時 quarter／other → session_block） */
 export type FeePlanBillingKind = 'month' | 'quarter' | 'other' | 'custom';
@@ -192,10 +210,26 @@ export function feePlanPayload(data: FeePlanFormData) {
                       start_month:
                           period.start_month === '' ? '' : Number(period.start_month),
                       end_month: period.end_month === '' ? '' : Number(period.end_month),
-                      total_price:
-                          period.total_price === '' ? '' : Number(period.total_price),
-                      double_price: emptyToNull(period.double_price),
-                      triple_price: emptyToNull(period.triple_price),
+                      course_prices: Object.fromEntries(
+                          data.course_ids.map((id) => {
+                              const row =
+                                  period.course_prices[id] ??
+                                  period.course_prices[Number(id)] ??
+                                  emptyPeriodCoursePrice();
+
+                              return [
+                                  id,
+                                  {
+                                      total_price:
+                                          row.total_price === ''
+                                              ? ''
+                                              : Number(row.total_price),
+                                      double_price: emptyToNull(row.double_price),
+                                      triple_price: emptyToNull(row.triple_price),
+                                  },
+                              ];
+                          }),
+                      ),
                   }))
                 : [],
         quarter_single_price: null,

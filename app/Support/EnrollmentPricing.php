@@ -45,7 +45,7 @@ final class EnrollmentPricing
                 'coursePrices:id,course_id,level',
                 'feePlans' => function ($query) use ($student): void {
                     $query
-                        ->with('periods')
+                        ->with('periods.coursePrices')
                         ->where('is_active', true)
                         ->where(function ($builder) use ($student): void {
                             $builder
@@ -123,13 +123,26 @@ final class EnrollmentPricing
                     ? max(1, (int) ($plan->session_block_size ?? 3))
                     : null,
                 'periods' => $plan?->unit === 'custom_period'
-                    ? $plan->periods->map(fn ($period): array => [
-                        'start_month' => (int) $period->start_month,
-                        'end_month' => (int) $period->end_month,
-                        'total_price' => (int) $period->total_price,
-                        'double_price' => $period->double_price !== null ? (int) $period->double_price : null,
-                        'triple_price' => $period->triple_price !== null ? (int) $period->triple_price : null,
-                    ])->values()->all()
+                    ? $plan->periods->map(function ($period) use ($course): array {
+                        $coursePrice = $period->relationLoaded('coursePrices')
+                            ? $period->coursePrices->firstWhere('course_id', $course->id)
+                            : null;
+
+                        return [
+                            'start_month' => (int) $period->start_month,
+                            'end_month' => (int) $period->end_month,
+                            // 該科一期價（無分科價時退回期別統一價）
+                            'total_price' => $coursePrice !== null
+                                ? (int) $coursePrice->total_price
+                                : (int) $period->total_price,
+                            'double_price' => $coursePrice !== null
+                                ? ($coursePrice->double_price !== null ? (int) $coursePrice->double_price : null)
+                                : ($period->double_price !== null ? (int) $period->double_price : null),
+                            'triple_price' => $coursePrice !== null
+                                ? ($coursePrice->triple_price !== null ? (int) $coursePrice->triple_price : null)
+                                : ($period->triple_price !== null ? (int) $period->triple_price : null),
+                        ];
+                    })->values()->all()
                     : [],
                 'list' => $list,
                 'q_single' => $qSingle,

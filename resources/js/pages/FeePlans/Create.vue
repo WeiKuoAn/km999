@@ -2,7 +2,7 @@
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import FeePlanFields from '@/components/fee-plans/FeePlanFields.vue';
 import { Button } from '@/components/ui/button';
-import { feePlanPayload } from '@/lib/feePlanForm';
+import { emptyPeriodCoursePrices, feePlanPayload } from '@/lib/feePlanForm';
 import type { FeePlanCourseOption, FeePlanFormData } from '@/lib/feePlanForm';
 
 const props = defineProps<{
@@ -34,9 +34,7 @@ const form = useForm<FeePlanFormData>({
         {
             start_month: 7,
             end_month: 8,
-            total_price: '',
-            double_price: '',
-            triple_price: '',
+            course_prices: emptyPeriodCoursePrices([]),
         },
     ],
     bundles: [],
