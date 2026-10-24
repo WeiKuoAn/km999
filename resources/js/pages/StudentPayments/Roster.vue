@@ -261,7 +261,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="繳費名單"
-            description="先選年級，帳期會依該年級收費設定列出對應期別；再選起始月後按「預覽名單」。"
+            description="先選年級帶出對應帳期；選好起始月會自動產生名單。"
         >
             <template #actions>
                 <Button variant="outline" as-child :disabled="!canPreview || !previewed">
@@ -342,6 +342,7 @@ defineOptions({
                     class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
                     :disabled="!gradeLevelId"
                     required
+                    @change="applyFilters"
                 >
                     <option value="">
                         {{
