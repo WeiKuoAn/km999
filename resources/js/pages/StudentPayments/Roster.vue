@@ -438,7 +438,9 @@ defineOptions({
                             <th class="px-3 py-2 text-left">科目月份</th>
                             <th class="px-3 py-2 text-right">費用</th>
                             <th class="px-3 py-2 text-left">備註</th>
-                            <th class="px-3 py-2 text-left">操作</th>
+                            <th class="px-3 py-2 text-left whitespace-nowrap">
+                                操作
+                            </th>
                         </tr>
                     </thead>
                     <tbody>
@@ -476,21 +478,22 @@ defineOptions({
                                 {{ row.note || '—' }}
                             </td>
                             <td class="px-3 py-2.5">
-                                <div class="flex flex-col gap-1">
-                                    <a
-                                        :href="noticeHref(row)"
-                                        target="_blank"
-                                        rel="noopener"
-                                        class="text-primary underline-offset-4 hover:underline"
-                                    >
-                                        繳費條 PDF
-                                    </a>
-                                    <Link
-                                        :href="detailHref(row)"
-                                        class="text-primary underline-offset-4 hover:underline"
-                                    >
-                                        確認收款
-                                    </Link>
+                                <div class="flex flex-nowrap items-center gap-2">
+                                    <Button variant="outline" size="sm" as-child>
+                                        <a
+                                            :href="noticeHref(row)"
+                                            target="_blank"
+                                            rel="noopener"
+                                        >
+                                            <FileDown class="size-3.5" />
+                                            繳費條 PDF
+                                        </a>
+                                    </Button>
+                                    <Button size="sm" as-child>
+                                        <Link :href="detailHref(row)"
+                                            >確認收款</Link
+                                        >
+                                    </Button>
                                 </div>
                             </td>
                         </tr>
