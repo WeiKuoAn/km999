@@ -73,7 +73,7 @@ const destroyPlan = (id: number) => {
     <div class="page-shell">
         <PageHeader
             title="收費設定"
-            description="每門課的單科價，以及同時報多科時的雙科／多科優惠（季繳、年繳適用）。"
+            description="依年級建立價目；單科／雙科／三科價格與收費方式寫在同一區。"
         >
             <template v-if="canManage" #actions>
                 <Button as-child>

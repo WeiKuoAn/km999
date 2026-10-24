@@ -127,6 +127,8 @@ final class EnrollmentPricing
                         'start_month' => (int) $period->start_month,
                         'end_month' => (int) $period->end_month,
                         'total_price' => (int) $period->total_price,
+                        'double_price' => $period->double_price !== null ? (int) $period->double_price : null,
+                        'triple_price' => $period->triple_price !== null ? (int) $period->triple_price : null,
                     ])->values()->all()
                     : [],
                 'list' => $list,
@@ -352,8 +354,16 @@ final class EnrollmentPricing
         /** @var array<string, list<array{line:int, exact:float, attended:int, baseline:int}>> $exactByMonth */
         $exactByMonth = [];
 
+        $subjectsById = $subjects->all();
+
         foreach ($selected as $subject) {
             $isCustom = ($subject['unit'] ?? 'month') === 'custom_period';
+            $planSubjectCount = self::feePlanSubjectCount(
+                $subject,
+                $subjectsById,
+                $selectedIds,
+                $student,
+            );
             $bundle = $isCustom || $payCycle === 'monthly' ? null : ($bundlePrices[(int) $subject['id']] ?? null);
             if ($bundle !== null && $bundle['price'] >= (int) $subject['q_single']) {
                 $bundle = null;
@@ -382,7 +392,7 @@ final class EnrollmentPricing
             $tuition = 0;
 
             if ($isCustom) {
-                // 自訂期別：一期總價；期中加入依剩餘月份折算（總價 ÷ 期月數 × 選取月數）
+                // 自訂期別：依同設定報科數取單／雙／三科一期總價；期中依剩餘月折算
                 $periods = is_array($subject['periods'] ?? null) ? $subject['periods'] : [];
                 /** @var array<string, array{total:int, count:int, keys:list<string>}> $groups */
                 $groups = [];
@@ -400,17 +410,18 @@ final class EnrollmentPricing
                     if ($period === null) {
                         continue;
                     }
+                    $tierTotal = CustomBillingPeriod::priceForSubjectCount($period, $planSubjectCount);
                     $groupKey = $period['start_key'].'-'.$period['end_key'];
                     $groups[$groupKey] ??= [
-                        'total' => $period['total_price'],
+                        'total' => $tierTotal,
                         'count' => $period['month_count'],
                         'keys' => [],
                     ];
                     $groups[$groupKey]['keys'][] = $key;
                     if ($unitPrice === (int) $subject['list'] || $groups[$groupKey]['keys'] === [$key]) {
                         $unitPrice = $period['month_count'] > 0
-                            ? (int) round($period['total_price'] / $period['month_count'])
-                            : $period['total_price'];
+                            ? (int) round($tierTotal / $period['month_count'])
+                            : $tierTotal;
                     }
                 }
                 foreach ($groups as $group) {
@@ -665,6 +676,12 @@ final class EnrollmentPricing
                 if ($a['matched'] !== $b['matched']) {
                     return $b['matched'] <=> $a['matched'];
                 }
+                // 報科數門檻較高者優先（三科價優於雙科價）
+                $minA = (int) ($a['bundle']['min_courses'] ?? 0);
+                $minB = (int) ($b['bundle']['min_courses'] ?? 0);
+                if ($minA !== $minB) {
+                    return $minB <=> $minA;
+                }
                 if ($a['exact'] !== $b['exact']) {
                     return $a['exact'] ? -1 : 1;
                 }
@@ -694,6 +711,41 @@ final class EnrollmentPricing
         }
 
         return $out;
+    }
+
+    /**
+     * 同一收費設定下，學生報名中（本次勾選＋已報）的科數，供單／雙／三科價使用。
+     *
+     * @param  array<string, mixed>  $subject
+     * @param  array<int, array<string, mixed>>  $subjectsById
+     * @param  list<int>  $selectedIds
+     */
+    private static function feePlanSubjectCount(
+        array $subject,
+        array $subjectsById,
+        array $selectedIds,
+        Student $student,
+    ): int {
+        $planId = $subject['fee_plan_id'] ?? null;
+        if ($planId === null) {
+            return 1;
+        }
+
+        $ids = [];
+        foreach ($selectedIds as $id) {
+            $peer = $subjectsById[(int) $id] ?? null;
+            if (is_array($peer) && ($peer['fee_plan_id'] ?? null) == $planId) {
+                $ids[(int) $id] = true;
+            }
+        }
+        foreach (PromotionCourses::intendedOrSnapshotCourseIds($student) as $id) {
+            $peer = $subjectsById[(int) $id] ?? null;
+            if (is_array($peer) && ($peer['fee_plan_id'] ?? null) == $planId) {
+                $ids[(int) $id] = true;
+            }
+        }
+
+        return max(1, count($ids));
     }
 
     /**

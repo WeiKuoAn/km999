@@ -22,7 +22,12 @@ export type FeePlanBundleRow = {
 export type FeePlanPeriodRow = {
     start_month: number | '';
     end_month: number | '';
+    /** 單科一期總價 */
     total_price: number | '';
+    /** 雙科時每科一期總價；留白＝用單科總價 */
+    double_price: number | '';
+    /** 三科時每科一期總價；留白＝用單科／雙科 */
+    triple_price: number | '';
 };
 
 /** 表單上的收費方式（存檔時 quarter／other → session_block） */
@@ -34,19 +39,24 @@ export type FeePlanFormData = {
     course_ids: number[];
     group_name: string;
     pricing_group: string;
-    /** UI：按月／按季／其他 */
+    /** UI：按月／按季／其他／自訂期別 */
     billing_kind: FeePlanBillingKind;
     /** 其他：一期幾個月份；按季固定 3 */
     session_block_size: number | '';
     /** 一個月原價（資料庫也存月價；按期收款時再 × 月數） */
     list_price: number;
-    /** 一個月優惠價（留白＝用原價） */
+    /** 一個月優惠價／單科月價（留白＝用原價） */
     quarter_price: number | '';
+    /** 按月／按季：雙科每月價（留白＝不另設雙科價） */
+    double_monthly: number | '';
+    /** 按月／按季：三科每月價 */
+    triple_monthly: number | '';
     material_fee: number;
     material_unit: 'term' | 'subject' | 'class_day';
     sort_order: number;
     is_active: boolean;
     periods: FeePlanPeriodRow[];
+    /** 僅編輯時載入舊資料；存檔改由 double/triple_monthly 產生 */
     bundles: FeePlanBundleRow[];
 };
 
@@ -86,8 +96,72 @@ export function emptyCoursePrices(courseIds: number[]): Record<number, number | 
     return Object.fromEntries(courseIds.map((id) => [id, '' as const]));
 }
 
+/** 從舊的組合優惠列推回雙科／三科每月價（各科同價時） */
+export function monthlyTiersFromBundles(
+    bundles: Array<{
+        min_courses: number;
+        course_prices: Record<number | string, number | null | ''>;
+    }>,
+): { double_monthly: number | ''; triple_monthly: number | '' } {
+    let double_monthly: number | '' = '';
+    let triple_monthly: number | '' = '';
+
+    for (const bundle of bundles) {
+        const priced = Object.values(bundle.course_prices)
+            .map((v) => (v === '' || v === null || v === undefined ? null : Number(v)))
+            .filter((v): v is number => v !== null && !Number.isNaN(v));
+        if (priced.length === 0) {
+            continue;
+        }
+        const same = priced.every((p) => p === priced[0]) ? priced[0] : null;
+        if (same === null) {
+            continue;
+        }
+        if (bundle.min_courses >= 3) {
+            triple_monthly = same;
+        } else if (bundle.min_courses >= 2) {
+            double_monthly = same;
+        }
+    }
+
+    return { double_monthly, triple_monthly };
+}
+
+function synthesizeBundles(data: FeePlanFormData): FeePlanBundleRow[] {
+    const courseIds = data.course_ids.map(Number);
+    if (courseIds.length < 2 || data.billing_kind === 'custom') {
+        return [];
+    }
+
+    const out: FeePlanBundleRow[] = [];
+    const double = emptyToNull(data.double_monthly);
+    const triple = emptyToNull(data.triple_monthly);
+
+    if (double !== null) {
+        out.push({
+            id: null,
+            name: '',
+            course_ids: courseIds,
+            course_prices: Object.fromEntries(courseIds.map((id) => [id, double])),
+            min_courses: 2,
+        });
+    }
+    if (triple !== null && courseIds.length >= 3) {
+        out.push({
+            id: null,
+            name: '',
+            course_ids: courseIds,
+            course_prices: Object.fromEntries(courseIds.map((id) => [id, triple])),
+            min_courses: 3,
+        });
+    }
+
+    return out;
+}
+
 export function feePlanPayload(data: FeePlanFormData) {
     const months = periodMonths(data.billing_kind, data.session_block_size);
+    const bundles = synthesizeBundles(data);
 
     return {
         academic_year_id:
@@ -120,6 +194,8 @@ export function feePlanPayload(data: FeePlanFormData) {
                       end_month: period.end_month === '' ? '' : Number(period.end_month),
                       total_price:
                           period.total_price === '' ? '' : Number(period.total_price),
+                      double_price: emptyToNull(period.double_price),
+                      triple_price: emptyToNull(period.triple_price),
                   }))
                 : [],
         quarter_single_price: null,
@@ -128,7 +204,7 @@ export function feePlanPayload(data: FeePlanFormData) {
         material_unit: data.material_unit,
         sort_order: Number(data.sort_order || 0),
         is_active: data.is_active,
-        bundles: data.bundles.map((bundle) => ({
+        bundles: bundles.map((bundle) => ({
             id: bundle.id,
             name: bundle.name,
             course_ids: bundle.course_ids.map(Number),

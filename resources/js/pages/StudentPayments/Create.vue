@@ -41,6 +41,8 @@ type Subject = {
         start_month: number;
         end_month: number;
         total_price: number;
+        double_price?: number | null;
+        triple_price?: number | null;
     }>;
     list: number;
     q_single: number;
@@ -621,10 +623,43 @@ const applyCourseMonths = (next: Record<number, string[]>) => {
 };
 
 /* ── 自訂期別（與後端 CustomBillingPeriod 對齊） ─────────────────── */
-type CustomPeriod = { start_month: number; end_month: number; total_price: number };
+type CustomPeriod = {
+    start_month: number;
+    end_month: number;
+    total_price: number;
+    double_price?: number | null;
+    triple_price?: number | null;
+};
 
 const isCustomSubject = (s: Subject | undefined | null): boolean =>
     !!s && s.unit === 'custom_period' && Array.isArray(s.periods) && s.periods.length > 0;
+
+/** 同一收費設定下，本次勾選科數（單／雙／三科價） */
+const feePlanSubjectCount = (s: Subject): number => {
+    if (!s.fee_plan_id) {
+        return 1;
+    }
+
+    return Math.max(
+        1,
+        selected.value.filter((id) => {
+            const peer = props.subjects.find((x) => x.id === id);
+
+            return peer?.fee_plan_id === s.fee_plan_id;
+        }).length,
+    );
+};
+
+const priceForSubjectCount = (period: CustomPeriod, count: number): number => {
+    if (count >= 3 && period.triple_price != null && period.triple_price > 0) {
+        return period.triple_price;
+    }
+    if (count >= 2 && period.double_price != null && period.double_price > 0) {
+        return period.double_price;
+    }
+
+    return period.total_price;
+};
 
 const periodMonthNumbers = (start: number, end: number): number[] => {
     const months: number[] = [];
@@ -641,7 +676,12 @@ const periodForMonth = (
     periods: CustomPeriod[],
     y: number,
     m: number,
-): { total_price: number; month_count: number; start_key: number; end_key: number; label: string } | null => {
+): (CustomPeriod & {
+    month_count: number;
+    start_key: number;
+    end_key: number;
+    label: string;
+}) | null => {
     for (const period of periods) {
         const numbers = periodMonthNumbers(period.start_month, period.end_month);
         if (!numbers.includes(m)) continue;
@@ -649,7 +689,7 @@ const periodForMonth = (
         const startYear = crosses && m < period.start_month ? y - 1 : y;
         const endYear = crosses ? startYear + 1 : startYear;
         return {
-            total_price: period.total_price,
+            ...period,
             month_count: numbers.length,
             start_key: startYear * 12 + period.start_month,
             end_key: endYear * 12 + period.end_month,
@@ -699,10 +739,11 @@ const allocateRounded = (exacts: number[]): number[] => {
     return floors;
 };
 
-/** 自訂期別各月金額：依選取月份分組到各期，總價 ÷ 期月數折算 */
+/** 自訂期別各月金額：依報科數取單／雙／三科一期總價，再 ÷ 期月數折算 */
 const customMonthAllocations = (s: Subject): Map<string, number> => {
     const out = new Map<string, number>();
     const periods = (s.periods ?? []) as CustomPeriod[];
+    const subjectCount = feePlanSubjectCount(s);
     const groups = new Map<string, { total: number; count: number; keys: string[] }>();
     for (const month of courseBillingMonths(s.id)) {
         const key = monthKey(month.y, month.m);
@@ -711,7 +752,11 @@ const customMonthAllocations = (s: Subject): Map<string, number> => {
         if (!period) continue;
         const groupKey = `${period.start_key}-${period.end_key}`;
         if (!groups.has(groupKey)) {
-            groups.set(groupKey, { total: period.total_price, count: period.month_count, keys: [] });
+            groups.set(groupKey, {
+                total: priceForSubjectCount(period, subjectCount),
+                count: period.month_count,
+                keys: [],
+            });
         }
         groups.get(groupKey)!.keys.push(key);
     }

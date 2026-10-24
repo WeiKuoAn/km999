@@ -39,6 +39,8 @@ final class CustomBillingPeriod
      *   start_month:int,
      *   end_month:int,
      *   total_price:int,
+     *   double_price:?int,
+     *   triple_price:?int,
      *   month_count:int,
      *   start_year:int,
      *   end_year:int,
@@ -64,10 +66,15 @@ final class CustomBillingPeriod
             $startYear = $crossesYear && $month < $start ? $year - 1 : $year;
             $endYear = $crossesYear ? $startYear + 1 : $startYear;
 
+            $double = $period['double_price'] ?? null;
+            $triple = $period['triple_price'] ?? null;
+
             return [
                 'start_month' => $start,
                 'end_month' => $end,
                 'total_price' => (int) ($period['total_price'] ?? 0),
+                'double_price' => $double === null || $double === '' ? null : (int) $double,
+                'triple_price' => $triple === null || $triple === '' ? null : (int) $triple,
                 'month_count' => count($numbers),
                 'start_year' => $startYear,
                 'end_year' => $endYear,
@@ -78,6 +85,28 @@ final class CustomBillingPeriod
         }
 
         return null;
+    }
+
+    /**
+     * 依同收費設定報科數取一期總價（每科）。
+     * 三科價／雙科價留空則退回單科總價。
+     *
+     * @param  array{total_price?:int, double_price?:?int, triple_price?:?int}  $period
+     */
+    public static function priceForSubjectCount(array $period, int $subjectCount): int
+    {
+        $single = (int) ($period['total_price'] ?? 0);
+        $double = $period['double_price'] ?? null;
+        $triple = $period['triple_price'] ?? null;
+
+        if ($subjectCount >= 3 && $triple !== null && (int) $triple > 0) {
+            return (int) $triple;
+        }
+        if ($subjectCount >= 2 && $double !== null && (int) $double > 0) {
+            return (int) $double;
+        }
+
+        return $single;
     }
 
     /**

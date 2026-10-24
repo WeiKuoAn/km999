@@ -19,8 +19,16 @@ final class PaymentNoticePdf
             throw new \InvalidArgumentException('沒有可匯出的繳費條。');
         }
 
+        // 中文字型（約 4MB）首次解析很慢，Forge 預設 30 秒容易超時
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(180);
+        }
+        @ini_set('max_execution_time', '180');
+        @ini_set('memory_limit', '512M');
+
         $fontPath = self::fontPath();
         $latinFontPath = self::latinFontPath();
+        $fontCacheDir = self::fontCacheDir();
         $notices = array_map(
             fn (array $item): array => self::normalizeNotice($item['notice'] ?? []),
             $items
@@ -35,13 +43,17 @@ final class PaymentNoticePdf
         $options = new Options;
         $options->set('isRemoteEnabled', true);
         $options->set('isHtml5ParserEnabled', true);
+        $options->set('isFontSubsettingEnabled', false);
         $options->set('defaultFont', 'NoticeCJK');
+        $options->setFontDir($fontCacheDir);
+        $options->setFontCache($fontCacheDir);
         $options->setChroot([
             base_path(),
             resource_path(),
             storage_path(),
             dirname($fontPath),
             dirname($latinFontPath),
+            $fontCacheDir,
         ]);
 
         $dompdf = new Dompdf($options);
@@ -54,6 +66,17 @@ final class PaymentNoticePdf
         }
 
         return $binary;
+    }
+
+    /** Dompdf 字型度量快取（第二次起會快很多） */
+    private static function fontCacheDir(): string
+    {
+        $dir = storage_path('app/dompdf/fonts');
+        if (! is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+
+        return $dir;
     }
 
     public static function fontPath(): string

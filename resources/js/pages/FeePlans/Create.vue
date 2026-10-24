@@ -20,15 +20,25 @@ const form = useForm<FeePlanFormData>({
     course_ids: [],
     group_name: '',
     pricing_group: 'other',
-    billing_kind: 'month',
+    billing_kind: 'custom',
     session_block_size: 4,
     list_price: 0,
     quarter_price: '',
+    double_monthly: '',
+    triple_monthly: '',
     material_fee: 0,
     material_unit: 'term',
     sort_order: 0,
     is_active: true,
-    periods: [],
+    periods: [
+        {
+            start_month: 7,
+            end_month: 8,
+            total_price: '',
+            double_price: '',
+            triple_price: '',
+        },
+    ],
     bundles: [],
 });
 
@@ -48,13 +58,12 @@ const submit = () => form.transform(feePlanPayload).post('/fee-plans');
     <Head title="新增收費設定" />
     <div class="page-shell mx-auto w-full max-w-3xl">
         <h1 class="text-xl font-semibold">新增收費設定</h1>
-        <form class="space-y-4 rounded-xl border p-4" @submit.prevent="submit">
+        <form class="space-y-4" @submit.prevent="submit">
             <FeePlanFields
                 :form="form"
                 :academic-years="academicYears"
                 :grade-levels="gradeLevels"
                 :courses="courses"
-                require-grade
             />
 
             <div class="flex gap-2">

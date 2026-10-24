@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\GeneratePaymentNoticesPdfJob;
 use App\Models\FeeDiscount;
 use App\Models\GradeLevel;
 use App\Models\Reconciliation;
@@ -12,6 +13,7 @@ use App\Support\BillingRenewal;
 use App\Support\EnrollmentPricing;
 use App\Support\Grade9AnnualPackage;
 use App\Support\MaterialHalfYear;
+use App\Support\PaymentNoticeExport;
 use App\Support\PaymentNoticePdf;
 use App\Support\PaymentRosterBuilder;
 use App\Support\PromotionCourses;
@@ -19,10 +21,15 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class StudentPaymentController extends Controller
 {
@@ -230,60 +237,119 @@ class StudentPaymentController extends Controller
         ]);
     }
 
-    /** 繳費通知條 PDF（單筆預覽；多筆合併同一份以便列印裁剪） */
-    public function rosterNoticePdf(Request $request)
+    /**
+     * 單筆繳費條：同步輸出 PDF。
+     * 多筆請走背景匯出 startRosterNoticeExport。
+     */
+    public function rosterNoticePdf(Request $request): HttpResponse
     {
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
             'year' => ['nullable', 'integer', 'between:2000,2100'],
-            'student_id' => ['nullable', 'integer', 'exists:students,id'],
+            'student_id' => ['required', 'integer', 'exists:students,id'],
             'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
         ]);
 
-        $q = trim((string) ($validated['q'] ?? ''));
-        $year = isset($validated['year']) ? (int) $validated['year'] : null;
-        $periodStart = isset($validated['period_start']) ? trim((string) $validated['period_start']) : null;
-        $rows = PaymentRosterBuilder::build($q === '' ? null : $q, $year, $periodStart);
-        $rows = $this->filterRosterRowsForTeacher($rows);
+        /** @var User $user */
+        $user = $request->user();
+        $items = PaymentNoticeExport::buildItems(
+            isset($validated['q']) ? trim((string) $validated['q']) : null,
+            isset($validated['year']) ? (int) $validated['year'] : null,
+            isset($validated['period_start']) ? trim((string) $validated['period_start']) : null,
+            $user,
+            (int) $validated['student_id'],
+        );
 
-        if (isset($validated['student_id'])) {
-            $sid = (int) $validated['student_id'];
-            $rows = array_values(array_filter(
-                $rows,
-                fn (array $row): bool => (int) $row['student_id'] === $sid
-            ));
-        }
-
-        if ($rows === []) {
+        if ($items === []) {
             abort(404, '目前沒有可匯出的繳費條。');
         }
 
-        $items = [];
-        foreach ($rows as $row) {
-            $notice = $row['notice'] ?? null;
-            if (! is_array($notice)) {
-                continue;
-            }
-            $code = trim((string) ($row['student_code'] ?? ''));
-            $name = (string) $row['student_name'];
-            $items[] = [
-                'filename' => ($code !== '' ? $code.'_' : '').$name.'_'.($notice['plan_label'] ?? '繳費條'),
-                'notice' => $notice,
-            ];
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(120);
         }
-
-        if ($items === []) {
-            abort(404, '繳費條資料不完整，無法匯出。');
-        }
+        @ini_set('memory_limit', '512M');
 
         $pdf = PaymentNoticePdf::render($items);
-        $filename = count($items) === 1
-            ? $items[0]['filename'].'.pdf'
-            : 'payment-notices_'.now()->format('Ymd_His').'.pdf';
+        $filename = $items[0]['filename'].'.pdf';
 
         return response($pdf, 200, [
             'Content-Type' => 'application/pdf',
             'Content-Disposition' => 'inline; filename="'.rawurlencode($filename).'"; filename*=UTF-8\'\''.rawurlencode($filename),
+        ]);
+    }
+
+    /** 背景產生多筆繳費條 PDF */
+    public function startRosterNoticeExport(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'q' => ['nullable', 'string', 'max:255'],
+            'year' => ['nullable', 'integer', 'between:2000,2100'],
+            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2}|all)$/'],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+        $exportId = (string) Str::uuid();
+
+        Cache::put(PaymentNoticeExport::cacheKey($exportId), [
+            'status' => 'queued',
+            'user_id' => $user->id,
+            'message' => '已排入背景產生，請稍候…',
+        ], now()->addHours(2));
+
+        // afterResponse：瀏覽器先拿到回應，再開背景產 PDF（不需另開 queue worker）
+        GeneratePaymentNoticesPdfJob::dispatch(
+            $exportId,
+            $user->id,
+            isset($validated['q']) ? trim((string) $validated['q']) : null,
+            isset($validated['year']) ? (int) $validated['year'] : null,
+            isset($validated['period_start']) ? trim((string) $validated['period_start']) : null,
+        )->afterResponse();
+
+        return response()->json([
+            'id' => $exportId,
+            'status' => 'queued',
+            'message' => '已在背景產生繳費條，完成後可下載。',
+        ]);
+    }
+
+    public function rosterNoticeExportStatus(Request $request, string $export): JsonResponse
+    {
+        $state = Cache::get(PaymentNoticeExport::cacheKey($export));
+        if (! is_array($state) || (int) ($state['user_id'] ?? 0) !== (int) $request->user()->id) {
+            abort(404, '找不到此匯出任務。');
+        }
+
+        return response()->json([
+            'id' => $export,
+            'status' => $state['status'] ?? 'unknown',
+            'message' => $state['message'] ?? null,
+            'count' => $state['count'] ?? null,
+            'download_url' => ($state['status'] ?? '') === 'ready'
+                ? route('payment-lists.notices-export.download', ['export' => $export])
+                : null,
+        ]);
+    }
+
+    public function downloadRosterNoticeExport(Request $request, string $export): StreamedResponse
+    {
+        $state = Cache::get(PaymentNoticeExport::cacheKey($export));
+        if (! is_array($state) || (int) ($state['user_id'] ?? 0) !== (int) $request->user()->id) {
+            abort(404, '找不到此匯出任務。');
+        }
+        if (($state['status'] ?? '') !== 'ready') {
+            abort(409, 'PDF 尚未完成。');
+        }
+
+        $path = (string) ($state['path'] ?? '');
+        if ($path === '' || ! Storage::disk('local')->exists($path)) {
+            abort(404, '檔案不存在或已過期。');
+        }
+
+        $filename = (string) ($state['filename'] ?? 'payment-notices.pdf');
+
+        return Storage::disk('local')->download($path, $filename, [
+            'Content-Type' => 'application/pdf',
         ]);
     }
 
@@ -1353,27 +1419,11 @@ class StudentPaymentController extends Controller
     private function filterRosterRowsForTeacher(array $rows): array
     {
         $user = auth()->user();
-        if ($user?->role !== User::ROLE_TEACHER) {
+        if ($user === null) {
             return $rows;
         }
 
-        $teacherId = $user->teacher?->id;
-        if ($teacherId === null) {
-            return [];
-        }
-
-        $allowedIds = Student::query()
-            ->whereHas('enrollments.classroom', fn ($q) => $q->where('teacher_id', $teacherId))
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
-
-        $allowed = array_fill_keys($allowedIds, true);
-
-        return array_values(array_filter(
-            $rows,
-            fn (array $row): bool => isset($allowed[(int) ($row['student_id'] ?? 0)])
-        ));
+        return PaymentNoticeExport::filterRowsForUser($rows, $user);
     }
 
     private function restrictReconciliationsForTeacher($query): void

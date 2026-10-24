@@ -6,6 +6,7 @@ import {
     billingKindFromPlan,
     emptyCoursePrices,
     feePlanPayload,
+    monthlyTiersFromBundles,
     periodMonths,
 } from '@/lib/feePlanForm';
 import type {
@@ -27,6 +28,8 @@ const props = defineProps<{
             start_month: number;
             end_month: number;
             total_price: number;
+            double_price: number | null;
+            triple_price: number | null;
         }>;
         session_block_size: number | null;
         list_price: number;
@@ -59,13 +62,17 @@ const months = periodMonths(
     props.plan.session_block_size ?? (billingKind === 'quarter' ? 3 : 4),
 );
 
+const monthlyTiers = monthlyTiersFromBundles(props.plan.bundles ?? []);
+
 const form = useForm<FeePlanFormData>({
     academic_year_id: props.plan.academic_year_id
         ? String(props.plan.academic_year_id)
         : '',
     grade_level_id: props.plan.grade_level_id
         ? String(props.plan.grade_level_id)
-        : 'all',
+        : props.plan.grade_level_id === null
+          ? 'all'
+          : '',
     course_ids: [...props.plan.course_ids],
     group_name: props.plan.group_name,
     pricing_group: props.plan.pricing_group,
@@ -74,6 +81,8 @@ const form = useForm<FeePlanFormData>({
     list_price: props.plan.list_price,
     quarter_price:
         props.plan.quarter_single_price ?? props.plan.quarter_price ?? '',
+    double_monthly: monthlyTiers.double_monthly,
+    triple_monthly: monthlyTiers.triple_monthly,
     material_fee: props.plan.material_fee,
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
@@ -82,6 +91,8 @@ const form = useForm<FeePlanFormData>({
         start_month: period.start_month,
         end_month: period.end_month,
         total_price: period.total_price,
+        double_price: period.double_price ?? '',
+        triple_price: period.triple_price ?? '',
     })),
     bundles: props.plan.bundles.map((bundle): FeePlanBundleRow => {
         const courseIds = [...bundle.course_ids];
@@ -122,12 +133,13 @@ const submit = () =>
     <Head title="編輯收費設定" />
     <div class="page-shell mx-auto w-full max-w-3xl">
         <h1 class="text-xl font-semibold">編輯收費設定</h1>
-        <form class="space-y-4 rounded-xl border p-4" @submit.prevent="submit">
+        <form class="space-y-4" @submit.prevent="submit">
             <FeePlanFields
                 :form="form"
                 :academic-years="academicYears"
                 :grade-levels="gradeLevels"
                 :courses="courses"
+                :allow-all-grades="props.plan.grade_level_id === null"
             />
 
             <div class="flex gap-2">

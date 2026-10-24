@@ -140,10 +140,14 @@ class FeePlanController extends Controller
         }
 
         foreach (array_values($rows) as $i => $row) {
+            $double = $row['double_price'] ?? null;
+            $triple = $row['triple_price'] ?? null;
             $plan->periods()->create([
                 'start_month' => (int) $row['start_month'],
                 'end_month' => (int) $row['end_month'],
                 'total_price' => (int) $row['total_price'],
+                'double_price' => $double === null || $double === '' ? null : (int) $double,
+                'triple_price' => $triple === null || $triple === '' ? null : (int) $triple,
                 'sort_order' => $i,
             ]);
         }
@@ -246,7 +250,12 @@ class FeePlanController extends Controller
     {
         $validated = $request->validate([
             'academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
-            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            // 新增必須指定年級；舊的「全年級」仍可編輯保留
+            'grade_level_id' => [
+                $currentPlan === null ? 'required' : 'nullable',
+                'integer',
+                'exists:grade_levels,id',
+            ],
             'course_ids' => ['required', 'array', 'min:1'],
             'course_ids.*' => ['required', 'integer', 'distinct', 'exists:courses,id'],
             'group_name' => ['required', 'string', 'max:64'],
@@ -257,6 +266,8 @@ class FeePlanController extends Controller
             'periods.*.start_month' => ['required', 'integer', 'between:1,12'],
             'periods.*.end_month' => ['required', 'integer', 'between:1,12'],
             'periods.*.total_price' => ['required', 'integer', 'min:1'],
+            'periods.*.double_price' => ['nullable', 'integer', 'min:1'],
+            'periods.*.triple_price' => ['nullable', 'integer', 'min:1'],
             'list_price' => ['required', 'integer', 'min:0'],
             'quarter_price' => ['nullable', 'integer', 'min:0'],
             'quarter_single_price' => ['nullable', 'integer', 'min:0'],
@@ -480,6 +491,8 @@ class FeePlanController extends Controller
                     'start_month' => (int) $period->start_month,
                     'end_month' => (int) $period->end_month,
                     'total_price' => (int) $period->total_price,
+                    'double_price' => $period->double_price !== null ? (int) $period->double_price : null,
+                    'triple_price' => $period->triple_price !== null ? (int) $period->triple_price : null,
                 ])->values()->all()
                 : [],
         ];

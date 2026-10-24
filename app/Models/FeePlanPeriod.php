@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class FeePlanPeriod extends Model
 {
@@ -12,6 +13,8 @@ class FeePlanPeriod extends Model
         'start_month',
         'end_month',
         'total_price',
+        'double_price',
+        'triple_price',
         'sort_order',
     ];
 
@@ -21,6 +24,8 @@ class FeePlanPeriod extends Model
             'start_month' => 'integer',
             'end_month' => 'integer',
             'total_price' => 'integer',
+            'double_price' => 'integer',
+            'triple_price' => 'integer',
             'sort_order' => 'integer',
         ];
     }
@@ -28,6 +33,11 @@ class FeePlanPeriod extends Model
     public function feePlan(): BelongsTo
     {
         return $this->belongsTo(FeePlan::class);
+    }
+
+    public function coursePrices(): HasMany
+    {
+        return $this->hasMany(FeePlanPeriodCoursePrice::class, 'fee_plan_period_id');
     }
 
     public function label(): string

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Head, Link, router } from '@inertiajs/vue3';
-import { FileDown } from 'lucide-vue-next';
-import { ref, watch } from 'vue';
+import { FileDown, LoaderCircle } from 'lucide-vue-next';
+import { onBeforeUnmount, ref, watch } from 'vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
@@ -99,13 +99,6 @@ const pdfHref = () => {
     return qs ? `/payment-lists/pdf?${qs}` : '/payment-lists/pdf';
 };
 
-const noticesHref = () => {
-    const qs = listQuery();
-    return qs
-        ? `/payment-lists/notices.pdf?${qs}`
-        : '/payment-lists/notices.pdf';
-};
-
 const noticeHref = (row: Row) => {
     const params = new URLSearchParams();
     params.set('student_id', String(row.student_id));
@@ -114,6 +107,107 @@ const noticeHref = (row: Row) => {
     if (periodStart.value) params.set('period_start', periodStart.value);
     return `/payment-lists/notices.pdf?${params.toString()}`;
 };
+
+const noticesExporting = ref(false);
+const noticesExportMessage = ref('');
+let noticesPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+const xsrfToken = () => {
+    const match = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : '';
+};
+
+const clearNoticesPoll = () => {
+    if (noticesPollTimer !== null) {
+        clearTimeout(noticesPollTimer);
+        noticesPollTimer = null;
+    }
+};
+
+const pollNoticesExport = async (id: string) => {
+    try {
+        const res = await fetch(`/payment-lists/notices/exports/${id}`, {
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            credentials: 'same-origin',
+        });
+        if (!res.ok) {
+            throw new Error('查詢匯出狀態失敗');
+        }
+        const data = (await res.json()) as {
+            status: string;
+            message?: string | null;
+            download_url?: string | null;
+        };
+        noticesExportMessage.value = data.message ?? '處理中…';
+
+        if (data.status === 'ready' && data.download_url) {
+            noticesExporting.value = false;
+            noticesExportMessage.value = '完成，正在下載…';
+            window.location.href = data.download_url;
+            return;
+        }
+        if (data.status === 'failed') {
+            noticesExporting.value = false;
+            noticesExportMessage.value = data.message || '產生失敗';
+            return;
+        }
+
+        noticesPollTimer = setTimeout(() => {
+            void pollNoticesExport(id);
+        }, 1500);
+    } catch (e) {
+        noticesExporting.value = false;
+        noticesExportMessage.value =
+            e instanceof Error ? e.message : '匯出失敗';
+    }
+};
+
+const startNoticesExport = async () => {
+    if (noticesExporting.value) {
+        return;
+    }
+    clearNoticesPoll();
+    noticesExporting.value = true;
+    noticesExportMessage.value = '已排入背景產生…';
+
+    try {
+        const res = await fetch('/payment-lists/notices/exports', {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-XSRF-TOKEN': xsrfToken(),
+            },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                q: q.value.trim() || null,
+                year: year.value.trim() ? Number(year.value.trim()) : null,
+                period_start: periodStart.value || null,
+            }),
+        });
+        if (!res.ok) {
+            const err = (await res.json().catch(() => null)) as {
+                message?: string;
+            } | null;
+            throw new Error(err?.message || '無法開始匯出');
+        }
+        const data = (await res.json()) as { id: string; message?: string };
+        noticesExportMessage.value = data.message || '背景產生中…';
+        await pollNoticesExport(data.id);
+    } catch (e) {
+        noticesExporting.value = false;
+        noticesExportMessage.value =
+            e instanceof Error ? e.message : '匯出失敗';
+    }
+};
+
+onBeforeUnmount(() => {
+    clearNoticesPoll();
+});
 
 defineOptions({
     layout: {
@@ -136,17 +230,38 @@ defineOptions({
                         匯出 PDF
                     </a>
                 </Button>
-                <Button variant="outline" as-child>
-                    <a :href="noticesHref()" target="_blank" rel="noopener">
-                        <FileDown class="size-4" />
-                        匯出繳費條 PDF
-                    </a>
+                <Button
+                    variant="outline"
+                    type="button"
+                    :disabled="noticesExporting"
+                    @click="startNoticesExport"
+                >
+                    <LoaderCircle
+                        v-if="noticesExporting"
+                        class="size-4 animate-spin"
+                    />
+                    <FileDown v-else class="size-4" />
+                    {{ noticesExporting ? '產生中…' : '匯出繳費條 PDF' }}
                 </Button>
                 <Button as-child>
                     <Link href="/student-payments/create">新增收款</Link>
                 </Button>
             </template>
         </PageHeader>
+
+        <p
+            v-if="noticesExportMessage"
+            class="mb-3 text-sm"
+            :class="
+                noticesExporting
+                    ? 'text-muted-foreground'
+                    : noticesExportMessage.includes('失敗')
+                      ? 'text-destructive'
+                      : 'text-emerald-700'
+            "
+        >
+            {{ noticesExportMessage }}
+        </p>
 
         <form
             class="mb-4 flex flex-col gap-3 rounded-xl border border-sidebar-border/70 bg-card p-4 sm:flex-row sm:items-end"

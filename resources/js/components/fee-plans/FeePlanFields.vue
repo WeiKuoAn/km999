@@ -11,19 +11,48 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type {
     FeePlanBillingKind,
-    FeePlanBundleRow,
     FeePlanCourseOption,
     FeePlanFormData,
 } from '@/lib/feePlanForm';
-import { emptyCoursePrices, periodMonths } from '@/lib/feePlanForm';
+import { periodMonths } from '@/lib/feePlanForm';
 
 const props = defineProps<{
     form: InertiaForm<FeePlanFormData>;
     academicYears: Array<{ id: number; year_code: string; name: string }>;
     gradeLevels: Array<{ id: number; name: string }>;
     courses: FeePlanCourseOption[];
-    requireGrade?: boolean;
+    /** 允許「全年級」（僅舊資料編輯時保留） */
+    allowAllGrades?: boolean;
 }>();
+
+const selectedGradeName = computed(() => {
+    if (!props.form.grade_level_id || props.form.grade_level_id === 'all') {
+        return null;
+    }
+    return (
+        props.gradeLevels.find((g) => String(g.id) === String(props.form.grade_level_id))
+            ?.name ?? null
+    );
+});
+
+/** 有選年級時，顯示該年級適用的課；已勾選的一律保留（避免換年級後勾不到） */
+const coursesForGrade = computed(() => {
+    const gradeName = selectedGradeName.value;
+    const selected = new Set(props.form.course_ids.map(Number));
+    if (!gradeName) {
+        return props.courses;
+    }
+
+    return props.courses.filter((course) => {
+        if (selected.has(course.id)) {
+            return true;
+        }
+        if (!course.levels?.length) {
+            return true;
+        }
+        return course.levels.includes(gradeName);
+    });
+});
 
 const selectedCourses = computed(() =>
     props.form.course_ids
@@ -43,6 +72,10 @@ const isCustomBilling = computed(() => props.form.billing_kind === 'custom');
 
 const monthOptions = Array.from({ length: 12 }, (_, i) => i + 1);
 
+const planCourseCount = computed(() => props.form.course_ids.length);
+const showDoubleTier = computed(() => planCourseCount.value >= 2);
+const showTripleTier = computed(() => planCourseCount.value >= 3);
+
 const periodMonthsPreview = (period: {
     start_month: number | '';
     end_month: number | '';
@@ -60,6 +93,16 @@ const periodMonthsPreview = (period: {
         month = (month % 12) + 1;
     }
     return count;
+};
+
+const addPeriod = () => {
+    props.form.periods.push({
+        start_month: '',
+        end_month: '',
+        total_price: '',
+        double_price: '',
+        triple_price: '',
+    });
 };
 
 const periodListTotal = computed(() =>
@@ -82,7 +125,9 @@ const onBillingKindChange = (kind: FeePlanBillingKind) => {
     props.form.billing_kind = kind;
     if (kind === 'custom') {
         if (props.form.periods.length === 0) {
-            props.form.periods.push({ start_month: 7, end_month: 8, total_price: '' });
+            addPeriod();
+            props.form.periods[0].start_month = 7;
+            props.form.periods[0].end_month = 8;
         }
         return;
     }
@@ -105,63 +150,21 @@ watch(
     { immediate: true },
 );
 
-const planCourseIds = computed(
-    () => new Set(props.form.course_ids.map(Number)),
-);
-
-const otherCourseIds = computed(
-    () =>
-        new Set(
-            props.courses
-                .filter((c) => !planCourseIds.value.has(c.id) && c.status === 'active')
-                .map((c) => c.id),
-        ),
-);
-
-/** 本收費設定的課排前面，其他課（跨收費設定的組合，如國英雙科）排後面 */
-const bundleCourseOptions = computed(() => {
-    const inBundles = new Set(props.form.bundles.flatMap((b) => b.course_ids));
-
-    return [
-        ...selectedCourses.value,
-        ...props.courses.filter(
-            (c) =>
-                !planCourseIds.value.has(c.id) &&
-                (c.status === 'active' || inBundles.has(c.id)),
-        ),
-    ];
-});
-
-const addBundle = () => {
-    const courseIds = [...planCourseIds.value];
-    props.form.bundles.push({
-        id: null,
-        name: '',
-        course_ids: courseIds,
-        course_prices: emptyCoursePrices(courseIds),
-        min_courses: 2,
-    });
-};
-
-const toggleBundleCourse = (bundle: FeePlanBundleRow, courseId: number) => {
-    if (bundle.course_ids.includes(courseId)) {
-        bundle.course_ids = bundle.course_ids.filter((id) => id !== courseId);
-        const next = { ...bundle.course_prices };
-        delete next[courseId];
-        bundle.course_prices = next;
-        return;
+watch(planCourseCount, (count) => {
+    if (count < 2) {
+        props.form.double_monthly = '';
+        props.form.triple_monthly = '';
+        for (const period of props.form.periods) {
+            period.double_price = '';
+            period.triple_price = '';
+        }
+    } else if (count < 3) {
+        props.form.triple_monthly = '';
+        for (const period of props.form.periods) {
+            period.triple_price = '';
+        }
     }
-    bundle.course_ids = [...bundle.course_ids, courseId];
-    bundle.course_prices = { ...bundle.course_prices, [courseId]: '' };
-};
-
-const selectedBundleCourses = (bundle: FeePlanBundleRow) =>
-    bundleCourseOptions.value.filter((c) => bundle.course_ids.includes(c.id));
-
-const bundleError = (index: number, field: string) =>
-    (props.form.errors as Record<string, string | undefined>)[
-        `bundles.${index}.${field}`
-    ];
+});
 
 if (props.form.material_unit === 'subject') {
     props.form.material_unit = 'term';
@@ -172,405 +175,412 @@ if (props.form.material_unit === 'subject') {
     <div
         class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
     >
-        收費設定是幫「課程」定價。新開的班請先到
+        依「年級」各建一筆。先選年級與課目，再在收費方式裡填單科／雙科／三科價格（勾 2
+        門以上才會出現雙科欄）。新開的班請先到
         <Link href="/courses" class="font-medium underline underline-offset-4"
             >課程管理</Link
         >
-        建立課程（設定類別、上課時間），再回來這裡勾選；單科價和雙科／多科優惠都在這頁設定。
+        建立。
     </div>
 
-    <div class="grid gap-4 sm:grid-cols-2">
-        <div class="grid gap-2">
-            <Label for="grade_level_id">年級</Label>
-            <select
-                id="grade_level_id"
-                v-model="form.grade_level_id"
-                class="h-9 rounded-md border px-3"
-                required
-            >
-                <option v-if="requireGrade" value="">請選擇</option>
-                <option value="all">全年級</option>
-                <option v-for="g in gradeLevels" :key="g.id" :value="String(g.id)">
-                    {{ g.name }}
-                </option>
-            </select>
-            <p class="text-xs text-muted-foreground">
-                不同年級價格不同時，每個年級各建一筆。
-            </p>
-            <InputError :message="form.errors.grade_level_id" />
-        </div>
-        <div class="grid gap-2">
-            <Label for="academic_year_id">學年</Label>
-            <select
-                id="academic_year_id"
-                v-model="form.academic_year_id"
-                class="h-9 rounded-md border px-3"
-            >
-                <option value="">不指定（每年都適用）</option>
-                <option v-for="y in academicYears" :key="y.id" :value="String(y.id)">
-                    {{ y.name }}（{{ y.year_code }}）
-                </option>
-            </select>
-            <InputError :message="form.errors.academic_year_id" />
-        </div>
-    </div>
-
-    <CourseCheckboxGroup
-        v-model="form.course_ids"
-        :courses="courses"
-        :error="form.errors.course_ids"
-    />
-
-    <div class="grid gap-2">
-        <Label for="group_name">名稱</Label>
-        <Input
-            id="group_name"
-            v-model="form.group_name"
-            placeholder="例：高瞻英文"
-            required
-        />
-        <p class="text-xs text-muted-foreground">
-            顯示在收費設定列表與收款畫面。
-        </p>
-        <InputError :message="form.errors.group_name" />
-    </div>
-
-    <div class="grid gap-2">
-        <Label for="billing_kind">收費方式</Label>
-        <select
-            id="billing_kind"
-            class="h-9 rounded-md border px-3"
-            :value="form.billing_kind"
-            @change="
-                onBillingKindChange(
-                    ($event.target as HTMLSelectElement)
-                        .value as FeePlanBillingKind,
-                )
-            "
-        >
-            <option value="month">按月</option>
-            <option value="quarter">按季（一次繳 3 個月）</option>
-            <option value="other">其他（自訂月份）</option>
-            <option value="custom">自訂期別（如生物：7–8、9–12、1–3、4–6 月）</option>
-        </select>
-        <p class="text-xs text-muted-foreground">
-            <template v-if="form.billing_kind === 'month'">
-                每月收一次。請填一個月的原價與優惠價。
-            </template>
-            <template v-else-if="form.billing_kind === 'quarter'">
-                一次繳 3 個月。請填「一個月」的原價與優惠價，下方會自動顯示 ×3。
-            </template>
-            <template v-else-if="form.billing_kind === 'custom'">
-                每年固定循環的期別，每期填「一期總價」；期中加入依剩餘月份折算，繳費名單會先算好下一期預收。
-            </template>
-            <template v-else>
-                一次繳自訂月數。請填「一個月」的原價與優惠價，下方會自動顯示 ×月數。
-            </template>
-        </p>
-    </div>
-
-    <div v-if="isCustomBilling" class="space-y-3 rounded-lg border p-3">
-        <div class="flex flex-wrap items-start justify-between gap-2">
-            <div>
-                <p class="text-sm font-medium">期別設定（每年循環）</p>
-                <p class="text-xs text-muted-foreground">
-                    例：7–8 月一期、9–12 月一期、1–3 月一期、4–6 月一期。月份不可重疊；每期填一期總價。
-                </p>
-            </div>
-            <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                @click="form.periods.push({ start_month: '', end_month: '', total_price: '' })"
-            >
-                <Plus class="size-4" />
-                新增一期
-            </Button>
-        </div>
-
-        <div
-            v-for="(period, i) in form.periods"
-            :key="i"
-            class="flex flex-wrap items-end gap-2 rounded-md border bg-muted/30 p-3"
-        >
-            <div class="grid gap-1.5">
-                <Label :for="`period-start-${i}`">起始月</Label>
-                <select
-                    :id="`period-start-${i}`"
-                    v-model.number="period.start_month"
-                    class="h-9 rounded-md border px-2"
-                    required
-                >
-                    <option value="">選擇</option>
-                    <option v-for="m in monthOptions" :key="m" :value="m">{{ m }} 月</option>
-                </select>
-            </div>
-            <div class="grid gap-1.5">
-                <Label :for="`period-end-${i}`">結束月</Label>
-                <select
-                    :id="`period-end-${i}`"
-                    v-model.number="period.end_month"
-                    class="h-9 rounded-md border px-2"
-                    required
-                >
-                    <option value="">選擇</option>
-                    <option v-for="m in monthOptions" :key="m" :value="m">{{ m }} 月</option>
-                </select>
-            </div>
-            <div class="grid gap-1.5">
-                <Label :for="`period-price-${i}`">一期總價（元）</Label>
-                <Input
-                    :id="`period-price-${i}`"
-                    v-model.number="period.total_price"
-                    type="number"
-                    min="1"
-                    class="w-40"
-                    required
-                />
-            </div>
-            <p class="pb-2 text-xs text-muted-foreground">
-                <template v-if="periodMonthsPreview(period)">
-                    共 {{ periodMonthsPreview(period) }} 個月
-                    <template v-if="Number(period.total_price) > 0">
-                        （每月約 ${{
-                            Math.round(Number(period.total_price) / periodMonthsPreview(period)).toLocaleString('zh-TW')
-                        }}）
-                    </template>
-                </template>
-                <template v-else>請選擇起訖月</template>
-            </p>
-            <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                class="text-destructive"
-                @click="form.periods.splice(i, 1)"
-            >
-                <Trash2 class="size-4" />
-                刪除
-            </Button>
-            <InputError :message="(form.errors as Record<string, string | undefined>)[`periods.${i}.start_month`]" />
-            <InputError :message="(form.errors as Record<string, string | undefined>)[`periods.${i}.total_price`]" />
-        </div>
-        <InputError :message="(form.errors as Record<string, string | undefined>).periods" />
-    </div>
-
-    <div v-if="form.billing_kind === 'other'" class="grid max-w-xs gap-2">
-        <Label for="session_block_size">一期幾個月</Label>
-        <Input
-            id="session_block_size"
-            v-model.number="form.session_block_size"
-            type="number"
-            min="2"
-            max="12"
-            required
-        />
-        <InputError :message="form.errors.session_block_size" />
-    </div>
-
-    <div class="grid gap-4 sm:grid-cols-2">
-        <div class="grid gap-2">
-            <Label for="list_price">{{
-                isPeriodBilling ? '一個月原價' : '原價'
-            }}</Label>
-            <Input
-                id="list_price"
-                v-model.number="form.list_price"
-                type="number"
-                min="0"
-                required
-            />
-            <InputError :message="form.errors.list_price" />
-        </div>
-        <div v-if="!isCustomBilling" class="grid gap-2">
-            <Label for="quarter_price">{{
-                isPeriodBilling ? '一個月優惠價' : '優惠價'
-            }}</Label>
-            <Input
-                id="quarter_price"
-                v-model.number="form.quarter_price"
-                type="number"
-                min="0"
-            />
-            <InputError :message="form.errors.quarter_price" />
-        </div>
-    </div>
-
-    <div
-        v-if="isPeriodBilling"
-        class="grid gap-4 rounded-lg border bg-muted/30 p-3 sm:grid-cols-2"
-    >
+    <!-- ① 基本資料 -->
+    <section class="space-y-4 rounded-xl border p-4">
         <div>
-            <p class="text-xs text-muted-foreground">
-                一期總額（原價 × {{ months }}）
-            </p>
-            <p class="mt-0.5 text-lg font-semibold tabular-nums">
-                ${{ periodListTotal.toLocaleString('zh-TW') }}
-            </p>
-        </div>
-        <div>
-            <p class="text-xs text-muted-foreground">
-                一期總額（優惠價 × {{ months }}）
-            </p>
-            <p class="mt-0.5 text-lg font-semibold tabular-nums">
-                <template v-if="periodQuarterTotal !== null">
-                    ${{ periodQuarterTotal.toLocaleString('zh-TW') }}
-                </template>
-                <span v-else class="text-sm font-normal text-muted-foreground"
-                    >同原價一期總額</span
-                >
-            </p>
-        </div>
-    </div>
-    <div class="space-y-3 rounded-lg border p-3">
-        <div class="flex flex-wrap items-start justify-between gap-2">
-            <div>
-                <p class="text-sm font-medium">雙科／多科優惠</p>
-                <p class="text-xs text-muted-foreground">
-                    勾選一起報的課，並為「要打折的科」各自填每月優惠價；留白＝該科維持原價，且不會改吃其他組合的較低價。沒有優惠就不用加。
-                </p>
-            </div>
-            <Button type="button" variant="outline" size="sm" @click="addBundle">
-                <Plus class="size-4" />
-                新增優惠
-            </Button>
+            <h2 class="text-sm font-semibold">① 基本資料</h2>
+            <p class="text-xs text-muted-foreground">年級、學年、名稱與適用課目</p>
         </div>
 
-        <div
-            v-for="(bundle, i) in form.bundles"
-            :key="i"
-            class="space-y-3 rounded-md border bg-muted/30 p-3"
-        >
-            <div class="grid gap-1.5">
-                <span class="text-xs font-medium text-muted-foreground"
-                    >一起報的課</span
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div class="grid gap-2">
+                <Label for="grade_level_id">年級</Label>
+                <select
+                    id="grade_level_id"
+                    v-model="form.grade_level_id"
+                    class="h-9 rounded-md border px-3"
+                    required
                 >
-                <div class="flex flex-wrap gap-1.5">
-                    <label
-                        v-for="course in bundleCourseOptions"
-                        :key="course.id"
-                        class="flex cursor-pointer items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-sm"
-                        :class="
-                            bundle.course_ids.includes(course.id)
-                                ? 'border-primary text-primary'
-                                : 'text-muted-foreground'
-                        "
+                    <option value="">請選擇年級</option>
+                    <option
+                        v-if="allowAllGrades || form.grade_level_id === 'all'"
+                        value="all"
                     >
-                        <input
-                            type="checkbox"
-                            class="size-3.5 accent-[var(--brand-green)]"
-                            :checked="bundle.course_ids.includes(course.id)"
-                            @change="toggleBundleCourse(bundle, course.id)"
-                        />
-                        {{ course.name }}
-                    </label>
-                </div>
-                <p
-                    v-if="otherCourseIds.size"
-                    class="text-xs text-muted-foreground"
-                >
-                    也可以勾其他收費設定的課，例如國英雙科勾國文課＋英文課。
+                        全年級（不建議，價格不同請分年級）
+                    </option>
+                    <option
+                        v-for="g in gradeLevels"
+                        :key="g.id"
+                        :value="String(g.id)"
+                    >
+                        {{ g.name }}
+                    </option>
+                </select>
+                <p class="text-xs text-muted-foreground">
+                    國一、國二、國三價格或期別不同時，請各建一筆。
                 </p>
-                <InputError :message="bundleError(i, 'course_ids')" />
+                <InputError :message="form.errors.grade_level_id" />
+            </div>
+            <div class="grid gap-2">
+                <Label for="academic_year_id">學年</Label>
+                <select
+                    id="academic_year_id"
+                    v-model="form.academic_year_id"
+                    class="h-9 rounded-md border px-3"
+                >
+                    <option value="">不指定（每年都適用）</option>
+                    <option
+                        v-for="y in academicYears"
+                        :key="y.id"
+                        :value="String(y.id)"
+                    >
+                        {{ y.name }}（{{ y.year_code }}）
+                    </option>
+                </select>
+                <InputError :message="form.errors.academic_year_id" />
+            </div>
+        </div>
+
+        <div class="grid gap-2">
+            <Label for="group_name">名稱</Label>
+            <Input
+                id="group_name"
+                v-model="form.group_name"
+                placeholder="例：國二英數理、國一國文生物"
+                required
+            />
+            <p class="text-xs text-muted-foreground">
+                顯示在收費設定列表與收款畫面。
+            </p>
+            <InputError :message="form.errors.group_name" />
+        </div>
+
+        <CourseCheckboxGroup
+            v-model="form.course_ids"
+            :courses="coursesForGrade"
+            :error="form.errors.course_ids"
+        />
+    </section>
+
+    <!-- ② 收費方式與金額 -->
+    <section class="space-y-4 rounded-xl border p-4">
+        <div>
+            <h2 class="text-sm font-semibold">② 收費方式與金額</h2>
+            <p class="text-xs text-muted-foreground">
+                建議用「自訂期別」；按月／按季較少用，收在下方進階。
+            </p>
+        </div>
+
+        <div class="grid gap-2">
+            <Label for="billing_kind">收費方式</Label>
+            <select
+                id="billing_kind"
+                class="h-9 rounded-md border px-3"
+                :value="form.billing_kind"
+                @change="
+                    onBillingKindChange(
+                        ($event.target as HTMLSelectElement)
+                            .value as FeePlanBillingKind,
+                    )
+                "
+            >
+                <option value="custom">自訂期別（推薦：各期填總價）</option>
+                <option value="month">按月</option>
+                <option value="quarter">按季（一次繳 3 個月）</option>
+                <option value="other">其他（自訂月數 × 月價）</option>
+            </select>
+            <p class="text-xs text-muted-foreground">
+                <template v-if="form.billing_kind === 'custom'">
+                    每年固定循環；期中加入依剩餘月份折算；繳費名單會先算下一期預收。
+                </template>
+                <template v-else-if="form.billing_kind === 'month'">
+                    每月收一次。請填一個月的原價與優惠價。
+                </template>
+                <template v-else-if="form.billing_kind === 'quarter'">
+                    一次繳 3 個月。請填「一個月」的原價與優惠價，下方會自動顯示 ×3。
+                </template>
+                <template v-else>
+                    一次繳自訂月數。請填「一個月」的原價與優惠價，下方會自動顯示 ×月數。
+                </template>
+            </p>
+        </div>
+
+        <div v-if="isCustomBilling" class="space-y-3">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                    <p class="text-sm font-medium">期別設定（每年循環）</p>
+                    <p class="text-xs text-muted-foreground">
+                        月份不可重疊。學生報幾科就用對應欄（雙／三科留白＝用單科總價）。
+                    </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" @click="addPeriod">
+                    <Plus class="size-4" />
+                    新增一期
+                </Button>
             </div>
 
             <div
-                v-if="selectedBundleCourses(bundle).length"
-                class="space-y-2 rounded-md border bg-background p-2.5"
+                v-for="(period, i) in form.periods"
+                :key="i"
+                class="space-y-3 rounded-md border bg-muted/30 p-3"
             >
-                <p class="text-xs font-medium text-muted-foreground">
-                    各科每月優惠價（留白＝該科不優惠）
-                </p>
+                <div class="flex flex-wrap items-end gap-2">
+                    <div class="grid gap-1.5">
+                        <Label :for="`period-start-${i}`">起始月</Label>
+                        <select
+                            :id="`period-start-${i}`"
+                            v-model.number="period.start_month"
+                            class="h-9 rounded-md border px-2"
+                            required
+                        >
+                            <option value="">選擇</option>
+                            <option v-for="m in monthOptions" :key="m" :value="m">
+                                {{ m }} 月
+                            </option>
+                        </select>
+                    </div>
+                    <div class="grid gap-1.5">
+                        <Label :for="`period-end-${i}`">結束月</Label>
+                        <select
+                            :id="`period-end-${i}`"
+                            v-model.number="period.end_month"
+                            class="h-9 rounded-md border px-2"
+                            required
+                        >
+                            <option value="">選擇</option>
+                            <option v-for="m in monthOptions" :key="m" :value="m">
+                                {{ m }} 月
+                            </option>
+                        </select>
+                    </div>
+                    <p class="pb-2 text-xs text-muted-foreground">
+                        <template v-if="periodMonthsPreview(period)">
+                            共 {{ periodMonthsPreview(period) }} 個月
+                        </template>
+                        <template v-else>請選擇起訖月</template>
+                    </p>
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        class="text-destructive"
+                        @click="form.periods.splice(i, 1)"
+                    >
+                        <Trash2 class="size-4" />
+                        刪除
+                    </Button>
+                </div>
+
                 <div
-                    v-for="course in selectedBundleCourses(bundle)"
-                    :key="`${i}-${course.id}`"
-                    class="flex flex-wrap items-center gap-2"
+                    class="grid gap-3"
+                    :class="
+                        showTripleTier
+                            ? 'sm:grid-cols-3'
+                            : showDoubleTier
+                              ? 'sm:grid-cols-2'
+                              : 'sm:grid-cols-1'
+                    "
                 >
-                    <span class="min-w-28 text-sm">{{ course.name }}</span>
+                    <div class="grid gap-1.5">
+                        <Label :for="`period-single-${i}`">單科總價（元）</Label>
+                        <Input
+                            :id="`period-single-${i}`"
+                            v-model.number="period.total_price"
+                            type="number"
+                            min="1"
+                            required
+                        />
+                    </div>
+                    <div v-if="showDoubleTier" class="grid gap-1.5">
+                        <Label :for="`period-double-${i}`">雙科／每科總價</Label>
+                        <Input
+                            :id="`period-double-${i}`"
+                            v-model.number="period.double_price"
+                            type="number"
+                            min="1"
+                            placeholder="留白＝單科價"
+                        />
+                    </div>
+                    <div v-if="showTripleTier" class="grid gap-1.5">
+                        <Label :for="`period-triple-${i}`">三科／每科總價</Label>
+                        <Input
+                            :id="`period-triple-${i}`"
+                            v-model.number="period.triple_price"
+                            type="number"
+                            min="1"
+                            placeholder="留白＝單科價"
+                        />
+                    </div>
+                </div>
+                <InputError
+                    :message="
+                        (form.errors as Record<string, string | undefined>)[
+                            `periods.${i}.start_month`
+                        ]
+                    "
+                />
+                <InputError
+                    :message="
+                        (form.errors as Record<string, string | undefined>)[
+                            `periods.${i}.total_price`
+                        ]
+                    "
+                />
+            </div>
+            <InputError
+                :message="
+                    (form.errors as Record<string, string | undefined>).periods
+                "
+            />
+
+            <div class="grid max-w-xs gap-2">
+                <Label for="list_price_custom">參考原價／月（選填，繳費條顯示用）</Label>
+                <Input
+                    id="list_price_custom"
+                    v-model.number="form.list_price"
+                    type="number"
+                    min="0"
+                />
+                <InputError :message="form.errors.list_price" />
+            </div>
+        </div>
+
+        <div v-else class="space-y-4">
+            <div v-if="form.billing_kind === 'other'" class="grid max-w-xs gap-2">
+                <Label for="session_block_size">一期幾個月</Label>
+                <Input
+                    id="session_block_size"
+                    v-model.number="form.session_block_size"
+                    type="number"
+                    min="2"
+                    max="12"
+                    required
+                />
+                <InputError :message="form.errors.session_block_size" />
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div class="grid gap-2">
+                    <Label for="list_price">{{
+                        isPeriodBilling ? '一個月原價' : '原價'
+                    }}</Label>
                     <Input
-                        v-model.number="bundle.course_prices[course.id]"
+                        id="list_price"
+                        v-model.number="form.list_price"
                         type="number"
                         min="0"
-                        class="w-36"
-                        placeholder="原價"
+                        required
                     />
-                    <span class="text-xs text-muted-foreground">／月</span>
+                    <InputError :message="form.errors.list_price" />
                 </div>
-                <InputError :message="bundleError(i, 'course_prices')" />
-            </div>
-
-            <div class="grid gap-3 sm:grid-cols-[auto_1fr_auto] sm:items-end">
-                <div class="grid gap-1.5">
-                    <Label :for="`bundle-min-${i}`">至少報幾科</Label>
+                <div class="grid gap-2">
+                    <Label for="quarter_price">{{
+                        isPeriodBilling ? '單科／每月優惠價' : '單科優惠價'
+                    }}</Label>
                     <Input
-                        :id="`bundle-min-${i}`"
-                        v-model.number="bundle.min_courses"
+                        id="quarter_price"
+                        v-model.number="form.quarter_price"
                         type="number"
-                        min="2"
-                        class="w-24"
+                        min="0"
                     />
+                    <InputError :message="form.errors.quarter_price" />
                 </div>
-                <div class="grid gap-1.5">
-                    <Label :for="`bundle-name-${i}`">名稱（選填）</Label>
+                <div v-if="showDoubleTier" class="grid gap-2">
+                    <Label for="double_monthly">雙科／每月</Label>
                     <Input
-                        :id="`bundle-name-${i}`"
-                        v-model="bundle.name"
-                        placeholder="留白自動命名，例：英數 雙科"
+                        id="double_monthly"
+                        v-model.number="form.double_monthly"
+                        type="number"
+                        min="0"
+                        placeholder="留白＝用單科優惠價"
                     />
                 </div>
-                <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    class="text-destructive"
-                    @click="form.bundles.splice(i, 1)"
-                >
-                    <Trash2 class="size-4" />
-                    刪除
-                </Button>
+                <div v-if="showTripleTier" class="grid gap-2">
+                    <Label for="triple_monthly">三科／每月</Label>
+                    <Input
+                        id="triple_monthly"
+                        v-model.number="form.triple_monthly"
+                        type="number"
+                        min="0"
+                        placeholder="留白＝用單科優惠價"
+                    />
+                </div>
             </div>
-            <InputError :message="bundleError(i, 'min_courses')" />
-        </div>
-    </div>
 
-    <div class="grid gap-4 sm:grid-cols-2">
-        <div class="grid gap-2">
-            <Label for="material_unit">教材費收法</Label>
-            <select
-                id="material_unit"
-                v-model="form.material_unit"
-                class="h-9 rounded-md border px-3"
+            <div
+                v-if="isPeriodBilling"
+                class="grid gap-4 rounded-lg border bg-muted/30 p-3 sm:grid-cols-2"
             >
-                <option value="term">每年（上、下半年各收一半）</option>
-                <option value="class_day">每個上課日（耗材）</option>
-            </select>
+                <div>
+                    <p class="text-xs text-muted-foreground">
+                        一期總額（原價 × {{ months }}）
+                    </p>
+                    <p class="mt-0.5 text-lg font-semibold tabular-nums">
+                        ${{ periodListTotal.toLocaleString('zh-TW') }}
+                    </p>
+                </div>
+                <div>
+                    <p class="text-xs text-muted-foreground">
+                        一期總額（單科優惠 × {{ months }}）
+                    </p>
+                    <p class="mt-0.5 text-lg font-semibold tabular-nums">
+                        <template v-if="periodQuarterTotal !== null">
+                            ${{ periodQuarterTotal.toLocaleString('zh-TW') }}
+                        </template>
+                        <span
+                            v-else
+                            class="text-sm font-normal text-muted-foreground"
+                            >同原價一期總額</span
+                        >
+                    </p>
+                </div>
+            </div>
         </div>
-        <div class="grid gap-2">
-            <Label for="material_fee">{{
-                form.material_unit === 'class_day' ? '每日耗材費' : '教材年費'
-            }}</Label>
-            <Input
-                id="material_fee"
-                v-model.number="form.material_fee"
-                type="number"
-                min="0"
-            />
-            <p class="text-xs text-muted-foreground">
-                {{
-                    form.material_unit === 'class_day'
-                        ? '依實際上課日數計算，例：一天 200。'
-                        : '例：1,200 → 1 月、7 月各收 600。沒有教材填 0。'
-                }}
-            </p>
-        </div>
-    </div>
+    </section>
 
-    <label class="flex items-center gap-2 text-sm">
-        <input
-            v-model="form.is_active"
-            type="checkbox"
-            class="size-4 accent-[var(--brand-green)]"
-        />
-        啟用
-    </label>
+    <!-- ③ 教材費與啟用 -->
+    <section class="space-y-4 rounded-xl border p-4">
+        <div>
+            <h2 class="text-sm font-semibold">③ 教材費與啟用</h2>
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div class="grid gap-2">
+                <Label for="material_unit">教材費收法</Label>
+                <select
+                    id="material_unit"
+                    v-model="form.material_unit"
+                    class="h-9 rounded-md border px-3"
+                >
+                    <option value="term">每年（上、下半年各收一半）</option>
+                    <option value="class_day">每個上課日（耗材）</option>
+                </select>
+            </div>
+            <div class="grid gap-2">
+                <Label for="material_fee">{{
+                    form.material_unit === 'class_day' ? '每日耗材費' : '教材年費'
+                }}</Label>
+                <Input
+                    id="material_fee"
+                    v-model.number="form.material_fee"
+                    type="number"
+                    min="0"
+                />
+                <p class="text-xs text-muted-foreground">
+                    {{
+                        form.material_unit === 'class_day'
+                            ? '依實際上課日數計算，例：一天 200。'
+                            : '例：1,200 → 1 月、7 月各收 600。沒有教材填 0。'
+                    }}
+                </p>
+            </div>
+        </div>
+
+        <label class="flex items-center gap-2 text-sm">
+            <input
+                v-model="form.is_active"
+                type="checkbox"
+                class="size-4 accent-[var(--brand-green)]"
+            />
+            啟用
+        </label>
+    </section>
 </template>
