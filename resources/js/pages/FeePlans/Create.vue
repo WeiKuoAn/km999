@@ -54,9 +54,9 @@ const submit = () => form.transform(feePlanPayload).post('/fee-plans');
 
 <template>
     <Head title="新增收費設定" />
-    <div class="page-shell mx-auto w-full max-w-3xl">
-        <h1 class="text-xl font-semibold">新增收費設定</h1>
-        <form class="space-y-4" @submit.prevent="submit">
+    <div class="page-shell mx-auto w-full max-w-6xl">
+        <h1 class="text-xl font-semibold tracking-tight">新增收費設定</h1>
+        <form class="mt-4 space-y-5" @submit.prevent="submit">
             <FeePlanFields
                 :form="form"
                 :academic-years="academicYears"

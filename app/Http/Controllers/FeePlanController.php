@@ -49,6 +49,8 @@ class FeePlanController extends Controller
                 ->paginate(50)
                 ->through(fn (FeePlan $plan): array => [
                     ...$this->planPayload($plan),
+                    'period_lines' => $plan->periodSummaryLines(),
+                    'tier_lines' => $plan->tierSummaryLines(),
                     'bundles' => $this->bundlesForPlan($plan, $bundles),
                 ])
                 ->withQueryString(),
@@ -261,7 +263,7 @@ class FeePlanController extends Controller
         ));
         $count = match ($minCourses) {
             2 => '雙科',
-            3 => '三科',
+            3 => '多科',
             default => $minCourses.'科',
         };
 
@@ -273,6 +275,40 @@ class FeePlanController extends Controller
         $feePlan->delete();
 
         return to_route('fee-plans.index');
+    }
+
+    /** 複製整筆收費設定（含期別、各科月價），導向編輯頁。 */
+    public function duplicate(FeePlan $feePlan): RedirectResponse
+    {
+        $feePlan->load(['courses:id', 'periods.coursePrices']);
+
+        $copy = DB::transaction(function () use ($feePlan): FeePlan {
+            $clone = $feePlan->replicate([
+                'created_at',
+                'updated_at',
+            ]);
+            $clone->group_name = $feePlan->group_name.'（複製）';
+            $clone->is_active = false;
+            $clone->save();
+            $clone->courses()->sync($feePlan->courses->pluck('id')->all());
+
+            foreach ($feePlan->periods as $period) {
+                $periodClone = $period->replicate(['created_at', 'updated_at']);
+                $periodClone->fee_plan_id = $clone->id;
+                $periodClone->save();
+
+                foreach ($period->coursePrices as $row) {
+                    $priceClone = $row->replicate(['created_at', 'updated_at']);
+                    $priceClone->fee_plan_period_id = $periodClone->id;
+                    $priceClone->save();
+                }
+            }
+
+            return $clone;
+        });
+
+        return to_route('fee-plans.edit', $copy)
+            ->with('success', '已複製收費設定，請確認後啟用。');
     }
 
     /**
@@ -288,16 +324,16 @@ class FeePlanController extends Controller
             'course_ids.*' => ['required', 'integer', 'distinct', 'exists:courses,id'],
             'group_name' => ['required', 'string', 'max:64'],
             'pricing_group' => ['required', 'string', Rule::in(PricingGroup::keys())],
-            'unit' => ['required', 'in:month,session_block,custom_period'],
+            'unit' => ['required', 'in:custom_period'],
             'session_block_size' => ['nullable', 'integer', 'min:1', 'max:99'],
-            'periods' => ['nullable', 'array'],
+            'periods' => ['required', 'array', 'min:1'],
             'periods.*.start_month' => ['required', 'integer', 'between:1,12'],
             'periods.*.end_month' => ['required', 'integer', 'between:1,12'],
             'periods.*.course_prices' => ['required', 'array'],
             'periods.*.course_prices.*.total_price' => ['required', 'integer', 'min:1'],
             'periods.*.course_prices.*.double_price' => ['nullable', 'integer', 'min:1'],
             'periods.*.course_prices.*.triple_price' => ['nullable', 'integer', 'min:1'],
-            'list_price' => ['required', 'integer', 'min:0'],
+            'list_price' => ['nullable', 'integer', 'min:0'],
             'quarter_price' => ['nullable', 'integer', 'min:0'],
             'quarter_single_price' => ['nullable', 'integer', 'min:0'],
             'quarter_double_price' => ['nullable', 'integer', 'min:0'],
@@ -367,7 +403,7 @@ class FeePlanController extends Controller
                     $raw = $prices[$courseId] ?? $prices[(string) $courseId] ?? null;
                     $total = is_array($raw) ? ($raw['total_price'] ?? null) : null;
                     if ($total === null || $total === '' || (int) $total < 1) {
-                        $periodErrors["periods.{$i}.course_prices.{$courseId}.total_price"] = '請為每一科填寫單科一期總價。';
+                        $periodErrors["periods.{$i}.course_prices.{$courseId}.total_price"] = '請為每一科填寫單科每月價。';
                     }
                 }
             }
@@ -385,6 +421,8 @@ class FeePlanController extends Controller
             $validated['session_block_size'] = null;
         }
 
+        // 不再使用參考原價；欄位保留相容，存檔一律寫 0
+        $validated['list_price'] = 0;
         $validated['sort_order'] = $validated['sort_order'] ?? 0;
         $validated['is_active'] = $request->boolean('is_active', true);
         $validated['grade_level_id'] = isset($validated['grade_level_id'])
@@ -444,7 +482,7 @@ class FeePlanController extends Controller
     }
 
     /**
-     * @return array{id:int, name:string, course_ids:list<int>, course_prices:array<int, int|null>, min_courses:int, price:int, summary:string}
+     * @return array{id:int, name:string, course_ids:list<int>, course_prices:array<int, int|null>, min_courses:int, price:int, summary:string, summary_lines:list<string>}
      */
     private function bundleFormRow(CourseBundle $bundle): array
     {
@@ -469,23 +507,29 @@ class FeePlanController extends Controller
             'min_courses' => $bundle->min_courses,
             'price' => (int) $bundle->price,
             'summary' => implode('、', $parts),
+            'summary_lines' => $parts,
         ];
     }
 
     /**
      * @param  Collection<int, CourseBundle>  $bundles
-     * @return list<array{id:int, name:string, price:int, min_courses:int, summary:string}>
+     * @return list<array{id:int, name:string, price:int, min_courses:int, summary:string, summary_lines:list<string>}>
      */
     private function bundlesForPlan(FeePlan $plan, Collection $bundles): array
     {
         return $this->matchingBundles($plan, $bundles)
-            ->map(fn (CourseBundle $bundle): array => [
-                'id' => $bundle->id,
-                'name' => $bundle->name,
-                'price' => $bundle->price,
-                'min_courses' => $bundle->min_courses,
-                'summary' => $this->bundleFormRow($bundle)['summary'],
-            ])
+            ->map(function (CourseBundle $bundle): array {
+                $row = $this->bundleFormRow($bundle);
+
+                return [
+                    'id' => $bundle->id,
+                    'name' => $bundle->name,
+                    'price' => $bundle->price,
+                    'min_courses' => $bundle->min_courses,
+                    'summary' => $row['summary'],
+                    'summary_lines' => $row['summary_lines'],
+                ];
+            })
             ->all();
     }
 
@@ -518,12 +562,7 @@ class FeePlanController extends Controller
             'list_label' => $plan->listPriceLabel(),
             'quarter_label' => $plan->quarterLabel(),
             'material_label' => $plan->materialLabel(),
-            'unit_label' => match (true) {
-                $plan->unit === 'custom_period' => '自訂期別',
-                $plan->unit === 'month' => '按月',
-                (int) ($plan->session_block_size ?? 3) === 3 => '按季',
-                default => '每 '.(int) ($plan->session_block_size ?? 4).' 個月',
-            },
+            'unit_label' => '自訂期別',
             'periods' => $plan->relationLoaded('periods')
                 ? $plan->periods->map(function ($period): array {
                     $coursePrices = [];

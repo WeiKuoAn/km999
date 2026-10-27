@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/** 期別×科目價格：total/double/triple 皆為「每月」單價；一期應收＝月價×期月數。 */
 class FeePlanPeriodCoursePrice extends Model
 {
     protected $fillable = [

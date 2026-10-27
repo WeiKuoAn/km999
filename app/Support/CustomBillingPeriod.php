@@ -88,8 +88,8 @@ final class CustomBillingPeriod
     }
 
     /**
-     * 依同收費設定報科數取一期總價（每科）。
-     * 三科價／雙科價留空則退回單科總價。
+     * 依同收費設定報科數取「每月」單價（每科）。
+     * 一期應收＝月價 × 期別月數（或剩餘月數）；雙／三科留空則退回單科月價。
      *
      * @param  array{total_price?:int, double_price?:?int, triple_price?:?int}  $period
      */
@@ -107,6 +107,21 @@ final class CustomBillingPeriod
         }
 
         return $single;
+    }
+
+    /**
+     * 一期總價（月價 × 完整期月數）。
+     *
+     * @param  array{start_month?:int, end_month?:int, total_price?:int, double_price?:?int, triple_price?:?int, month_count?:int}  $period
+     */
+    public static function periodTotalForSubjectCount(array $period, int $subjectCount): int
+    {
+        $monthly = self::priceForSubjectCount($period, $subjectCount);
+        $months = isset($period['month_count'])
+            ? max(1, (int) $period['month_count'])
+            : self::monthCount((int) ($period['start_month'] ?? 1), (int) ($period['end_month'] ?? 1));
+
+        return $monthly * $months;
     }
 
     /**

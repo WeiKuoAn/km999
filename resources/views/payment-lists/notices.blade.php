@@ -119,7 +119,7 @@
                                                 <div class="subjects">
                                                     @foreach ($notice['subject_lines'] as $line)
                                                         <div class="subject">
-                                                            <span class="bullet">●</span>{{ $line['name'] }}：{{ $notice['prefer_label'] }}@if ($line['has_material'])含教材@endif$ <span class="subject-amount">{{ $line['preferential_total'] }}</span> 元（原價$ {{ $line['list_price'] }} 元／月）@if ($line['has_material'])（教材$ {{ $line['material_semester'] }} 元／學期）@endif
+                                                            <span class="bullet">●</span>{{ $line['name'] }}：{{ $notice['prefer_label'] }}@if ($line['has_material'])含教材@endif$ <span class="subject-amount">{{ $line['preferential_total'] }}</span> 元@if ($line['has_material'])（教材$ {{ $line['material_semester'] }} 元／學期）@endif
                                                         </div>
                                                     @endforeach
                                                 </div>
@@ -129,7 +129,7 @@
                                                 <div class="line">
                                                     請於 <span class="date">{{ $notice['deadline_label'] }}</span> 日前繳清，以利作業
                                                 </div>
-                                                <div class="note">若逾學費期限尚未繳費，新繳納月份將原價計費，感謝配合</div>
+                                                <div class="note">若逾學費期限尚未繳費，新繳納月份將依當期標準費用計費，感謝配合</div>
                                             </div>
                                         </td>
                                     </tr>

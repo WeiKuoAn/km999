@@ -101,6 +101,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::resource('grade-levels', GradeLevelController::class)->except('show');
         Route::get('student-promotions', [StudentPromotionController::class, 'index'])->name('student-promotions.index');
         Route::post('student-promotions', [StudentPromotionController::class, 'store'])->name('student-promotions.store');
+        Route::post('fee-plans/{fee_plan}/duplicate', [FeePlanController::class, 'duplicate'])->name('fee-plans.duplicate');
         Route::resource('fee-plans', FeePlanController::class)->except('show');
         Route::resource('fee-discounts', FeeDiscountController::class)->except('show');
         Route::get('holidays', [HolidayController::class, 'index'])->name('holidays.index');

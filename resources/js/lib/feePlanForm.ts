@@ -19,13 +19,13 @@ export type FeePlanBundleRow = {
     min_courses: number;
 };
 
-/** 某一期裡某一科的價格 */
+/** 某一期裡某一科的價格（填每月單價；一期應收＝月價×期月數） */
 export type FeePlanPeriodCoursePrice = {
-    /** 該科單科一期總價 */
+    /** 該科單科每月價 */
     total_price: number | '';
-    /** 雙科時該科一期總價；留白＝用單科總價 */
+    /** 雙科時該科每月價；留白＝用單科月價 */
     double_price: number | '';
-    /** 三科時該科一期總價；留白＝用單科／雙科 */
+    /** 三科時該科每月價；留白＝用單科／雙科月價 */
     triple_price: number | '';
 };
 
@@ -61,9 +61,9 @@ export type FeePlanFormData = {
     billing_kind: FeePlanBillingKind;
     /** 其他：一期幾個月份；按季固定 3 */
     session_block_size: number | '';
-    /** 一個月原價（資料庫也存月價；按期收款時再 × 月數） */
+    /** 已停用參考原價；送出時寫 0 相容舊欄位 */
     list_price: number;
-    /** 一個月優惠價／單科月價（留白＝用原價） */
+    /** 舊版單科月價（自訂期別改走 periods） */
     quarter_price: number | '';
     /** 按月／按季：雙科每月價（留白＝不另設雙科價） */
     double_monthly: number | '';
@@ -178,8 +178,8 @@ function synthesizeBundles(data: FeePlanFormData): FeePlanBundleRow[] {
 }
 
 export function feePlanPayload(data: FeePlanFormData) {
-    const months = periodMonths(data.billing_kind, data.session_block_size);
-    const bundles = synthesizeBundles(data);
+    // 一律自訂期別；雙科／三科價寫在各期各科，不再產生月繳組合
+    const bundles: FeePlanBundleRow[] = [];
 
     return {
         academic_year_id:
@@ -191,47 +191,35 @@ export function feePlanPayload(data: FeePlanFormData) {
         course_ids: data.course_ids.map(Number),
         group_name: data.group_name,
         pricing_group: data.pricing_group,
-        unit:
-            data.billing_kind === 'custom'
-                ? 'custom_period'
-                : data.billing_kind === 'month'
-                  ? 'month'
-                  : 'session_block',
-        session_block_size:
-            data.billing_kind === 'month' || data.billing_kind === 'custom'
-                ? null
-                : months,
+        unit: 'custom_period' as const,
+        session_block_size: null,
         list_price: Number(data.list_price || 0),
-        quarter_price:
-            data.billing_kind === 'custom' ? null : emptyToNull(data.quarter_price),
-        periods:
-            data.billing_kind === 'custom'
-                ? data.periods.map((period) => ({
-                      start_month:
-                          period.start_month === '' ? '' : Number(period.start_month),
-                      end_month: period.end_month === '' ? '' : Number(period.end_month),
-                      course_prices: Object.fromEntries(
-                          data.course_ids.map((id) => {
-                              const row =
-                                  period.course_prices[id] ??
-                                  period.course_prices[Number(id)] ??
-                                  emptyPeriodCoursePrice();
+        quarter_price: null,
+        periods: data.periods.map((period) => ({
+            start_month:
+                period.start_month === '' ? '' : Number(period.start_month),
+            end_month: period.end_month === '' ? '' : Number(period.end_month),
+            course_prices: Object.fromEntries(
+                data.course_ids.map((id) => {
+                    const row =
+                        period.course_prices[id] ??
+                        period.course_prices[Number(id)] ??
+                        emptyPeriodCoursePrice();
 
-                              return [
-                                  id,
-                                  {
-                                      total_price:
-                                          row.total_price === ''
-                                              ? ''
-                                              : Number(row.total_price),
-                                      double_price: emptyToNull(row.double_price),
-                                      triple_price: emptyToNull(row.triple_price),
-                                  },
-                              ];
-                          }),
-                      ),
-                  }))
-                : [],
+                    return [
+                        id,
+                        {
+                            total_price:
+                                row.total_price === ''
+                                    ? ''
+                                    : Number(row.total_price),
+                            double_price: emptyToNull(row.double_price),
+                            triple_price: emptyToNull(row.triple_price),
+                        },
+                    ];
+                }),
+            ),
+        })),
         quarter_single_price: null,
         quarter_double_price: null,
         material_fee: Number(data.material_fee || 0),

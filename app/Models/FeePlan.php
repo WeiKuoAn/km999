@@ -99,40 +99,113 @@ class FeePlan extends Model
 
     public function quarterLabel(): string
     {
-        if ($this->isCustomPeriod()) {
-            $periods = $this->relationLoaded('periods') ? $this->periods : $this->periods()->get();
-            if ($periods->isEmpty()) {
-                return '—';
+        $lines = $this->periodSummaryLines();
+        if ($lines === []) {
+            $quarterPrice = $this->quarter_single_price ?? $this->quarter_price;
+
+            return $quarterPrice !== null
+                ? number_format($this->periodAmount((int) $quarterPrice)).'／'.$this->unitLabel()
+                : '—';
+        }
+
+        return collect($lines)
+            ->map(fn (array $line): string => $line['label'].' '.$line['monthly'].'／月（×'.$line['months'].'）')
+            ->implode('；');
+    }
+
+    /**
+     * 列表用：各期單科月價摘要（一行一期）。
+     *
+     * @return list<array{label:string, monthly:string, months:int}>
+     */
+    public function periodSummaryLines(): array
+    {
+        if (! $this->isCustomPeriod()) {
+            return [];
+        }
+
+        $periods = $this->relationLoaded('periods') ? $this->periods : $this->periods()->get();
+        if ($periods->isEmpty()) {
+            return [];
+        }
+
+        return $periods
+            ->map(function (FeePlanPeriod $period): array {
+                $months = max(1, $period->monthCount());
+                if ($period->relationLoaded('coursePrices') && $period->coursePrices->isNotEmpty()) {
+                    $amounts = $period->coursePrices
+                        ->pluck('total_price')
+                        ->map(fn ($price): int => (int) $price)
+                        ->unique()
+                        ->sort()
+                        ->values();
+                    $monthly = $amounts->count() === 1
+                        ? '$'.number_format((int) $amounts[0])
+                        : '$'.number_format((int) $amounts->first()).'～'.number_format((int) $amounts->last());
+                } else {
+                    $monthly = '$'.number_format((int) $period->total_price);
+                }
+
+                return [
+                    'label' => $period->label(),
+                    'monthly' => $monthly,
+                    'months' => $months,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * 列表用：雙科／多科月價摘要（取各期各科有填的價）。
+     *
+     * @return list<array{tier:string, monthly:string}>
+     */
+    public function tierSummaryLines(): array
+    {
+        if (! $this->isCustomPeriod()) {
+            return [];
+        }
+
+        $periods = $this->relationLoaded('periods') ? $this->periods : $this->periods()->with('coursePrices')->get();
+        $doubles = [];
+        $triples = [];
+
+        foreach ($periods as $period) {
+            if (! $period->relationLoaded('coursePrices')) {
+                continue;
+            }
+            foreach ($period->coursePrices as $row) {
+                if ($row->double_price !== null && (int) $row->double_price > 0) {
+                    $doubles[] = (int) $row->double_price;
+                }
+                if ($row->triple_price !== null && (int) $row->triple_price > 0) {
+                    $triples[] = (int) $row->triple_price;
+                }
+            }
+        }
+
+        $formatRange = function (array $amounts): string {
+            $unique = collect($amounts)->unique()->sort()->values();
+            if ($unique->isEmpty()) {
+                return '';
+            }
+            if ($unique->count() === 1) {
+                return '$'.number_format((int) $unique[0]);
             }
 
-            return $periods
-                ->map(function (FeePlanPeriod $period): string {
-                    if ($period->relationLoaded('coursePrices') && $period->coursePrices->isNotEmpty()) {
-                        $amounts = $period->coursePrices
-                            ->pluck('total_price')
-                            ->map(fn ($price): int => (int) $price)
-                            ->unique()
-                            ->sort()
-                            ->values();
-                        $label = $amounts->count() === 1
-                            ? '$'.number_format((int) $amounts[0])
-                            : '$'.number_format((int) $amounts->first()).'～'.number_format((int) $amounts->last());
+            return '$'.number_format((int) $unique->first()).'～'.number_format((int) $unique->last());
+        };
 
-                        return $period->label().' '.$label;
-                    }
-
-                    return $period->label().' $'.number_format($period->total_price);
-                })
-                ->implode('；');
+        $lines = [];
+        if ($doubles !== []) {
+            $lines[] = ['tier' => '雙科', 'monthly' => $formatRange($doubles)];
+        }
+        if ($triples !== []) {
+            $lines[] = ['tier' => '多科', 'monthly' => $formatRange($triples)];
         }
 
-        $quarterPrice = $this->quarter_single_price ?? $this->quarter_price;
-
-        if ($quarterPrice !== null) {
-            return number_format($this->periodAmount((int) $quarterPrice)).'／'.$this->unitLabel();
-        }
-
-        return '—';
+        return $lines;
     }
 
     public function materialLabel(): string
@@ -140,7 +213,7 @@ class FeePlan extends Model
         $price = number_format($this->material_fee);
         $unit = match ($this->material_unit) {
             'class_day' => '日',
-            default => '年（半年收一次）',
+            default => '年（半年）',
         };
 
         return "{$price}／{$unit}";

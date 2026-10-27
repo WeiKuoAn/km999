@@ -55,18 +55,29 @@ final class FeePlanCustomPeriodConverter
             ];
         }
 
+        // 按月：實務多為季繳，轉成 7–9／10–12／1–3／4–6（一期總價＝月價×3）
+        // 按季／其他：依 session_block_size 切期
         $size = match ($plan->unit) {
             'custom_period' => max(1, (int) ($plan->session_block_size ?? 3)),
             'session_block' => max(1, (int) ($plan->session_block_size ?? 3)),
-            'month' => 1,
-            default => 1,
+            'month' => 3,
+            default => 3,
         };
 
-        // 已是自訂但強制重轉、且沒有 block 資訊時：用既有期別長度推估，否則預設季
+        // 已是自訂但強制重轉：沿用既有期長；若整份都是「單月一期」改切成季（實務多季繳）
         if ($plan->unit === 'custom_period' && $force) {
             $first = $plan->periods->first();
             if ($first !== null) {
                 $size = CustomBillingPeriod::monthCount((int) $first->start_month, (int) $first->end_month);
+                $allSingleMonth = $plan->periods->every(
+                    fn ($period): bool => CustomBillingPeriod::monthCount(
+                        (int) $period->start_month,
+                        (int) $period->end_month
+                    ) === 1
+                );
+                if ($allSingleMonth) {
+                    $size = 3;
+                }
             } else {
                 $size = 3;
             }
@@ -83,14 +94,14 @@ final class FeePlanCustomPeriodConverter
             $plan->periods()->delete();
 
             foreach (array_values($blocks) as $i => $block) {
-                [$start, $end, $months] = $block;
-                $periodTotal = $singleMonthly * $months;
+                [$start, $end] = $block;
 
                 $period = FeePlanPeriod::query()->create([
                     'fee_plan_id' => $plan->id,
                     'start_month' => $start,
                     'end_month' => $end,
-                    'total_price' => $periodTotal,
+                    // 存每月單價（一期應收＝月價×月數）
+                    'total_price' => $singleMonthly,
                     'double_price' => null,
                     'triple_price' => null,
                     'sort_order' => $i,
@@ -101,10 +112,8 @@ final class FeePlanCustomPeriodConverter
                     $doubleMonthly = $doubleMonthlyByCourse[$courseId] ?? null;
                     $period->coursePrices()->create([
                         'course_id' => $courseId,
-                        'total_price' => $periodTotal,
-                        'double_price' => $doubleMonthly !== null
-                            ? $doubleMonthly * $months
-                            : null,
+                        'total_price' => $singleMonthly,
+                        'double_price' => $doubleMonthly,
                         'triple_price' => null,
                     ]);
                 }

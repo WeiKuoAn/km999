@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\CustomBillingPeriod;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -45,5 +46,10 @@ class FeePlanPeriod extends Model
         return $this->start_month === $this->end_month
             ? $this->start_month.'月'
             : $this->start_month.'–'.$this->end_month.'月';
+    }
+
+    public function monthCount(): int
+    {
+        return CustomBillingPeriod::monthCount((int) $this->start_month, (int) $this->end_month);
     }
 }

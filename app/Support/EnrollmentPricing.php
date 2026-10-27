@@ -11,6 +11,9 @@ use Illuminate\Support\Facades\Schema;
 
 final class EnrollmentPricing
 {
+    /** @var array<string, list<array<string, mixed>>> */
+    private static array $subjectsByGradeYearCache = [];
+
     /**
      * @return list<array{
      *   id:int,
@@ -35,6 +38,11 @@ final class EnrollmentPricing
     {
         if ($student->grade_level_id === null) {
             return [];
+        }
+
+        $cacheKey = ((int) $student->grade_level_id).'|'.((int) ($student->academic_year_id ?? 0));
+        if (isset(self::$subjectsByGradeYearCache[$cacheKey])) {
+            return self::$subjectsByGradeYearCache[$cacheKey];
         }
 
         $gradeName = $student->gradeLevel?->name;
@@ -87,7 +95,7 @@ final class EnrollmentPricing
                 return $gradeName !== null && $levels->contains($gradeName);
             });
 
-        return $courses->map(function (Course $course) use ($gradeName): array {
+        $result = $courses->map(function (Course $course) use ($gradeName): array {
             /** @var FeePlan|null $plan */
             $plan = $course->feePlans->first();
 
@@ -156,6 +164,8 @@ final class EnrollmentPricing
                 'group_name' => $plan?->group_name,
             ];
         })->values()->all();
+
+        return self::$subjectsByGradeYearCache[$cacheKey] = $result;
     }
 
     /**
@@ -405,9 +415,9 @@ final class EnrollmentPricing
             $tuition = 0;
 
             if ($isCustom) {
-                // 自訂期別：依同設定報科數取單／雙／三科一期總價；期中依剩餘月折算
+                // 自訂期別：依報科數取每月單價；一期應收＝月價×月數（期中＝剩餘月）
                 $periods = is_array($subject['periods'] ?? null) ? $subject['periods'] : [];
-                /** @var array<string, array{total:int, count:int, keys:list<string>}> $groups */
+                /** @var array<string, array{monthly:int, keys:list<string>}> $groups */
                 $groups = [];
                 foreach ($subjectMonths as $month) {
                     $y = (int) $month['y'];
@@ -423,26 +433,24 @@ final class EnrollmentPricing
                     if ($period === null) {
                         continue;
                     }
-                    $tierTotal = CustomBillingPeriod::priceForSubjectCount($period, $planSubjectCount);
+                    $monthly = CustomBillingPeriod::priceForSubjectCount($period, $planSubjectCount);
                     $groupKey = $period['start_key'].'-'.$period['end_key'];
                     $groups[$groupKey] ??= [
-                        'total' => $tierTotal,
-                        'count' => $period['month_count'],
+                        'monthly' => $monthly,
                         'keys' => [],
                     ];
                     $groups[$groupKey]['keys'][] = $key;
                     if ($unitPrice === (int) $subject['list'] || $groups[$groupKey]['keys'] === [$key]) {
-                        $unitPrice = $period['month_count'] > 0
-                            ? (int) round($tierTotal / $period['month_count'])
-                            : $tierTotal;
+                        $unitPrice = $monthly;
                     }
                 }
                 foreach ($groups as $group) {
-                    if ($group['count'] <= 0 || $group['keys'] === []) {
+                    if ($group['keys'] === []) {
                         continue;
                     }
-                    $perMonthExact = $group['total'] / $group['count'];
-                    $amounts = self::allocateRoundedAmounts(array_fill(0, count($group['keys']), $perMonthExact));
+                    $amounts = self::allocateRoundedAmounts(
+                        array_fill(0, count($group['keys']), (float) $group['monthly'])
+                    );
                     foreach ($group['keys'] as $index => $key) {
                         $tuitionMonths[$key]['amount'] = (int) $amounts[$index];
                         $tuition += (int) $amounts[$index];
@@ -875,8 +883,8 @@ final class EnrollmentPricing
     public static function halfYearLabel(int $year, string $half): string
     {
         return $half === 'H1'
-            ? sprintf('%d上半年（1–6）', $year)
-            : sprintf('%d下半年（7–12）', $year);
+            ? sprintf('%d上半年', $year)
+            : sprintf('%d下半年', $year);
     }
 
     /**

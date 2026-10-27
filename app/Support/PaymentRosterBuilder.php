@@ -9,6 +9,9 @@ use Carbon\Carbon;
 
 final class PaymentRosterBuilder
 {
+    /** @var array<string, list<array<string, mixed>>> */
+    private static array $candidatesCache = [];
+
     /**
      * 尚未繳下一期費用的學生名單（已繳 7–9 → 列出 10–12）。
      *
@@ -174,6 +177,14 @@ final class PaymentRosterBuilder
             ];
         }
 
+        $allCourseIds = [];
+        foreach ($candidates as $candidate) {
+            foreach ($candidate['course_ids'] as $cid) {
+                $allCourseIds[] = (int) $cid;
+            }
+        }
+        $subjectLabelMap = self::subjectLabelMap($allCourseIds);
+
         $rows = [];
 
         foreach ($candidates as $candidate) {
@@ -311,9 +322,9 @@ final class PaymentRosterBuilder
                 }
             }
 
-            $subjects = self::subjectLabels($courseIds);
+            $subjects = self::subjectLabels($courseIds, $subjectLabelMap);
             $periodLabel = $isSplit
-                ? self::splitPeriodLabel($monthsByCourse)
+                ? self::splitPeriodLabel($monthsByCourse, $subjectLabelMap)
                 : self::periodLabel($startYear, $startMonth, $endYear, $endMonth);
 
             $rows[] = [
@@ -367,9 +378,35 @@ final class PaymentRosterBuilder
 
     /**
      * @param  list<int>  $courseIds
+     * @param  array<int, string>  $labelById
      * @return list<string>
      */
-    private static function subjectLabels(array $courseIds): array
+    private static function subjectLabels(array $courseIds, array $labelById = []): array
+    {
+        if ($courseIds === []) {
+            return [];
+        }
+
+        if ($labelById === []) {
+            $labelById = self::subjectLabelMap($courseIds);
+        }
+
+        $labels = [];
+        foreach ($courseIds as $cid) {
+            $label = $labelById[(int) $cid] ?? null;
+            if ($label !== null && $label !== '') {
+                $labels[] = $label;
+            }
+        }
+
+        return array_values(array_unique($labels));
+    }
+
+    /**
+     * @param  list<int>  $courseIds
+     * @return array<int, string>
+     */
+    private static function subjectLabelMap(array $courseIds): array
     {
         if ($courseIds === []) {
             return [];
@@ -377,13 +414,12 @@ final class PaymentRosterBuilder
 
         return Course::query()
             ->with('courseCategory:id,name')
-            ->whereIn('id', $courseIds)
+            ->whereIn('id', array_values(array_unique($courseIds)))
             ->orderBy('name')
             ->get()
-            ->map(fn (Course $c) => $c->courseCategory?->name ?: $c->name)
-            ->filter()
-            ->unique()
-            ->values()
+            ->mapWithKeys(fn (Course $c): array => [
+                (int) $c->id => (string) ($c->courseCategory?->name ?: $c->name),
+            ])
             ->all();
     }
 
@@ -391,8 +427,9 @@ final class PaymentRosterBuilder
      * 各科帳期不同時：「數學、英文 1–3月；理化 2–4月」。
      *
      * @param  array<int, list<array{y:int,m:int}>>  $monthsByCourse
+     * @param  array<int, string>  $labelById
      */
-    private static function splitPeriodLabel(array $monthsByCourse): string
+    private static function splitPeriodLabel(array $monthsByCourse, array $labelById = []): string
     {
         $groups = [];
         foreach ($monthsByCourse as $cid => $courseMonths) {
@@ -407,7 +444,7 @@ final class PaymentRosterBuilder
 
         $parts = [];
         foreach ($groups as $label => $ids) {
-            $parts[] = implode('、', self::subjectLabels($ids)).' '.$label;
+            $parts[] = implode('、', self::subjectLabels($ids, $labelById)).' '.$label;
         }
 
         return implode('；', $parts);
@@ -599,6 +636,10 @@ final class PaymentRosterBuilder
     private static function collectPendingCandidates(?string $q, ?int $gradeLevelId): array
     {
         $q = $q !== null ? trim($q) : '';
+        $cacheKey = $q.'|'.($gradeLevelId ?? 'all');
+        if (isset(self::$candidatesCache[$cacheKey])) {
+            return self::$candidatesCache[$cacheKey];
+        }
 
         $students = Student::query()
             ->with(['gradeLevel:id,name', 'academicYear:id,year_code,name'])
@@ -679,6 +720,6 @@ final class PaymentRosterBuilder
             ];
         }
 
-        return $candidates;
+        return self::$candidatesCache[$cacheKey] = $candidates;
     }
 }

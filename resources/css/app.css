@@ -194,7 +194,8 @@
 
     [data-slot='sidebar-inset'] {
         max-width: 100%;
-        overflow-x: hidden;
+        /* clip 不建立捲動容器，才不會擋掉 position: sticky */
+        overflow-x: clip;
     }
 
     [data-slot='sidebar-inset'] > header {

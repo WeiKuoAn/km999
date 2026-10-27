@@ -15,10 +15,15 @@ type CourseOption = {
     levels: string[];
 };
 
-const props = defineProps<{
-    courses: CourseOption[];
-    error?: string;
-}>();
+const props = withDefaults(
+    defineProps<{
+        courses: CourseOption[];
+        error?: string;
+        /** 嵌在外層區塊內時去掉外框，避免雙重邊框 */
+        embedded?: boolean;
+    }>(),
+    { embedded: false },
+);
 
 const model = defineModel<number[]>({ required: true });
 
@@ -81,34 +86,36 @@ const toggleGroup = (courses: CourseOption[]) => {
 </script>
 
 <template>
-    <div class="space-y-3 rounded-lg border p-4">
-        <div>
-            <div class="flex items-center justify-between gap-3">
-                <h2 class="text-base font-medium">適用課目</h2>
-                <span class="text-sm text-muted-foreground"
-                    >已選 {{ model.length }} 門</span
-                >
+    <div :class="embedded ? 'space-y-3' : 'space-y-3 rounded-lg border p-4'">
+        <div class="flex flex-wrap items-end justify-between gap-2">
+            <div class="min-w-0">
+                <h2 class="text-sm font-medium">適用課目</h2>
+                <p class="mt-0.5 text-xs text-muted-foreground">
+                    報名試算只會對勾選的課目套用此收費設定；同學年、同年級不可重複綁定。
+                </p>
             </div>
-            <p class="mt-1 text-xs text-muted-foreground">
-                報名試算只會對勾選的課目套用此收費設定；同學年、同年級不可重複綁定。
-            </p>
+            <span
+                class="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium tabular-nums text-muted-foreground"
+            >
+                已選 {{ model.length }} 門
+            </span>
         </div>
 
         <p
             v-if="courses.length === 0"
-            class="rounded-md border border-dashed p-3 text-sm text-muted-foreground"
+            class="rounded-md border border-dashed px-3 py-2.5 text-sm text-muted-foreground"
         >
             尚無課程，請先至「課程管理」新增。
         </p>
 
-        <template v-else>
+        <div v-else class="space-y-2.5">
             <div
                 v-for="group in groups"
                 :key="group.id"
-                class="space-y-2 rounded-md bg-muted/30 p-3"
+                class="rounded-lg border bg-muted/20 p-2.5 sm:p-3"
             >
                 <label
-                    class="flex cursor-pointer items-center gap-2 border-b pb-2 text-sm font-medium"
+                    class="mb-2 flex cursor-pointer items-center gap-2 text-sm font-medium"
                 >
                     <input
                         type="checkbox"
@@ -121,20 +128,26 @@ const toggleGroup = (courses: CourseOption[]) => {
                     <span class="font-normal text-muted-foreground">全選</span>
                 </label>
 
-                <div class="grid gap-2 sm:grid-cols-2">
+                <div
+                    class="grid gap-1.5"
+                    :class="embedded ? 'sm:grid-cols-1' : 'sm:grid-cols-2 lg:grid-cols-3'"
+                >
                     <label
                         v-for="course in group.courses"
                         :key="course.id"
-                        class="flex items-start gap-2 rounded-md border bg-background p-2 text-sm"
-                        :class="
+                        class="flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm transition-colors"
+                        :class="[
+                            isSelected(course.id)
+                                ? 'border-primary/40 bg-primary/5'
+                                : 'border-transparent bg-background hover:border-border',
                             course.status === 'paused' && !isSelected(course.id)
                                 ? 'cursor-not-allowed opacity-50'
-                                : 'cursor-pointer'
-                        "
+                                : 'cursor-pointer',
+                        ]"
                     >
                         <input
                             type="checkbox"
-                            class="mt-0.5 size-4 accent-[var(--brand-green)]"
+                            class="mt-0.5 size-4 shrink-0 accent-[var(--brand-green)]"
                             :checked="isSelected(course.id)"
                             :disabled="
                                 course.status === 'paused' &&
@@ -143,10 +156,10 @@ const toggleGroup = (courses: CourseOption[]) => {
                             @change="toggleCourse(course.id)"
                         />
                         <span
-                            class="mt-0.5 size-3 shrink-0 rounded-full border"
+                            class="mt-1 size-2.5 shrink-0 rounded-full border"
                             :style="classroomSwatchStyle(course.color)"
                         />
-                        <span class="min-w-0">
+                        <span class="min-w-0 leading-snug">
                             <span class="block font-medium">{{
                                 course.name
                             }}</span>
@@ -155,18 +168,19 @@ const toggleGroup = (courses: CourseOption[]) => {
                                     course.levels.length ||
                                     course.status === 'paused'
                                 "
-                                class="block text-xs text-muted-foreground"
+                                class="mt-0.5 block text-[11px] text-muted-foreground"
                             >
                                 {{ course.levels.join('、') }}
                                 <template v-if="course.status === 'paused'">
-                                    {{ course.levels.length ? '· ' : '' }}已停用</template
+                                    {{ course.levels.length ? ' · ' : ''
+                                    }}已停用</template
                                 >
                             </span>
                         </span>
                     </label>
                 </div>
             </div>
-        </template>
+        </div>
 
         <InputError :message="error" />
     </div>

@@ -723,7 +723,23 @@ const customPeriodsLabel = (s: Subject): string =>
     ((s.periods ?? []) as CustomPeriod[])
         .map(
             (p) =>
-                `${p.start_month === p.end_month ? `${p.start_month}月` : `${p.start_month}–${p.end_month}月`} $${p.total_price.toLocaleString()}`,
+                (() => {
+                    const months =
+                        p.start_month === p.end_month
+                            ? 1
+                            : (() => {
+                                  let n = 0;
+                                  let m = p.start_month;
+                                  for (let i = 0; i < 12; i++) {
+                                      n++;
+                                      if (m === p.end_month) break;
+                                      m = (m % 12) + 1;
+                                  }
+                                  return n;
+                              })();
+                    const total = p.total_price * months;
+                    return `${p.start_month === p.end_month ? `${p.start_month}月` : `${p.start_month}–${p.end_month}月`} $${total.toLocaleString()}（${p.total_price.toLocaleString()}/月）`;
+                })(),
         )
         .join('；');
 
@@ -739,12 +755,12 @@ const allocateRounded = (exacts: number[]): number[] => {
     return floors;
 };
 
-/** 自訂期別各月金額：依報科數取單／雙／三科一期總價，再 ÷ 期月數折算 */
+/** 自訂期別各月金額：依報科數取每月單價 × 勾選月數 */
 const customMonthAllocations = (s: Subject): Map<string, number> => {
     const out = new Map<string, number>();
     const periods = (s.periods ?? []) as CustomPeriod[];
     const subjectCount = feePlanSubjectCount(s);
-    const groups = new Map<string, { total: number; count: number; keys: string[] }>();
+    const groups = new Map<string, { monthly: number; keys: string[] }>();
     for (const month of courseBillingMonths(s.id)) {
         const key = monthKey(month.y, month.m);
         out.set(key, 0);
@@ -753,15 +769,14 @@ const customMonthAllocations = (s: Subject): Map<string, number> => {
         const groupKey = `${period.start_key}-${period.end_key}`;
         if (!groups.has(groupKey)) {
             groups.set(groupKey, {
-                total: priceForSubjectCount(period, subjectCount),
-                count: period.month_count,
+                monthly: priceForSubjectCount(period, subjectCount),
                 keys: [],
             });
         }
         groups.get(groupKey)!.keys.push(key);
     }
     for (const group of groups.values()) {
-        const amounts = allocateRounded(group.keys.map(() => group.total / group.count));
+        const amounts = allocateRounded(group.keys.map(() => group.monthly));
         group.keys.forEach((key, i) => out.set(key, amounts[i]));
     }
     return out;
@@ -1346,19 +1361,19 @@ const appliedBundleNames = computed(() => [
     ),
 ]);
 
-/** 一個月單價（定價／優惠／組合優惠）；自訂期別為期別總價 ÷ 期月數 */
+/** 一個月單價（定價／優惠／組合優惠）；自訂期別為設定的每月價 */
 const unitPrice = (s: Subject) => {
     if (isCustomSubject(s)) {
         const periods = (s.periods ?? []) as CustomPeriod[];
         const first = courseBillingMonths(s.id)[0];
         const period = first ? periodForMonth(periods, first.y, first.m) : null;
-        const fallback = periods[0];
-        const total = period?.total_price ?? fallback?.total_price ?? 0;
-        const count =
-            period?.month_count ??
-            (fallback ? periodMonthNumbers(fallback.start_month, fallback.end_month).length : 1);
+        const fallback = periods[0] ?? null;
+        const row = period ?? fallback;
+        if (!row) {
+            return 0;
+        }
 
-        return count > 0 ? Math.round(total / count) : total;
+        return priceForSubjectCount(row, feePlanSubjectCount(s));
     }
 
     if (payCycle.value === 'monthly') {
@@ -1683,7 +1698,7 @@ const materialTermCourses = computed(() => {
                     status?.months_label ?? (half === 'H1' ? '1–6' : '7–12'),
                 periodLabel:
                     status?.period_label ??
-                    `${year}${half === 'H1' ? '上半年（1–6）' : '下半年（7–12）'}`,
+                    `${year}${half === 'H1' ? '上半年' : '下半年'}`,
                 locked: !!(status && !status.can_charge),
                 note: status?.note ?? null,
                 checked: st.checked && !(status && !status.can_charge),

@@ -122,11 +122,13 @@ final class PaymentNoticePng
             $lineX = self::drawBullet($img, $lineX, $y, $sizeSubject, $black);
             $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw("{$subjectName}：{$preferLabel}＄ "));
             $lineX = self::drawMoney($img, $sizeSubject, $lineX, $y, $black, $font, (int) ($line['preferential_total'] ?? 0));
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('（原價＄ '));
-            $lineX = self::drawMoney($img, $sizeSubject, $lineX, $y, $black, $font, (int) ($line['list_price'] ?? 0));
-            $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／月）（教材＄ '));
-            $lineX = self::drawMoney($img, $sizeSubject, $lineX, $y, $black, $font, (int) ($line['material_semester'] ?? 0));
-            self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／學期）'));
+            $materialSemester = (int) ($line['material_semester'] ?? 0);
+            $materialCharged = (int) ($line['material_charged'] ?? 0);
+            if ($materialCharged > 0 || $materialSemester > 0) {
+                $lineX = self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('（教材＄ '));
+                $lineX = self::drawMoney($img, $sizeSubject, $lineX, $y, $black, $font, $materialSemester);
+                self::text($img, $sizeSubject, $lineX, $y, $black, $font, self::fw('／學期）'));
+            }
         }
 
         // 5) 合計
@@ -163,7 +165,7 @@ final class PaymentNoticePng
             $y,
             $black,
             $font,
-            '若逾學費期限尚未繳費，新繳納月份將原價計費，感謝配合'
+            '若逾學費期限尚未繳費，新繳納月份將依當期標準費用計費，感謝配合'
         );
 
         ob_start();

@@ -3,13 +3,10 @@ import { Head, Link, useForm } from '@inertiajs/vue3';
 import FeePlanFields from '@/components/fee-plans/FeePlanFields.vue';
 import { Button } from '@/components/ui/button';
 import {
-    billingKindFromPlan,
     emptyCoursePrices,
     emptyPeriodCoursePrice,
     emptyPeriodCoursePrices,
     feePlanPayload,
-    monthlyTiersFromBundles,
-    periodMonths,
 } from '@/lib/feePlanForm';
 import type {
     FeePlanBundleRow,
@@ -62,17 +59,6 @@ const props = defineProps<{
     courses: FeePlanCourseOption[];
 }>();
 
-const billingKind = billingKindFromPlan(
-    props.plan.unit,
-    props.plan.session_block_size,
-);
-const months = periodMonths(
-    billingKind,
-    props.plan.session_block_size ?? (billingKind === 'quarter' ? 3 : 4),
-);
-
-const monthlyTiers = monthlyTiersFromBundles(props.plan.bundles ?? []);
-
 const form = useForm<FeePlanFormData>({
     academic_year_id: props.plan.academic_year_id
         ? String(props.plan.academic_year_id)
@@ -85,13 +71,12 @@ const form = useForm<FeePlanFormData>({
     course_ids: [...props.plan.course_ids],
     group_name: props.plan.group_name,
     pricing_group: props.plan.pricing_group,
-    billing_kind: billingKind,
-    session_block_size: props.plan.session_block_size ?? months,
+    billing_kind: 'custom',
+    session_block_size: '',
     list_price: props.plan.list_price,
-    quarter_price:
-        props.plan.quarter_single_price ?? props.plan.quarter_price ?? '',
-    double_monthly: monthlyTiers.double_monthly,
-    triple_monthly: monthlyTiers.triple_monthly,
+    quarter_price: '',
+    double_monthly: '',
+    triple_monthly: '',
     material_fee: props.plan.material_fee,
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
@@ -170,9 +155,9 @@ const submit = () =>
 
 <template>
     <Head title="編輯收費設定" />
-    <div class="page-shell mx-auto w-full max-w-3xl">
-        <h1 class="text-xl font-semibold">編輯收費設定</h1>
-        <form class="space-y-4" @submit.prevent="submit">
+    <div class="page-shell mx-auto w-full max-w-6xl">
+        <h1 class="text-xl font-semibold tracking-tight">編輯收費設定</h1>
+        <form class="mt-4 space-y-5" @submit.prevent="submit">
             <FeePlanFields
                 :form="form"
                 :academic-years="academicYears"
