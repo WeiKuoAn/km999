@@ -176,11 +176,18 @@ const hasTierInfo = (plan: Plan) =>
                             <span class="text-muted-foreground">{{
                                 line.label
                             }}</span>
-                            <span class="tabular-nums font-medium"
-                                >{{ line.monthly }}／月</span
-                            >
-                            <span class="text-xs text-muted-foreground"
-                                >×{{ line.months }}</span
+                            <template v-if="line.months > 0">
+                                <span class="tabular-nums font-medium"
+                                    >{{ line.monthly }}／月</span
+                                >
+                                <span class="text-xs text-muted-foreground"
+                                    >×{{ line.months }}</span
+                                >
+                            </template>
+                            <span
+                                v-else
+                                class="text-sm leading-snug tabular-nums font-medium"
+                                >{{ line.monthly }}</span
                             >
                         </li>
                     </ul>
@@ -298,11 +305,18 @@ const hasTierInfo = (plan: Plan) =>
                                         class="shrink-0 text-xs text-muted-foreground"
                                         >{{ line.label }}</span
                                     >
-                                    <span class="tabular-nums font-medium"
+                                    <template v-if="line.months > 0">
+                                        <span class="tabular-nums font-medium"
+                                            >{{ line.monthly }}</span
+                                        >
+                                        <span class="text-xs text-muted-foreground"
+                                            >／月 ×{{ line.months }}</span
+                                        >
+                                    </template>
+                                    <span
+                                        v-else
+                                        class="tabular-nums font-medium leading-snug"
                                         >{{ line.monthly }}</span
-                                    >
-                                    <span class="text-xs text-muted-foreground"
-                                        >／月 ×{{ line.months }}</span
                                     >
                                 </li>
                             </ul>

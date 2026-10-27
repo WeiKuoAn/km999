@@ -24,10 +24,14 @@ const props = defineProps<{
         group_name: string;
         pricing_group: string;
         unit: 'month' | 'session_block' | 'custom_period';
+        per_course_periods?: boolean;
         periods: Array<{
+            course_id?: number | null;
             start_month: number;
             end_month: number;
             total_price?: number;
+            double_price?: number | null;
+            triple_price?: number | null;
             course_prices: Record<
                 number,
                 {
@@ -81,8 +85,48 @@ const form = useForm<FeePlanFormData>({
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
     is_active: props.plan.is_active,
+    per_course_periods: !!props.plan.per_course_periods,
     periods: (props.plan.periods ?? []).map((period) => {
         const courseIds = [...props.plan.course_ids];
+        const perCourse = !!props.plan.per_course_periods && period.course_id != null;
+        if (perCourse) {
+            const courseId = Number(period.course_id);
+            const raw =
+                period.course_prices?.[courseId] ??
+                (
+                    period.course_prices as Record<
+                        string,
+                        {
+                            total_price: number;
+                            double_price: number | null;
+                            triple_price: number | null;
+                        }
+                    >
+                )?.[String(courseId)];
+            const total =
+                raw?.total_price ?? period.total_price ?? ('' as const);
+            const double =
+                raw?.double_price ?? period.double_price ?? ('' as const);
+            const triple =
+                raw?.triple_price ?? period.triple_price ?? ('' as const);
+
+            return {
+                course_id: courseId,
+                start_month: period.start_month,
+                end_month: period.end_month,
+                total_price: total === null ? '' : total,
+                double_price: double === null ? '' : double,
+                triple_price: triple === null ? '' : triple,
+                course_prices: {
+                    [courseId]: {
+                        total_price: total === null ? '' : total,
+                        double_price: double === null ? '' : double,
+                        triple_price: triple === null ? '' : triple,
+                    } satisfies FeePlanPeriodCoursePrice,
+                },
+            };
+        }
+
         const prices = emptyPeriodCoursePrices(courseIds);
         for (const id of courseIds) {
             const raw =
@@ -113,6 +157,7 @@ const form = useForm<FeePlanFormData>({
         }
 
         return {
+            course_id: null,
             start_month: period.start_month,
             end_month: period.end_month,
             course_prices: prices,

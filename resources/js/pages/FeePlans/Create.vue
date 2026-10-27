@@ -30,8 +30,10 @@ const form = useForm<FeePlanFormData>({
     material_unit: 'term',
     sort_order: 0,
     is_active: true,
+    per_course_periods: false,
     periods: [
         {
+            course_id: null,
             start_month: 7,
             end_month: 8,
             course_prices: emptyPeriodCoursePrices([]),
