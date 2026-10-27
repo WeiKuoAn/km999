@@ -15,6 +15,7 @@ class FeePlan extends Model
         'group_name',
         'pricing_group',
         'unit',
+        'per_course_periods',
         'session_block_size',
         'list_price',
         'quarter_price',
@@ -29,6 +30,7 @@ class FeePlan extends Model
     protected function casts(): array
     {
         return [
+            'per_course_periods' => 'boolean',
             'list_price' => 'integer',
             'quarter_price' => 'integer',
             'quarter_single_price' => 'integer',
@@ -109,7 +111,13 @@ class FeePlan extends Model
         }
 
         return collect($lines)
-            ->map(fn (array $line): string => $line['label'].' '.$line['monthly'].'／月（×'.$line['months'].'）')
+            ->map(function (array $line): string {
+                if (($line['months'] ?? 0) === 0) {
+                    return $line['label'].' '.$line['monthly'];
+                }
+
+                return $line['label'].' '.$line['monthly'].'／月（×'.$line['months'].'）';
+            })
             ->implode('；');
     }
 
@@ -124,9 +132,38 @@ class FeePlan extends Model
             return [];
         }
 
-        $periods = $this->relationLoaded('periods') ? $this->periods : $this->periods()->get();
+        $periods = $this->relationLoaded('periods')
+            ? $this->periods
+            : $this->periods()->with(['coursePrices', 'course:id,name'])->get();
         if ($periods->isEmpty()) {
             return [];
+        }
+
+        if ($this->per_course_periods) {
+            $courses = $this->relationLoaded('courses')
+                ? $this->courses->keyBy('id')
+                : $this->courses()->get()->keyBy('id');
+
+            return $periods
+                ->groupBy(fn (FeePlanPeriod $period): int => (int) ($period->course_id ?? 0))
+                ->flatMap(function ($coursePeriods, $courseId) use ($courses) {
+                    $courseName = $courses->get((int) $courseId)?->name
+                        ?? $coursePeriods->first()?->course?->name
+                        ?? '科目';
+                    $parts = $coursePeriods->map(function (FeePlanPeriod $period): string {
+                        $monthly = '$'.number_format((int) $period->total_price);
+
+                        return $period->label().' '.$monthly.'／月（×'.$period->monthCount().'）';
+                    })->implode('、');
+
+                    return [[
+                        'label' => $courseName,
+                        'monthly' => $parts,
+                        'months' => 0,
+                    ]];
+                })
+                ->values()
+                ->all();
         }
 
         return $periods
@@ -172,6 +209,16 @@ class FeePlan extends Model
         $triples = [];
 
         foreach ($periods as $period) {
+            if ($this->per_course_periods || ($period->course_id !== null && (! $period->relationLoaded('coursePrices') || $period->coursePrices->isEmpty()))) {
+                if ($period->double_price !== null && (int) $period->double_price > 0) {
+                    $doubles[] = (int) $period->double_price;
+                }
+                if ($period->triple_price !== null && (int) $period->triple_price > 0) {
+                    $triples[] = (int) $period->triple_price;
+                }
+
+                continue;
+            }
             if (! $period->relationLoaded('coursePrices')) {
                 continue;
             }

@@ -11,6 +11,7 @@ class FeePlanPeriod extends Model
 {
     protected $fillable = [
         'fee_plan_id',
+        'course_id',
         'start_month',
         'end_month',
         'total_price',
@@ -22,6 +23,7 @@ class FeePlanPeriod extends Model
     protected function casts(): array
     {
         return [
+            'course_id' => 'integer',
             'start_month' => 'integer',
             'end_month' => 'integer',
             'total_price' => 'integer',
@@ -34,6 +36,11 @@ class FeePlanPeriod extends Model
     public function feePlan(): BelongsTo
     {
         return $this->belongsTo(FeePlan::class);
+    }
+
+    public function course(): BelongsTo
+    {
+        return $this->belongsTo(Course::class);
     }
 
     public function coursePrices(): HasMany

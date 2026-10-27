@@ -32,9 +32,29 @@ export type FeePlanPeriodCoursePrice = {
 export type FeePlanPeriodRow = {
     start_month: number | '';
     end_month: number | '';
-    /** 依勾選科目分別設定金額 */
+    /** 分科期別時必填；共用期別為 null */
+    course_id?: number | null;
+    /** 分科期別時該科單科月價（也可用 course_prices[course_id]） */
+    total_price?: number | '';
+    double_price?: number | '';
+    triple_price?: number | '';
+    /** 依勾選科目分別設定金額（共用期別） */
     course_prices: Record<number, FeePlanPeriodCoursePrice>;
 };
+
+export function emptyCoursePeriodRow(courseId: number): FeePlanPeriodRow {
+    return {
+        course_id: courseId,
+        start_month: '',
+        end_month: '',
+        total_price: '',
+        double_price: '',
+        triple_price: '',
+        course_prices: {
+            [courseId]: emptyPeriodCoursePrice(),
+        },
+    };
+}
 
 export function emptyPeriodCoursePrice(): FeePlanPeriodCoursePrice {
     return { total_price: '', double_price: '', triple_price: '' };
@@ -73,6 +93,8 @@ export type FeePlanFormData = {
     material_unit: 'term' | 'subject' | 'class_day';
     sort_order: number;
     is_active: boolean;
+    /** true＝各科各自期別；false＝共用期別（現況） */
+    per_course_periods: boolean;
     periods: FeePlanPeriodRow[];
     /** 僅編輯時載入舊資料；存檔改由 double/triple_monthly 產生 */
     bundles: FeePlanBundleRow[];
@@ -192,34 +214,81 @@ export function feePlanPayload(data: FeePlanFormData) {
         group_name: data.group_name,
         pricing_group: data.pricing_group,
         unit: 'custom_period' as const,
+        per_course_periods: !!data.per_course_periods,
         session_block_size: null,
         list_price: Number(data.list_price || 0),
         quarter_price: null,
-        periods: data.periods.map((period) => ({
-            start_month:
-                period.start_month === '' ? '' : Number(period.start_month),
-            end_month: period.end_month === '' ? '' : Number(period.end_month),
-            course_prices: Object.fromEntries(
-                data.course_ids.map((id) => {
-                    const row =
-                        period.course_prices[id] ??
-                        period.course_prices[Number(id)] ??
-                        emptyPeriodCoursePrice();
+        periods: data.per_course_periods
+            ? data.periods.map((period) => {
+                  const courseId = Number(period.course_id);
+                  const row =
+                      period.course_prices?.[courseId] ??
+                      period.course_prices?.[Number(courseId)] ??
+                      emptyPeriodCoursePrice();
+                  const total =
+                      period.total_price !== undefined && period.total_price !== ''
+                          ? Number(period.total_price)
+                          : row.total_price === ''
+                            ? ''
+                            : Number(row.total_price);
+                  const double =
+                      period.double_price !== undefined
+                          ? emptyToNull(period.double_price)
+                          : emptyToNull(row.double_price);
+                  const triple =
+                      period.triple_price !== undefined
+                          ? emptyToNull(period.triple_price)
+                          : emptyToNull(row.triple_price);
 
-                    return [
-                        id,
-                        {
-                            total_price:
-                                row.total_price === ''
-                                    ? ''
-                                    : Number(row.total_price),
-                            double_price: emptyToNull(row.double_price),
-                            triple_price: emptyToNull(row.triple_price),
-                        },
-                    ];
-                }),
-            ),
-        })),
+                  return {
+                      course_id: courseId,
+                      start_month:
+                          period.start_month === ''
+                              ? ''
+                              : Number(period.start_month),
+                      end_month:
+                          period.end_month === '' ? '' : Number(period.end_month),
+                      total_price: total,
+                      double_price: double,
+                      triple_price: triple,
+                      course_prices: {
+                          [courseId]: {
+                              total_price: total,
+                              double_price: double,
+                              triple_price: triple,
+                          },
+                      },
+                  };
+              })
+            : data.periods.map((period) => ({
+                  course_id: null,
+                  start_month:
+                      period.start_month === ''
+                          ? ''
+                          : Number(period.start_month),
+                  end_month:
+                      period.end_month === '' ? '' : Number(period.end_month),
+                  course_prices: Object.fromEntries(
+                      data.course_ids.map((id) => {
+                          const row =
+                              period.course_prices[id] ??
+                              period.course_prices[Number(id)] ??
+                              emptyPeriodCoursePrice();
+
+                          return [
+                              id,
+                              {
+                                  total_price:
+                                      row.total_price === ''
+                                          ? ''
+                                          : Number(row.total_price),
+                                  double_price: emptyToNull(row.double_price),
+                                  triple_price: emptyToNull(row.triple_price),
+                              },
+                          ];
+                      }),
+                  ),
+              })),
         quarter_single_price: null,
         quarter_double_price: null,
         material_fee: Number(data.material_fee || 0),
