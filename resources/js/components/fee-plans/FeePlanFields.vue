@@ -322,9 +322,21 @@ watch(
     { immediate: true },
 );
 
+const ensureAnnualPrices = () => {
+    if (!props.form.annual_prices) {
+        props.form.annual_prices = {};
+    }
+    const next: Record<number, number | ''> = {};
+    for (const id of props.form.course_ids.map(Number)) {
+        next[id] = props.form.annual_prices[id] ?? '';
+    }
+    props.form.annual_prices = next;
+};
+
 watch(
     () => [...props.form.course_ids],
     (ids, prevIds) => {
+        ensureAnnualPrices();
         if (props.form.per_course_periods) {
             const next = new Set(ids.map(Number));
             const prev = new Set((prevIds ?? []).map(Number));
@@ -450,13 +462,45 @@ if (props.form.material_unit === 'subject') {
                     <Input
                         id="group_name"
                         v-model="form.group_name"
-                        placeholder="例：國二英數理、國一國文生物"
+                        placeholder="例：國二英數理、國三全科年繳"
                         required
                     />
                     <p class="text-xs text-muted-foreground">
                         顯示在收費設定列表與收款畫面。
                     </p>
                     <InputError :message="form.errors.group_name" />
+                </div>
+                <div class="grid gap-1.5">
+                    <Label>設定類型</Label>
+                    <div class="flex flex-wrap gap-3 text-sm">
+                        <label class="inline-flex items-center gap-2">
+                            <input
+                                v-model="form.plan_kind"
+                                type="radio"
+                                value="period"
+                                class="accent-[var(--brand-green)]"
+                            />
+                            期別收費（月／季／期）
+                        </label>
+                        <label class="inline-flex items-center gap-2">
+                            <input
+                                v-model="form.plan_kind"
+                                type="radio"
+                                value="annual_package"
+                                class="accent-[var(--brand-green)]"
+                            />
+                            年繳方案（固定總額）
+                        </label>
+                    </div>
+                    <p class="text-xs text-muted-foreground">
+                        年繳方案可與期別設定共用科目（例如全科含國文，國社年繳也含國文）。收款時科目剛好等於方案才套用總額。
+                    </p>
+                    <InputError
+                        :message="
+                            (form.errors as Record<string, string | undefined>)
+                                .plan_kind
+                        "
+                    />
                 </div>
             </div>
 
@@ -470,11 +514,83 @@ if (props.form.material_unit === 'subject') {
             </div>
         </section>
 
-        <!-- 右：期別＋教材（寬螢幕捲動時黏在畫面上方） -->
+        <!-- 右：期別／方案＋教材 -->
         <div
             class="space-y-5 xl:sticky xl:top-20 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
         >
-            <section class="space-y-4 rounded-xl border p-4 sm:p-5">
+            <section
+                v-if="form.plan_kind === 'annual_package'"
+                class="space-y-4 rounded-xl border p-4 sm:p-5"
+            >
+                <div class="border-b pb-3">
+                    <h2 class="text-sm font-semibold">② 年繳方案</h2>
+                    <p class="mt-0.5 text-xs text-muted-foreground">
+                        設定一次繳清總額與涵蓋月份。收款選年繳、起算月＝起始月、且勾選科目剛好這幾科時套用。
+                    </p>
+                </div>
+                <div class="flex flex-wrap items-end gap-3">
+                    <div class="grid gap-1.5">
+                        <Label for="package_total">方案總額（元，含教材）</Label>
+                        <Input
+                            id="package_total"
+                            v-model.number="form.package_total"
+                            type="number"
+                            min="1"
+                            class="h-9 w-40"
+                            required
+                        />
+                        <InputError
+                            :message="
+                                (
+                                    form.errors as Record<
+                                        string,
+                                        string | undefined
+                                    >
+                                ).package_total
+                            "
+                        />
+                    </div>
+                    <div class="grid gap-1.5">
+                        <Label for="pkg_start">起始月</Label>
+                        <select
+                            id="pkg_start"
+                            v-model.number="form.annual_start_month"
+                            class="h-9 rounded-md border px-2"
+                            required
+                        >
+                            <option
+                                v-for="m in monthOptions"
+                                :key="`pkg-s-${m}`"
+                                :value="m"
+                            >
+                                {{ m }} 月
+                            </option>
+                        </select>
+                    </div>
+                    <div class="grid gap-1.5">
+                        <Label for="pkg_end">結束月</Label>
+                        <select
+                            id="pkg_end"
+                            v-model.number="form.annual_end_month"
+                            class="h-9 rounded-md border px-2"
+                            required
+                        >
+                            <option
+                                v-for="m in monthOptions"
+                                :key="`pkg-e-${m}`"
+                                :value="m"
+                            >
+                                {{ m }} 月
+                            </option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <section
+                v-if="form.plan_kind !== 'annual_package'"
+                class="space-y-4 rounded-xl border p-4 sm:p-5"
+            >
                 <div class="border-b pb-3">
                     <h2 class="text-sm font-semibold">② 期別與金額（自訂期別）</h2>
                     <p class="mt-0.5 text-xs text-muted-foreground">
@@ -503,7 +619,7 @@ if (props.form.material_unit === 'subject') {
                         <div>
                             <p class="text-sm font-medium">期別設定（每年循環）</p>
                             <p class="text-xs text-muted-foreground">
-                                月份不可重疊。請依勾選科目填每月價；雙／多科欄留白＝用該科單科月價。
+                                月份可重疊（計價以先列到的期別為準）。請依勾選科目填每月價；雙／多科欄留白＝用該科單科月價。
                             </p>
                         </div>
                         <Button
@@ -664,12 +780,12 @@ if (props.form.material_unit === 'subject') {
                                                     period.course_prices[course.id]
                                                 "
                                                 :id="`period-${i}-course-${course.id}-double`"
-                                                v-model.number="
+                                                v-model="
                                                     period.course_prices[course.id]
                                                         .double_price
                                                 "
                                                 type="number"
-                                                min="1"
+                                                min="0"
                                                 class="h-9"
                                                 placeholder="留白＝單科價"
                                             />
@@ -683,12 +799,12 @@ if (props.form.material_unit === 'subject') {
                                                     period.course_prices[course.id]
                                                 "
                                                 :id="`period-${i}-course-${course.id}-triple`"
-                                                v-model.number="
+                                                v-model="
                                                     period.course_prices[course.id]
                                                         .triple_price
                                                 "
                                                 type="number"
-                                                min="1"
+                                                min="0"
                                                 class="h-9"
                                                 placeholder="留白＝單科價"
                                             />
@@ -710,7 +826,7 @@ if (props.form.material_unit === 'subject') {
                 <!-- 分科期別 -->
                 <div v-else class="space-y-4">
                     <p class="text-xs text-muted-foreground">
-                        各科月份可不同，但同科內不可重疊。雙／多科欄留白＝用該科單科月價。
+                        各科月份可不同，同科也可重疊（計價以先列到的期別為準）。雙／多科欄留白＝用該科單科月價。
                     </p>
 
                     <div
@@ -844,11 +960,11 @@ if (props.form.material_unit === 'subject') {
                                     >
                                     <Input
                                         :id="`pc-double-${index}`"
-                                        v-model.number="
+                                        v-model="
                                             coursePeriodPrice(period).double_price
                                         "
                                         type="number"
-                                        min="1"
+                                        min="0"
                                         class="h-9"
                                         placeholder="留白＝單科價"
                                     />
@@ -859,11 +975,11 @@ if (props.form.material_unit === 'subject') {
                                     >
                                     <Input
                                         :id="`pc-triple-${index}`"
-                                        v-model.number="
+                                        v-model="
                                             coursePeriodPrice(period).triple_price
                                         "
                                         type="number"
-                                        min="1"
+                                        min="0"
                                         class="h-9"
                                         placeholder="留白＝單科價"
                                     />
@@ -890,9 +1006,151 @@ if (props.form.material_unit === 'subject') {
                 />
             </section>
 
+            <section
+                v-if="form.plan_kind !== 'annual_package'"
+                class="space-y-4 rounded-xl border p-4 sm:p-5"
+            >
+                <div class="border-b pb-3">
+                    <h2 class="text-sm font-semibold">③ 年繳優惠（選填）</h2>
+                    <p class="mt-0.5 text-xs text-muted-foreground">
+                        勾選後可設定年繳涵蓋月份與各科一次繳清金額；月／季／期繳仍用上方期別月價。
+                    </p>
+                </div>
+
+                <label class="flex items-start gap-2 text-sm">
+                    <input
+                        v-model="form.allow_annual"
+                        type="checkbox"
+                        class="mt-0.5 size-4 accent-[var(--brand-green)]"
+                    />
+                    <span>
+                        <span class="font-medium">開放年繳</span>
+                        <span class="mt-0.5 block text-xs text-muted-foreground">
+                            收款選年繳，且帳期剛好等於下方起迄月時套用金額。
+                        </span>
+                    </span>
+                </label>
+
+                <div v-if="form.allow_annual" class="space-y-3">
+                    <div class="flex flex-wrap items-end gap-2">
+                        <div class="grid gap-1.5">
+                            <Label for="annual_start_month">年繳起始月</Label>
+                            <select
+                                id="annual_start_month"
+                                v-model.number="form.annual_start_month"
+                                class="h-9 rounded-md border px-2"
+                                required
+                            >
+                                <option
+                                    v-for="m in monthOptions"
+                                    :key="`annual-start-${m}`"
+                                    :value="m"
+                                >
+                                    {{ m }} 月
+                                </option>
+                            </select>
+                            <InputError
+                                :message="
+                                    (
+                                        form.errors as Record<
+                                            string,
+                                            string | undefined
+                                        >
+                                    ).annual_start_month
+                                "
+                            />
+                        </div>
+                        <div class="grid gap-1.5">
+                            <Label for="annual_end_month">年繳結束月</Label>
+                            <select
+                                id="annual_end_month"
+                                v-model.number="form.annual_end_month"
+                                class="h-9 rounded-md border px-2"
+                                required
+                            >
+                                <option
+                                    v-for="m in monthOptions"
+                                    :key="`annual-end-${m}`"
+                                    :value="m"
+                                >
+                                    {{ m }} 月
+                                </option>
+                            </select>
+                            <InputError
+                                :message="
+                                    (
+                                        form.errors as Record<
+                                            string,
+                                            string | undefined
+                                        >
+                                    ).annual_end_month
+                                "
+                            />
+                        </div>
+                        <p class="pb-2 text-xs text-muted-foreground">
+                            例：7–6＝整學年；9–6＝從 9 月繳到隔年 6 月。
+                        </p>
+                    </div>
+
+                    <div
+                        v-if="selectedCourses.length === 0"
+                        class="text-sm text-muted-foreground"
+                    >
+                        請先勾選適用科目。
+                    </div>
+                    <div v-else class="overflow-x-auto rounded-md border">
+                        <table class="w-full min-w-[16rem] text-sm">
+                            <thead
+                                class="bg-muted/50 text-left text-xs text-muted-foreground"
+                            >
+                                <tr>
+                                    <th class="px-3 py-2 font-medium">科目</th>
+                                    <th class="px-3 py-2 font-medium">
+                                        年繳金額（元）
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="course in selectedCourses"
+                                    :key="`annual-${course.id}`"
+                                    class="border-t"
+                                >
+                                    <td class="px-3 py-2 font-medium">
+                                        {{ course.name }}
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <Input
+                                            :id="`annual-${course.id}`"
+                                            v-model.number="
+                                                form.annual_prices[course.id]
+                                            "
+                                            type="number"
+                                            min="1"
+                                            class="h-9"
+                                            required
+                                        />
+                                        <InputError
+                                            :message="
+                                                (
+                                                    form.errors as Record<
+                                                        string,
+                                                        string | undefined
+                                                    >
+                                                )[`annual_prices.${course.id}`]
+                                            "
+                                        />
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
             <section class="space-y-4 rounded-xl border p-4 sm:p-5">
                 <div class="border-b pb-3">
-                    <h2 class="text-sm font-semibold">③ 教材費與啟用</h2>
+                    <h2 class="text-sm font-semibold">④ 教材費與啟用</h2>
                 </div>
 
                 <div class="grid gap-4 sm:grid-cols-2">

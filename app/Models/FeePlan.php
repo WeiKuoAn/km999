@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\CustomBillingPeriod;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -15,7 +16,12 @@ class FeePlan extends Model
         'group_name',
         'pricing_group',
         'unit',
+        'plan_kind',
         'per_course_periods',
+        'allow_annual',
+        'annual_start_month',
+        'annual_end_month',
+        'package_total',
         'session_block_size',
         'list_price',
         'quarter_price',
@@ -31,6 +37,10 @@ class FeePlan extends Model
     {
         return [
             'per_course_periods' => 'boolean',
+            'allow_annual' => 'boolean',
+            'annual_start_month' => 'integer',
+            'annual_end_month' => 'integer',
+            'package_total' => 'integer',
             'list_price' => 'integer',
             'quarter_price' => 'integer',
             'quarter_single_price' => 'integer',
@@ -64,9 +74,58 @@ class FeePlan extends Model
             ->orderBy('start_month');
     }
 
+    public function annualPrices(): HasMany
+    {
+        return $this->hasMany(FeePlanAnnualPrice::class);
+    }
+
     public function isCustomPeriod(): bool
     {
         return $this->unit === 'custom_period';
+    }
+
+    public function isAnnualPackage(): bool
+    {
+        return ($this->plan_kind ?? 'period') === 'annual_package';
+    }
+
+    public function isPeriodPlan(): bool
+    {
+        return ! $this->isAnnualPackage();
+    }
+
+    /** 年繳起始月（未設則 7） */
+    public function annualStartMonth(): int
+    {
+        $month = (int) ($this->annual_start_month ?? 7);
+
+        return $month >= 1 && $month <= 12 ? $month : 7;
+    }
+
+    /** 年繳結束月（未設則 6） */
+    public function annualEndMonth(): int
+    {
+        $month = (int) ($this->annual_end_month ?? 6);
+
+        return $month >= 1 && $month <= 12 ? $month : 6;
+    }
+
+    /** 該科年繳金額；未開放或未設定則 null */
+    public function annualAmountForCourse(int $courseId): ?int
+    {
+        if (! $this->allow_annual) {
+            return null;
+        }
+
+        $row = $this->relationLoaded('annualPrices')
+            ? $this->annualPrices->firstWhere('course_id', $courseId)
+            : $this->annualPrices()->where('course_id', $courseId)->first();
+
+        if ($row === null || (int) $row->amount < 1) {
+            return null;
+        }
+
+        return (int) $row->amount;
     }
 
     public function unitLabel(): string
@@ -128,6 +187,20 @@ class FeePlan extends Model
      */
     public function periodSummaryLines(): array
     {
+        if ($this->isAnnualPackage()) {
+            $total = (int) ($this->package_total ?? 0);
+            $start = $this->annualStartMonth();
+            $end = $this->annualEndMonth();
+            $monthCount = CustomBillingPeriod::monthCount($start, $end);
+
+            return [[
+                'label' => ($start === $end ? $start.'月' : $start.'–'.$end.'月').' · '.$monthCount.'個月',
+                'monthly' => '$'.number_format($total).'（年繳總額）',
+                // months=0：列表不套「／月 ×N」版型
+                'months' => 0,
+            ]];
+        }
+
         if (! $this->isCustomPeriod()) {
             return [];
         }
@@ -257,6 +330,10 @@ class FeePlan extends Model
 
     public function materialLabel(): string
     {
+        if ($this->isAnnualPackage()) {
+            return '含於方案總額';
+        }
+
         $price = number_format($this->material_fee);
         $unit = match ($this->material_unit) {
             'class_day' => '日',

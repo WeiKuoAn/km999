@@ -6,8 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
+const props = defineProps<{
+    gradeLevels: Array<{ id: number; name: string }>;
+}>();
+
 const form = useForm({
     name: '',
+    grade_level_id: '' as number | '',
     type: 'amount' as 'amount' | 'percent',
     value: 0,
     is_active: true,
@@ -49,6 +54,28 @@ defineOptions({
                     placeholder="例：早鳥優惠、介紹折扣"
                 />
                 <InputError :message="form.errors.name" />
+            </div>
+
+            <div class="grid gap-2">
+                <Label for="grade_level_id">適用年級</Label>
+                <select
+                    id="grade_level_id"
+                    v-model="form.grade_level_id"
+                    class="h-9 rounded-md border px-3"
+                >
+                    <option value="">全年級（不限）</option>
+                    <option
+                        v-for="g in props.gradeLevels"
+                        :key="g.id"
+                        :value="g.id"
+                    >
+                        {{ g.name }}
+                    </option>
+                </select>
+                <p class="text-xs text-muted-foreground">
+                    指定年級後，只有該年級學生收款時才會看到此優惠。
+                </p>
+                <InputError :message="form.errors.grade_level_id" />
             </div>
 
             <div class="grid gap-2 sm:grid-cols-2">

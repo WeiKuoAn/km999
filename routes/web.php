@@ -9,6 +9,7 @@ use App\Http\Controllers\CourseController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FeeDiscountController;
 use App\Http\Controllers\FeePlanController;
+use App\Http\Controllers\FeeStandardTemplateController;
 use App\Http\Controllers\GradeLevelController;
 use App\Http\Controllers\HolidayController;
 use App\Http\Controllers\ReportController;
@@ -83,8 +84,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('student-payments/{student}/quote', [StudentPaymentController::class, 'quote'])->name('student-payments.quote');
         Route::post('student-payments/{student}/quote', [StudentPaymentController::class, 'store'])->name('student-payments.store');
         Route::post('student-payments/{student}/renew-next', [StudentPaymentController::class, 'renewNext'])->name('student-payments.renew-next');
+        Route::get('student-payments/{student}/period-meta', [StudentPaymentController::class, 'editPeriodMeta'])->name('student-payments.period-meta.edit');
+        Route::patch('student-payments/{student}/period-meta', [StudentPaymentController::class, 'updatePeriodMeta'])->name('student-payments.period-meta.update');
         Route::get('student-payments/{student}', [StudentPaymentController::class, 'show'])->name('student-payments.show');
         Route::delete('student-payments/{student}/period', [StudentPaymentController::class, 'destroyPeriod'])->name('student-payments.destroy-period');
+
+        Route::get('fee-standard-templates', [FeeStandardTemplateController::class, 'index'])->name('fee-standard-templates.index');
+        Route::get('fee-standard-templates/exports/{export}', [FeeStandardTemplateController::class, 'exportStatus'])->name('fee-standard-templates.exports.status');
+        Route::get('fee-standard-templates/exports/{export}/download', [FeeStandardTemplateController::class, 'downloadExport'])->name('fee-standard-templates.exports.download');
+        Route::get('fee-standard-templates/{fee_standard_template}/students', [FeeStandardTemplateController::class, 'students'])->name('fee-standard-templates.students');
+        Route::get('fee-standard-templates/{fee_standard_template}/pdf', [FeeStandardTemplateController::class, 'pdf'])->name('fee-standard-templates.pdf');
     });
 
     Route::middleware('role:super_admin')->group(function () {
@@ -104,6 +113,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('fee-plans/{fee_plan}/duplicate', [FeePlanController::class, 'duplicate'])->name('fee-plans.duplicate');
         Route::resource('fee-plans', FeePlanController::class)->except('show');
         Route::resource('fee-discounts', FeeDiscountController::class)->except('show');
+        Route::post('fee-standard-templates/{fee_standard_template}/duplicate', [FeeStandardTemplateController::class, 'duplicate'])->name('fee-standard-templates.duplicate');
+        Route::resource('fee-standard-templates', FeeStandardTemplateController::class)->except(['show', 'index']);
         Route::get('holidays', [HolidayController::class, 'index'])->name('holidays.index');
         Route::post('holidays', [HolidayController::class, 'store'])->name('holidays.store');
         Route::post('holidays/import', [HolidayController::class, 'import'])->name('holidays.import');

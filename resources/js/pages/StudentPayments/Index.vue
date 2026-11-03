@@ -70,7 +70,7 @@ const detailHref = (row: Row) =>
     `/student-payments/${row.student_id}?from_year=${row.start_year}&from_month=${row.start_month}&to_year=${row.end_year}&to_month=${row.end_month}`;
 
 const editHref = (row: Row) =>
-    `/student-payments/create?student_id=${row.student_id}&edit_from=${row.start_year}-${row.start_month}&edit_to=${row.end_year}-${row.end_month}`;
+    `/student-payments/${row.student_id}/period-meta?from=${row.start_year}-${row.start_month}&to=${row.end_year}-${row.end_month}`;
 
 const deleteError = computed(
     () => (page.props.errors as { delete?: string } | undefined)?.delete ?? '',
@@ -83,7 +83,7 @@ const confirmDelete = (row: Row) => {
         return;
     }
     const ok = window.confirm(
-        `確定要刪除 ${row.student_code ?? ''} ${row.student_name}「${row.period_label}」的收款？\n\n總金額 ${formatMoney(row.expected_total)}，這一期各月各科的紀錄與本期收的教材費都會一併刪除，無法復原。`,
+        `確定要刪除 ${row.student_code ?? ''} ${row.student_name}「${row.period_label}」的收款？\n\n總金額 ${formatMoney(row.expected_total)}，這一期各月各科的紀錄與本期收的教材費都會一併刪除，無法復原。\n\n注意：刪除後若重新收款，金額會依「最新」收費設定計算。`,
     );
     if (!ok) {
         return;
@@ -228,7 +228,7 @@ defineOptions({
                             size="sm"
                             as-child
                         >
-                            <Link :href="editHref(row)">編輯</Link>
+                            <Link :href="editHref(row)">調整收據</Link>
                         </Button>
                         <Button
                             variant="outline"
@@ -306,7 +306,7 @@ defineOptions({
                                     :href="editHref(row)"
                                     class="text-primary underline-offset-4 hover:underline"
                                 >
-                                    編輯
+                                    調整收據
                                 </Link>
                                 <button
                                     type="button"

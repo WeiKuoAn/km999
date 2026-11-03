@@ -5,6 +5,7 @@ namespace App\Models;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class FeeDiscount extends Model
@@ -15,6 +16,7 @@ class FeeDiscount extends Model
 
     protected $fillable = [
         'name',
+        'grade_level_id',
         'type',
         'value',
         'is_active',
@@ -33,6 +35,11 @@ class FeeDiscount extends Model
             'starts_on' => 'date',
             'ends_on' => 'date',
         ];
+    }
+
+    public function gradeLevel(): BelongsTo
+    {
+        return $this->belongsTo(GradeLevel::class);
     }
 
     public function reconciliations(): HasMany
@@ -56,6 +63,26 @@ class FeeDiscount extends Model
             ->where(function (Builder $builder) use ($date): void {
                 $builder->whereNull('ends_on')->orWhereDate('ends_on', '>=', $date);
             });
+    }
+
+    /** 適用指定年級：未設年級＝全年級；設了則僅該年級 */
+    public function scopeForGrade(Builder $query, ?int $gradeLevelId): Builder
+    {
+        return $query->where(function (Builder $builder) use ($gradeLevelId): void {
+            $builder->whereNull('grade_level_id');
+            if ($gradeLevelId !== null) {
+                $builder->orWhere('grade_level_id', $gradeLevelId);
+            }
+        });
+    }
+
+    public function appliesToGrade(?int $gradeLevelId): bool
+    {
+        if ($this->grade_level_id === null) {
+            return true;
+        }
+
+        return $gradeLevelId !== null && (int) $this->grade_level_id === (int) $gradeLevelId;
     }
 
     public function label(): string

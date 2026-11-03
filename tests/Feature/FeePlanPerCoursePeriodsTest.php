@@ -270,3 +270,36 @@ test('per-course mode requires a period for every selected course', function () 
         ])
         ->assertSessionHasErrors('periods');
 });
+
+test('shared period months may overlap', function () {
+    ['year' => $year, 'grade' => $grade, 'category' => $category] = perCourseCtx();
+    $english = perCourseCourse($category, '英文');
+
+    $payload = sharedPeriodPayload($year, $grade, [$english->id], [
+        $english->id => ['total_price' => 3200, 'double_price' => 3000, 'triple_price' => 3000],
+    ]);
+    $payload['periods'] = [
+        [
+            'course_id' => null,
+            'start_month' => 12,
+            'end_month' => 2,
+            'course_prices' => [
+                $english->id => ['total_price' => 3200, 'double_price' => 3000, 'triple_price' => 3000],
+            ],
+        ],
+        [
+            'course_id' => null,
+            'start_month' => 3,
+            'end_month' => 6,
+            'course_prices' => [
+                $english->id => ['total_price' => 3200, 'double_price' => 3000, 'triple_price' => 3000],
+            ],
+        ],
+    ];
+
+    $this->actingAs(perCourseUser())
+        ->post(route('fee-plans.store'), $payload)
+        ->assertRedirect(route('fee-plans.index'));
+
+    expect(FeePlan::query()->sole()->periods)->toHaveCount(2);
+});

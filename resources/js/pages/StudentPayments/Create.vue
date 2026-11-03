@@ -53,6 +53,10 @@ type Subject = {
     end_date?: string | null;
     fee_plan_id: number | null;
     group_name: string | null;
+    allow_annual?: boolean;
+    annual_start_month?: number | null;
+    annual_end_month?: number | null;
+    annual_price?: number | null;
 };
 
 type StudentInfo = {
@@ -141,6 +145,17 @@ const props = defineProps<{
     }>;
     grade9_package?: {
         eligible: boolean;
+        packages?: Array<{
+            code: string;
+            label: string;
+            total: number;
+            monthly_total: number;
+            required_course_ids: number[];
+            required_count: number;
+            ready: boolean;
+            start_month?: number;
+            end_month?: number;
+        }>;
         required_course_ids: number[];
         required_count: number;
         total: number;
@@ -425,50 +440,44 @@ const sessionMonthSpan = computed(() => {
 
 const grade9Package = computed(() => props.grade9_package ?? null);
 
-const packageRequiredIds = computed(
-    () => grade9Package.value?.required_course_ids ?? [],
+const grade9Packages = computed(
+    () =>
+        (grade9Package.value?.packages ?? []).filter(
+            (p) => p.ready && p.required_course_ids.length > 0,
+        ),
 );
 
-const isGrade9PackageMode = computed(() => {
-    const meta = grade9Package.value;
-
-    if (!meta?.eligible || payCycle.value !== 'annual') {
+const idsEqual = (a: number[], b: number[]) => {
+    if (a.length !== b.length) {
         return false;
     }
+    const left = [...a].sort((x, y) => x - y);
+    const right = [...b].sort((x, y) => x - y);
+    return left.every((id, i) => id === right[i]);
+};
 
+const activeGrade9Package = computed(() => {
+    if (payCycle.value !== 'annual') {
+        return null;
+    }
     if (!startDate.value || startDate.value.length < 7) {
-        return false;
+        return null;
     }
-
-    const month = Number(startDate.value.slice(5, 7));
-
-    if (month !== 7) {
-        return false;
-    }
-
-    const required = [...meta.required_course_ids].sort((a, b) => a - b);
-    const sel = [...selected.value].sort((a, b) => a - b);
-
+    const startMonth = Number(startDate.value.slice(5, 7));
     return (
-        required.length > 0 &&
-        required.length === sel.length &&
-        required.every((id, i) => id === sel[i])
+        grade9Packages.value.find(
+            (p) =>
+                Number(p.start_month ?? 7) === startMonth &&
+                idsEqual(p.required_course_ids, selected.value),
+        ) ?? null
     );
 });
 
-const packageAlmostReady = computed(() => {
-    const meta = grade9Package.value;
+const isGrade9PackageMode = computed(() => activeGrade9Package.value !== null);
 
-    if (!meta?.eligible) {
-        return false;
-    }
-
-    return !isGrade9PackageMode.value;
-});
-
-/** 續繳且帳期起算非 7 月時不可硬改為方案 */
+/** 續繳且帳期起算月對不到任一方案起始月時不可硬改 */
 const canApplyGrade9Package = computed(() => {
-    if (!grade9Package.value?.eligible) {
+    if (!grade9Package.value?.eligible || grade9Packages.value.length === 0) {
         return false;
     }
 
@@ -482,13 +491,19 @@ const canApplyGrade9Package = computed(() => {
         return true;
     }
 
-    return Number(suggested.slice(5, 7)) === 7;
+    const month = Number(suggested.slice(5, 7));
+    return grade9Packages.value.some(
+        (p) => Number(p.start_month ?? 7) === month,
+    );
 });
 
-const applyGrade9Package = () => {
-    const meta = grade9Package.value;
+const applyGrade9Package = (code?: string) => {
+    const pack =
+        (code
+            ? grade9Packages.value.find((p) => p.code === code)
+            : grade9Packages.value[0]) ?? null;
 
-    if (!meta?.eligible || meta.required_course_ids.length === 0) {
+    if (!pack || pack.required_course_ids.length === 0) {
         return;
     }
 
@@ -502,12 +517,13 @@ const applyGrade9Package = () => {
             : startDate.value
               ? Number(startDate.value.slice(0, 4))
               : new Date().getFullYear();
-    selected.value = [...meta.required_course_ids];
+    selected.value = [...pack.required_course_ids];
     payCycle.value = 'annual';
+    const startMonth = String(pack.start_month ?? 7).padStart(2, '0');
     startDate.value =
         hasPriorPayments.value && suggestedStartDate.value
             ? suggestedStartDate.value
-            : `${year}-07-01`;
+            : `${year}-${startMonth}-01`;
     selectedDiscountId.value = null;
     allowance.value = 0;
     chargeMaterialMaster.value = false;
@@ -517,9 +533,9 @@ const applyGrade9Package = () => {
     refillSessionDates();
 };
 
-/** 國三方案：每月 2 萬均攤各科 */
+/** 國三方案：當月總額均攤各科 */
 const packageShareForCourse = (index: number, count: number) => {
-    const monthly = grade9Package.value?.monthly_total ?? 20000;
+    const monthly = activeGrade9Package.value?.monthly_total ?? 20000;
     const base = Math.floor(monthly / count);
     const rem = monthly % count;
 
@@ -543,7 +559,7 @@ const packageMonthBreakdown = computed(() => {
     const year = Number(startDate.value.slice(0, 4));
     const ids = [...selected.value];
     const n = ids.length;
-    const monthly = grade9Package.value?.monthly_total ?? 20000;
+    const monthly = activeGrade9Package.value?.monthly_total ?? 20000;
 
     return [7, 8, 9, 10, 11, 12].map((m) => ({
         y: year,
@@ -755,13 +771,86 @@ const allocateRounded = (exacts: number[]): number[] => {
     return floors;
 };
 
-/** 自訂期別各月金額：依報科數取每月單價 × 勾選月數 */
+/** 帳期是否剛好等於年繳起迄月（可跨年） */
+const matchesAnnualMonthSpan = (
+    months: Array<{ y: number; m: number }>,
+    startMonth: number,
+    endMonth: number,
+): boolean => {
+    if (
+        months.length === 0 ||
+        startMonth < 1 ||
+        startMonth > 12 ||
+        endMonth < 1 ||
+        endMonth > 12
+    ) {
+        return false;
+    }
+
+    const expected: number[] = [];
+    let cursor = startMonth;
+    for (let i = 0; i < 12; i++) {
+        expected.push(cursor);
+        if (cursor === endMonth) break;
+        cursor = (cursor % 12) + 1;
+    }
+    if (months.length !== expected.length) {
+        return false;
+    }
+
+    const first = months[0];
+    if (!first || first.m !== startMonth) {
+        return false;
+    }
+
+    let year = first.y;
+    let month = startMonth;
+    for (const row of months) {
+        if (row.y !== year || row.m !== month) {
+            return false;
+        }
+        if (month === endMonth) {
+            break;
+        }
+        month += 1;
+        if (month > 12) {
+            month = 1;
+            year += 1;
+        }
+    }
+    return true;
+};
+
+const usesAnnualPreferential = (s: Subject): boolean =>
+    payCycle.value === 'annual' &&
+    !!s.allow_annual &&
+    s.annual_price != null &&
+    s.annual_price > 0 &&
+    matchesAnnualMonthSpan(
+        courseBillingMonths(s.id),
+        Number(s.annual_start_month ?? 7),
+        Number(s.annual_end_month ?? 6),
+    );
+
+/** 自訂期別各月金額：依報科數取每月單價 × 勾選月數；符合年繳優惠則均攤年繳金額 */
 const customMonthAllocations = (s: Subject): Map<string, number> => {
     const out = new Map<string, number>();
+    const months = courseBillingMonths(s.id);
+
+    if (usesAnnualPreferential(s)) {
+        const keys = months.map((month) => monthKey(month.y, month.m));
+        const annual = Number(s.annual_price ?? 0);
+        const amounts = allocateRounded(
+            keys.map(() => annual / Math.max(1, keys.length)),
+        );
+        keys.forEach((key, i) => out.set(key, amounts[i]));
+        return out;
+    }
+
     const periods = (s.periods ?? []) as CustomPeriod[];
     const subjectCount = feePlanSubjectCount(s);
     const groups = new Map<string, { monthly: number; keys: string[] }>();
-    for (const month of courseBillingMonths(s.id)) {
+    for (const month of months) {
         const key = monthKey(month.y, month.m);
         out.set(key, 0);
         const period = periodForMonth(periods, month.y, month.m);
@@ -1361,8 +1450,14 @@ const appliedBundleNames = computed(() => [
     ),
 ]);
 
-/** 一個月單價（定價／優惠／組合優惠）；自訂期別為設定的每月價 */
+/** 一個月單價（定價／優惠／組合優惠）；自訂期別為設定的每月價；年繳優惠顯示均攤月額 */
 const unitPrice = (s: Subject) => {
+    if (usesAnnualPreferential(s)) {
+        const months = Math.max(1, courseBillingMonths(s.id).length);
+
+        return Math.round(Number(s.annual_price ?? 0) / months);
+    }
+
     if (isCustomSubject(s)) {
         const periods = (s.periods ?? []) as CustomPeriod[];
         const first = courseBillingMonths(s.id)[0];
@@ -1412,9 +1507,14 @@ const isCourseMonth = (courseId: number, y: number, m: number) =>
     !isSplitMode.value ||
     (courseMonthKeys.value[courseId] ?? []).includes(monthKey(y, m));
 
-/** 按期：月價 × 勾選月數（與表單「一個月價」一致） */
-const blockTuition = (s: Subject) =>
-    unitPrice(s) * courseBillingMonths(s.id).length;
+/** 按期：月價 × 勾選月數；年繳優惠則用年繳總額 */
+const blockTuition = (s: Subject) => {
+    if (usesAnnualPreferential(s)) {
+        return Number(s.annual_price ?? 0);
+    }
+
+    return unitPrice(s) * courseBillingMonths(s.id).length;
+};
 
 const countSessionsInMonth = (courseId: number, y: number, m: number) =>
     sessions.value.filter((entry) => {
@@ -1428,8 +1528,8 @@ return false;
     }).length;
 
 const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
-    if (isCustomSubject(s)) {
-        // 自訂期別：不依出席，該月金額為期別折算分配
+    if (usesAnnualPreferential(s) || isCustomSubject(s)) {
+        // 年繳優惠／自訂期別：不依出席，該月金額為均攤或期別分配
         return customMonthAllocations(s).get(monthKey(y, m)) ?? 0;
     }
 
@@ -1448,7 +1548,7 @@ const lineTuitionForMonthExact = (s: Subject, y: number, m: number) => {
 };
 
 const lineTuition = (s: Subject) => {
-    if (isCustomSubject(s)) {
+    if (usesAnnualPreferential(s) || isCustomSubject(s)) {
         return customTuition(s);
     }
 
@@ -1782,7 +1882,7 @@ const materialHalfSummary = computed(() => {
 
 const tuitionTotal = computed(() => {
     if (isGrade9PackageMode.value) {
-        return grade9Package.value?.total ?? 120000;
+        return activeGrade9Package.value?.total ?? 120000;
     }
 
     // 與試算「各月金額」一致：每月先加總各科精確學費，再四捨五入後加總
@@ -2452,55 +2552,75 @@ defineOptions({
                         </div>
 
                         <div
-                            v-if="grade9Package?.eligible"
+                            v-if="grade9Package?.eligible && grade9Packages.length"
                             class="mt-4 rounded-lg border border-emerald-300/70 bg-emerald-50/60 p-3"
                         >
                             <p class="text-sm font-medium text-emerald-950">
-                                國三全科年繳方案
+                                年繳方案（收費設定）
                             </p>
                             <p class="mt-1 text-sm text-emerald-900/85">
-                                選齊全部有價目科目、年繳、起算日為 7
-                                月：總額
-                                {{
-                                    (
-                                        grade9Package?.total ?? 120000
-                                    ).toLocaleString()
-                                }}（含教材），7–12 月共 6 期，每月
-                                {{
-                                    (
-                                        grade9Package?.monthly_total ?? 20000
-                                    ).toLocaleString()
-                                }}
-                                均攤至各科應收。
+                                來自收費設定的「年繳方案」。年繳、起算月＝方案起始月、科目剛好符合時套用總額（含教材）。
                             </p>
                             <p
-                                v-if="isGrade9PackageMode"
-                                class="mt-2 text-sm font-medium text-emerald-800"
-                            >
-                                已套用方案：教材另收關閉；帳期固定 7–12 月。
-                            </p>
-                            <p
-                                v-else-if="packageAlmostReady"
+                                v-if="!canApplyGrade9Package"
                                 class="mt-2 text-sm text-emerald-900/80"
                             >
-                                <template v-if="!canApplyGrade9Package">
-                                    續繳起算非 7
-                                    月，無法套用此方案（請改用季繳／月繳）。
-                                </template>
-                                <template v-else>
-                                    尚未符合條件（需年繳＋7 月起算＋選齊
-                                    {{ grade9Package?.required_count ?? 0 }}
-                                    科）。可一鍵套用。
-                                </template>
+                                續繳起算非 7
+                                月，無法套用此方案（請改用季繳／月繳）。
                             </p>
-                            <button
-                                v-if="!isGrade9PackageMode && canApplyGrade9Package"
-                                type="button"
-                                class="mt-3 rounded-md border border-emerald-700/40 bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800"
-                                @click="applyGrade9Package"
-                            >
-                                套用國三全科年繳
-                            </button>
+                            <ul class="mt-3 space-y-2">
+                                <li
+                                    v-for="pack in grade9Packages"
+                                    :key="pack.code"
+                                    class="rounded-md border border-emerald-200/80 bg-white/70 px-3 py-2"
+                                >
+                                    <div
+                                        class="flex flex-wrap items-center justify-between gap-2"
+                                    >
+                                        <div>
+                                            <p
+                                                class="text-sm font-medium text-emerald-950"
+                                            >
+                                                {{ pack.label }}
+                                            </p>
+                                            <p
+                                                class="text-xs text-emerald-900/80"
+                                            >
+                                                總額
+                                                {{
+                                                    pack.total.toLocaleString()
+                                                }}／6 期，約每月
+                                                {{
+                                                    pack.monthly_total.toLocaleString()
+                                                }}
+                                            </p>
+                                        </div>
+                                        <button
+                                            v-if="
+                                                activeGrade9Package?.code !==
+                                                    pack.code &&
+                                                canApplyGrade9Package
+                                            "
+                                            type="button"
+                                            class="rounded-md border border-emerald-700/40 bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800"
+                                            @click="
+                                                applyGrade9Package(pack.code)
+                                            "
+                                        >
+                                            套用
+                                        </button>
+                                        <span
+                                            v-else-if="
+                                                activeGrade9Package?.code ===
+                                                pack.code
+                                            "
+                                            class="text-sm font-medium text-emerald-800"
+                                        >
+                                            已套用
+                                        </span>
+                                    </div>
+                                </li>
+                            </ul>
                         </div>
                     </div>
 
@@ -2533,9 +2653,17 @@ defineOptions({
                                 v-if="isGrade9PackageMode"
                                 class="text-xs text-muted-foreground"
                             >
-                                國三全科年繳固定 7–12 月共 6
-                                期，每月合計 20,000（20,000 ÷
-                                科目數寫入各科該月應收）。
+                                {{
+                                    activeGrade9Package?.label ??
+                                    '國三年繳方案'
+                                }}固定 7–12 月共 6 期，每月合計約
+                                {{
+                                    (
+                                        activeGrade9Package?.monthly_total ??
+                                        20000
+                                    ).toLocaleString()
+                                }}
+                                均攤至各科。
                             </p>
                             <label
                                 v-if="!isGrade9PackageMode && selected.length > 1"
@@ -2819,11 +2947,12 @@ defineOptions({
                             試算
                         </h2>
                         <p
-                            v-if="isGrade9PackageMode"
+                            v-if="isGrade9PackageMode && activeGrade9Package"
                             class="mt-2 rounded-md border border-emerald-200 bg-emerald-50/80 px-3 py-2 text-sm text-emerald-950"
                         >
-                            國三全科年繳：120,000（含教材）／6 期 ×
-                            20,000；各科該月應收＝20,000 ÷
+                            {{ activeGrade9Package.label }}：{{
+                                activeGrade9Package.total.toLocaleString()
+                            }}（含教材）／6 期；各科該月應收＝當月合計 ÷
                             {{ selected.length }} 科。
                         </p>
                         <dl class="mt-3 space-y-2.5 text-base">

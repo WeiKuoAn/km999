@@ -2,22 +2,28 @@
 
 namespace App\Support;
 
+use App\Models\FeePlan;
 use App\Models\Student;
 use Carbon\Carbon;
 
 /**
- * 國三全科年繳方案：總額 120,000（含教材），7–12 月共 6 期，每月合計 20,000 均攤至各科。
- * 條件：國三＋年繳＋起算日為 7 月＋選齊該年級有價目的全部科目。
+ * 年繳固定方案：讀取收費設定 plan_kind=annual_package。
+ * 條件：年繳＋起算月＝方案起始月＋勾選科目剛好等於方案科目。
+ * （國三全科／全科科研／國社等皆在收費設定建立，不再寫死課名。）
  */
 final class Grade9AnnualPackage
 {
+    /** @deprecated 保留相容 */
     public const TOTAL = 120_000;
 
+    /** @deprecated */
     public const MONTHLY_TOTAL = 20_000;
 
     public const START_MONTH = 7;
 
     public const END_MONTH = 12;
+
+    public const PERIOD_COUNT = 6;
 
     public static function isGrade9(Student $student): bool
     {
@@ -30,24 +36,121 @@ final class Grade9AnnualPackage
     }
 
     /**
-     * 國三收費標準有綁定價目的科目 id（須全部勾選才算全科）。
-     *
-     * @return list<int>
+     * @return list<FeePlan>
      */
-    public static function requiredCourseIds(Student $student): array
+    public static function packagePlansForStudent(Student $student): array
     {
-        if (! self::isGrade9($student)) {
-            return [];
+        return FeePlan::query()
+            ->with('courses:id,name')
+            ->where('is_active', true)
+            ->where('plan_kind', 'annual_package')
+            ->where(function ($builder) use ($student): void {
+                $builder->whereNull('grade_level_id')
+                    ->orWhere('grade_level_id', $student->grade_level_id);
+            })
+            ->where(function ($builder) use ($student): void {
+                $builder->whereNull('academic_year_id');
+                if ($student->academic_year_id !== null) {
+                    $builder->orWhere('academic_year_id', $student->academic_year_id);
+                }
+            })
+            ->orderByRaw(
+                'CASE WHEN grade_level_id = ? THEN 0 ELSE 1 END',
+                [$student->grade_level_id]
+            )
+            ->when(
+                $student->academic_year_id !== null,
+                fn ($q) => $q->orderByRaw(
+                    'CASE WHEN academic_year_id = ? THEN 0 ELSE 1 END',
+                    [$student->academic_year_id]
+                )
+            )
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get()
+            ->all();
+    }
+
+    /**
+     * @return list<array{
+     *   code:string,
+     *   label:string,
+     *   total:int,
+     *   monthly_total:int,
+     *   required_course_ids:list<int>,
+     *   required_count:int,
+     *   ready:bool,
+     *   start_month:int,
+     *   end_month:int,
+     *   fee_plan_id:int
+     * }>
+     */
+    public static function packagesForStudent(Student $student): array
+    {
+        $out = [];
+        foreach (self::packagePlansForStudent($student) as $plan) {
+            $ids = $plan->courses->pluck('id')->map(fn ($id) => (int) $id)->unique()->sort()->values()->all();
+            $total = max(1, (int) ($plan->package_total ?? 0));
+            $monthCount = max(1, CustomBillingPeriod::monthCount(
+                $plan->annualStartMonth(),
+                $plan->annualEndMonth()
+            ));
+            $out[] = [
+                'code' => 'fee_plan_'.$plan->id,
+                'label' => $plan->group_name,
+                'total' => $total,
+                'monthly_total' => (int) intdiv($total, $monthCount),
+                'required_course_ids' => $ids,
+                'required_count' => count($ids),
+                'ready' => $ids !== [] && $total > 0,
+                'start_month' => $plan->annualStartMonth(),
+                'end_month' => $plan->annualEndMonth(),
+                'fee_plan_id' => (int) $plan->id,
+            ];
         }
 
-        return collect(EnrollmentPricing::subjectsForStudent($student))
-            ->filter(fn (array $s): bool => ! empty($s['fee_plan_id']))
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->unique()
-            ->sort()
-            ->values()
-            ->all();
+        return $out;
+    }
+
+    /**
+     * @param  list<int>  $courseIds
+     * @return array{code:string, label:string, total:int, monthly_total:int, start_month:int, end_month:int, fee_plan_id:int}|null
+     */
+    public static function matchPackage(
+        Student $student,
+        array $courseIds,
+        string $payCycle,
+        ?string $startDate,
+    ): ?array {
+        if ($payCycle !== 'annual' || $startDate === null || $startDate === '') {
+            return null;
+        }
+
+        $startMonth = (int) Carbon::parse($startDate)->month;
+        $selected = array_values(array_unique(array_map('intval', $courseIds)));
+        sort($selected);
+
+        foreach (self::packagesForStudent($student) as $pack) {
+            if (! $pack['ready']) {
+                continue;
+            }
+            if ((int) $pack['start_month'] !== $startMonth) {
+                continue;
+            }
+            if ($pack['required_course_ids'] === $selected) {
+                return [
+                    'code' => $pack['code'],
+                    'label' => $pack['label'],
+                    'total' => $pack['total'],
+                    'monthly_total' => $pack['monthly_total'],
+                    'start_month' => $pack['start_month'],
+                    'end_month' => $pack['end_month'],
+                    'fee_plan_id' => $pack['fee_plan_id'],
+                ];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -59,31 +162,13 @@ final class Grade9AnnualPackage
         string $payCycle,
         ?string $startDate,
     ): bool {
-        if ($payCycle !== 'annual' || ! self::isGrade9($student)) {
-            return false;
-        }
-        if ($startDate === null || $startDate === '') {
-            return false;
-        }
-        $start = Carbon::parse($startDate);
-        if ((int) $start->month !== self::START_MONTH) {
-            return false;
-        }
-
-        $required = self::requiredCourseIds($student);
-        if ($required === []) {
-            return false;
-        }
-
-        $selected = array_values(array_unique(array_map('intval', $courseIds)));
-        sort($selected);
-
-        return $selected === $required;
+        return self::matchPackage($student, $courseIds, $payCycle, $startDate) !== null;
     }
 
     /**
      * @return array{
      *   eligible:bool,
+     *   packages:list<array<string,mixed>>,
      *   required_course_ids:list<int>,
      *   required_count:int,
      *   total:int,
@@ -94,38 +179,46 @@ final class Grade9AnnualPackage
      */
     public static function metaForStudent(Student $student): array
     {
-        $required = self::requiredCourseIds($student);
-        $eligible = self::isGrade9($student) && $required !== [];
+        $packages = self::packagesForStudent($student);
+        $ready = array_values(array_filter($packages, fn (array $p): bool => $p['ready']));
+        $eligible = $ready !== [];
+        $first = $ready[0] ?? null;
 
         return [
             'eligible' => $eligible,
-            'required_course_ids' => $required,
-            'required_count' => count($required),
-            'total' => self::TOTAL,
-            'monthly_total' => self::MONTHLY_TOTAL,
-            'months_label' => '7–12 月（6 期）',
+            'packages' => $packages,
+            'required_course_ids' => $first['required_course_ids'] ?? [],
+            'required_count' => $first['required_count'] ?? 0,
+            'total' => $first['total'] ?? self::TOTAL,
+            'monthly_total' => $first['monthly_total'] ?? self::MONTHLY_TOTAL,
+            'months_label' => $first !== null
+                ? $first['start_month'].'–'.$first['end_month'].' 月'
+                : '7–12 月（6 期）',
             'reason' => $eligible
                 ? null
-                : (self::isGrade9($student) ? '國三尚未設定有價目的科目' : '僅國三適用'),
+                : '尚未在收費設定建立「年繳方案」',
         ];
     }
 
     /**
-     * 產生與 EnrollmentPricing::quote 相容的計價結果（教材＝0，已含在方案內）。
-     *
      * @param  list<int>  $courseIds
-     * @return array{
-     *   tuition_total:int,
-     *   material_total:int,
-     *   grand_total:int,
-     *   months:list<array{y:int,m:int}>,
-     *   month_breakdown:list<array{y:int,m:int,tuition:int,material:int,subtotal:int}>,
-     *   lines:list<array<string,mixed>>,
-     *   package:array{code:string,label:string,total:int,monthly_total:int}
-     * }
+     * @param  array{code:string, label:string, total:int, monthly_total:int, start_month?:int, end_month?:int}|null  $package
+     * @return array<string, mixed>
      */
-    public static function quote(Student $student, array $courseIds, string $startDate): array
-    {
+    public static function quote(
+        Student $student,
+        array $courseIds,
+        string $startDate,
+        ?array $package = null,
+    ): array {
+        $package ??= self::matchPackage($student, $courseIds, 'annual', $startDate);
+        if ($package === null) {
+            throw new \InvalidArgumentException('找不到符合的年繳方案。');
+        }
+
+        $total = (int) $package['total'];
+        $startMonth = (int) ($package['start_month'] ?? self::START_MONTH);
+        $endMonth = (int) ($package['end_month'] ?? self::END_MONTH);
         $start = Carbon::parse($startDate);
         $year = (int) $start->year;
         $subjects = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id');
@@ -133,86 +226,89 @@ final class Grade9AnnualPackage
         sort($ids);
 
         $months = [];
-        for ($m = self::START_MONTH; $m <= self::END_MONTH; $m++) {
-            $months[] = ['y' => $year, 'm' => $m];
-        }
-
-        $n = count($ids);
-        $base = intdiv(self::MONTHLY_TOTAL, $n);
-        $rem = self::MONTHLY_TOTAL % $n;
-
-        $lines = [];
-        $monthAgg = [];
-        foreach ($months as $month) {
-            $key = ((int) $month['y']).'-'.((int) $month['m']);
-            $monthAgg[$key] = [
-                'y' => (int) $month['y'],
-                'm' => (int) $month['m'],
-                'tuition' => 0,
-                'material' => 0,
-            ];
-        }
-
-        foreach ($ids as $index => $courseId) {
-            $subject = $subjects->get($courseId);
-            $share = $base + ($index < $rem ? 1 : 0);
-            $tuitionMonths = [];
-            foreach ($months as $month) {
-                $key = ((int) $month['y']).'-'.((int) $month['m']);
-                $tuitionMonths[$key] = [
-                    'amount' => $share,
-                    'attended' => 0,
-                    'baseline' => 0,
-                ];
-                $monthAgg[$key]['tuition'] += $share;
+        $cursor = $startMonth;
+        $y = $year;
+        for ($i = 0; $i < 12; $i++) {
+            $months[] = ['y' => $y, 'm' => $cursor];
+            if ($cursor === $endMonth) {
+                break;
             }
+            $cursor++;
+            if ($cursor > 12) {
+                $cursor = 1;
+                $y++;
+            }
+        }
 
-            $lines[] = [
+        $monthAmounts = EnrollmentPricing::allocateRoundedAmounts(
+            array_fill(0, count($months), $total / max(1, count($months)))
+        );
+
+        $n = max(1, count($ids));
+        $linesByCourse = [];
+        foreach ($ids as $courseId) {
+            $subject = $subjects->get($courseId);
+            $linesByCourse[$courseId] = [
                 'course_id' => $courseId,
                 'course_name' => is_array($subject) ? (string) ($subject['name'] ?? '課目') : '課目',
                 'pricing_group' => is_array($subject) ? (string) ($subject['pricing_group'] ?? '') : '',
                 'unit' => is_array($subject) ? (string) ($subject['unit'] ?? 'month') : 'month',
-                'unit_price' => $share,
+                'unit_price' => 0,
                 'months' => count($months),
-                'tuition' => $share * count($months),
+                'tuition' => 0,
                 'material' => 0,
                 'material_unit' => 'term',
                 'material_months' => [],
-                'tuition_months' => $tuitionMonths,
-                'material_note' => '國三全科年繳方案（含教材，每月均攤）',
+                'tuition_months' => [],
+                'material_note' => $package['label'].'（含教材，每月均攤）',
             ];
         }
 
         $monthBreakdown = [];
-        foreach ($months as $month) {
+        foreach ($months as $index => $month) {
             $key = ((int) $month['y']).'-'.((int) $month['m']);
-            $tuition = (int) $monthAgg[$key]['tuition'];
+            $monthTotal = (int) ($monthAmounts[$index] ?? 0);
+            $shares = EnrollmentPricing::allocateRoundedAmounts(
+                array_fill(0, $n, $monthTotal / $n)
+            );
+            foreach ($ids as $i => $courseId) {
+                $share = (int) ($shares[$i] ?? 0);
+                $linesByCourse[$courseId]['tuition_months'][$key] = [
+                    'amount' => $share,
+                    'attended' => 0,
+                    'baseline' => 0,
+                ];
+                $linesByCourse[$courseId]['tuition'] += $share;
+                $linesByCourse[$courseId]['unit_price'] = max(
+                    (int) $linesByCourse[$courseId]['unit_price'],
+                    $share
+                );
+            }
             $monthBreakdown[] = [
                 'y' => (int) $month['y'],
                 'm' => (int) $month['m'],
-                'tuition' => $tuition,
+                'tuition' => $monthTotal,
                 'material' => 0,
-                'subtotal' => $tuition,
+                'subtotal' => $monthTotal,
             ];
         }
 
         return [
-            'tuition_total' => self::TOTAL,
+            'tuition_total' => $total,
             'material_total' => 0,
-            'grand_total' => self::TOTAL,
+            'grand_total' => $total,
             'months' => $months,
             'month_breakdown' => $monthBreakdown,
-            'lines' => $lines,
+            'lines' => array_values($linesByCourse),
             'package' => [
-                'code' => 'grade9_annual_all',
-                'label' => '國三全科年繳（含教材）',
-                'total' => self::TOTAL,
-                'monthly_total' => self::MONTHLY_TOTAL,
+                'code' => $package['code'],
+                'label' => $package['label'],
+                'total' => $total,
+                'monthly_total' => (int) ($package['monthly_total'] ?? intdiv($total, max(1, count($months)))),
             ],
         ];
     }
 
-    /** 建議起算日：當年 7/1（若已過 7 月則用當年；否則仍用 start 所屬年） */
     public static function suggestedJulyStart(?string $asOf = null): string
     {
         $d = Carbon::parse($asOf ?? Carbon::today()->toDateString());

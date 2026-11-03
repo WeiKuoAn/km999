@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\GeneratePaymentNoticesPdfJob;
+use App\Models\Course;
 use App\Models\FeeDiscount;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
@@ -535,7 +536,7 @@ class StudentPaymentController extends Controller
     }
 
     /** 新增收款／報名計價 */
-    public function create(Request $request): Response
+    public function create(Request $request): Response|RedirectResponse
     {
         $validated = $request->validate([
             'student_id' => ['nullable', 'integer', 'exists:students,id'],
@@ -615,16 +616,12 @@ class StudentPaymentController extends Controller
             }
 
             if (! empty($validated['edit_from']) && ! empty($validated['edit_to'])) {
-                $edit = $this->editContext($student, $validated['edit_from'], $validated['edit_to']);
-                if ($edit !== null) {
-                    $suggestedCourseIds = array_values(array_filter(
-                        $edit['course_ids'],
-                        fn (int $id) => in_array($id, $subjectIdSet, true)
-                    ));
-                    $suggestedPayCycle = $edit['pay_cycle'];
-                    $suggestedStartDate = $edit['start_date'];
-                    $hasPriorPayments = true;
-                }
+                // 已繳帳期不可整期重算；導向僅調收據／收款日的頁面
+                return redirect()->route('student-payments.period-meta.edit', [
+                    'student' => $student,
+                    'from' => $validated['edit_from'],
+                    'to' => $validated['edit_to'],
+                ]);
             }
 
             if ($edit === null && $suggestedStartDate !== null && $suggestedCourseIds !== []) {
@@ -684,21 +681,27 @@ class StudentPaymentController extends Controller
             'enrolled_course_ids' => $enrolledCourseIds,
             'bundles' => $bundles,
             'material_status' => $materialStatus,
-            'fee_discounts' => FeeDiscount::query()
-                ->active()
-                ->availableOn(Carbon::today()->toDateString())
-                ->orderBy('sort_order')
-                ->orderBy('name')
-                ->get()
-                ->map(fn (FeeDiscount $row): array => [
-                    'id' => $row->id,
-                    'name' => $row->name,
-                    'type' => $row->type,
-                    'value' => (int) $row->value,
-                    'label' => $row->label(),
-                ])
-                ->values()
-                ->all(),
+            'fee_discounts' => isset($student)
+                ? FeeDiscount::query()
+                    ->active()
+                    ->availableOn(Carbon::today()->toDateString())
+                    ->forGrade($student->grade_level_id !== null ? (int) $student->grade_level_id : null)
+                    ->orderBy('sort_order')
+                    ->orderBy('name')
+                    ->get()
+                    ->map(fn (FeeDiscount $row): array => [
+                        'id' => $row->id,
+                        'name' => $row->name,
+                        'type' => $row->type,
+                        'value' => (int) $row->value,
+                        'label' => $row->label(),
+                        'grade_level_id' => $row->grade_level_id !== null
+                            ? (int) $row->grade_level_id
+                            : null,
+                    ])
+                    ->values()
+                    ->all()
+                : [],
             'grade9_package' => isset($student)
                 ? Grade9AnnualPackage::metaForStudent($student)
                 : null,
@@ -936,6 +939,112 @@ class StudentPaymentController extends Controller
             ->all();
     }
 
+    /**
+     * 已繳帳期：僅調整收據／收款日（金額鎖定，不受後續收費設定變動影響）。
+     */
+    public function editPeriodMeta(Request $request, Student $student): Response|RedirectResponse
+    {
+        $this->authorizeTeacherCanViewStudent($student);
+
+        $validated = $request->validate([
+            'from' => ['required', 'regex:/^\d{4}-\d{1,2}$/'],
+            'to' => ['required', 'regex:/^\d{4}-\d{1,2}$/'],
+        ]);
+
+        $edit = $this->editContext($student, $validated['from'], $validated['to']);
+        if ($edit === null) {
+            return redirect()
+                ->route('student-payments.index')
+                ->withErrors(['edit' => '找不到該帳期收款，可能已被刪除。']);
+        }
+
+        $student->load(['gradeLevel:id,name']);
+        $courseNames = Course::query()
+            ->whereIn('id', $edit['course_ids'])
+            ->orderBy('name')
+            ->pluck('name')
+            ->values()
+            ->all();
+
+        $expectedTotal = (int) Reconciliation::query()
+            ->whereIn('id', $edit['reconciliation_ids'])
+            ->sum('expected_amount');
+
+        return Inertia::render('StudentPayments/EditPeriodMeta', [
+            'student' => [
+                'id' => $student->id,
+                'student_code' => $student->student_code,
+                'name' => $student->name,
+                'grade_name' => $student->gradeLevel?->name,
+            ],
+            'period' => [
+                'from' => $edit['from'],
+                'to' => $edit['to'],
+                'period_label' => $edit['period_label'],
+                'pay_cycle' => $edit['pay_cycle'],
+                'course_names' => $courseNames,
+                'expected_total' => $expectedTotal,
+                'receipt_no' => $edit['receipt_no'],
+                'paid_date' => $edit['paid_date'],
+            ],
+        ]);
+    }
+
+    /** 更新已繳帳期之收據／收款日（不改金額） */
+    public function updatePeriodMeta(Request $request, Student $student): RedirectResponse
+    {
+        $this->authorizeTeacherCanViewStudent($student);
+
+        $validated = $request->validate([
+            'from' => ['required', 'regex:/^\d{4}-\d{1,2}$/'],
+            'to' => ['required', 'regex:/^\d{4}-\d{1,2}$/'],
+            'receipt_no' => ['nullable', 'string', 'max:20'],
+            'paid_date' => ['nullable', 'date'],
+        ]);
+
+        $edit = $this->editContext($student, $validated['from'], $validated['to']);
+        if ($edit === null) {
+            return back()->withErrors(['from' => '找不到該帳期收款，可能已被刪除。']);
+        }
+
+        $receiptNo = isset($validated['receipt_no'])
+            ? trim((string) $validated['receipt_no'])
+            : '';
+        $receiptNo = $receiptNo === '' ? null : $receiptNo;
+        $paidDate = $validated['paid_date'] ?? null;
+
+        $amountBefore = (int) Reconciliation::query()
+            ->whereIn('id', $edit['reconciliation_ids'])
+            ->sum('expected_amount');
+
+        Reconciliation::query()
+            ->whereIn('id', $edit['reconciliation_ids'])
+            ->update([
+                'receipt_no' => $receiptNo,
+                'paid_date' => $paidDate,
+            ]);
+
+        $amountAfter = (int) Reconciliation::query()
+            ->whereIn('id', $edit['reconciliation_ids'])
+            ->sum('expected_amount');
+
+        if ($amountBefore !== $amountAfter) {
+            // 防衛：金額絕不可被此路徑改動
+            return back()->withErrors(['from' => '更新失敗：金額異常變動，已中止。']);
+        }
+
+        [$fromYear, $fromMonth] = array_map('intval', explode('-', $edit['from']));
+        [$toYear, $toMonth] = array_map('intval', explode('-', $edit['to']));
+
+        return to_route('student-payments.show', [
+            'student' => $student,
+            'from_year' => $fromYear,
+            'from_month' => $fromMonth,
+            'to_year' => $toYear,
+            'to_month' => $toMonth,
+        ])->with('success', '已更新收據／收款日（金額未變動）。');
+    }
+
     /** 刪除整期收款（含本期所收教材紀錄） */
     public function destroyPeriod(Request $request, Student $student): RedirectResponse
     {
@@ -1163,10 +1272,9 @@ class StudentPaymentController extends Controller
 
         $edit = null;
         if (! empty($validated['edit_from']) && ! empty($validated['edit_to'])) {
-            $edit = $this->editContext($student, $validated['edit_from'], $validated['edit_to']);
-            if ($edit === null) {
-                return back()->withErrors(['edit' => '找不到要編輯的帳期，可能已被修改，請重新整理。']);
-            }
+            return back()->withErrors([
+                'edit' => '已收款帳期金額已鎖定，無法用新收費設定重算覆蓋。請改「調整收據／收款日」，或刪除後依最新收費重新收款。',
+            ]);
         }
 
         /** @var array<int, list<string>>|null $courseMonths */
@@ -1209,12 +1317,13 @@ class StudentPaymentController extends Controller
             ];
         }
 
-        $useGrade9Package = Grade9AnnualPackage::qualifies(
+        $grade9Package = Grade9AnnualPackage::matchPackage(
             $student,
             $validated['course_ids'],
             $validated['pay_cycle'],
             $startDate,
         );
+        $useGrade9Package = $grade9Package !== null;
 
         if ($useGrade9Package) {
             $chargeMaterialCourseIds = [];
@@ -1260,11 +1369,12 @@ class StudentPaymentController extends Controller
             $feeDiscount = FeeDiscount::query()
                 ->active()
                 ->availableOn($asOf)
+                ->forGrade($student->grade_level_id !== null ? (int) $student->grade_level_id : null)
                 ->whereKey($feeDiscountId)
                 ->first();
             if ($feeDiscount === null) {
                 return back()->withErrors([
-                    'fee_discount_id' => '所選優惠不存在、已停用或已過期。',
+                    'fee_discount_id' => '所選優惠不存在、已停用、已過期，或不適用此學生年級。',
                 ]);
             }
         }
@@ -1274,6 +1384,7 @@ class StudentPaymentController extends Controller
                 $student,
                 $validated['course_ids'],
                 (string) $startDate,
+                $grade9Package,
             );
         } else {
             $quote = EnrollmentPricing::quote(
@@ -1391,7 +1502,11 @@ class StudentPaymentController extends Controller
 
         $message = match (true) {
             $edit !== null => '已更新收款資料。',
-            $useGrade9Package => '已確認國三全科年繳方案（7–12 月共 6 期，合計 120,000，含教材）。',
+            $useGrade9Package => sprintf(
+                '已確認%s（7–12 月共 6 期，合計 %s，含教材）。',
+                $grade9Package['label'] ?? '國三年繳方案',
+                number_format((int) ($grade9Package['total'] ?? 0)),
+            ),
             default => '已確認收款並產生帳期。',
         };
         if (is_string($receiptNo) && $receiptNo !== '') {

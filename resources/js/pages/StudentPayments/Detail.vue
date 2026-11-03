@@ -91,7 +91,7 @@ const editHref = computed(() => {
     if (!p || p.start_year == null || p.start_month == null || p.end_year == null || p.end_month == null) {
         return null;
     }
-    return `/student-payments/create?student_id=${props.student.id}&edit_from=${p.start_year}-${p.start_month}&edit_to=${p.end_year}-${p.end_month}`;
+    return `/student-payments/${props.student.id}/period-meta?from=${p.start_year}-${p.start_month}&to=${p.end_year}-${p.end_month}`;
 });
 
 const renewSubmitting = ref(false);
@@ -203,7 +203,7 @@ defineOptions({
             <template #actions>
                 <div class="flex flex-wrap gap-2">
                     <Button v-if="editHref" variant="outline" as-child>
-                        <Link :href="editHref">編輯</Link>
+                        <Link :href="editHref">調整收據</Link>
                     </Button>
                     <Button
                         v-if="renewal?.available"

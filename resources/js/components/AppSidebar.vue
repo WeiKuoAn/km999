@@ -8,6 +8,7 @@ import {
     ChartColumnBig,
     CircleDollarSign,
     CirclePlus,
+    ClipboardList,
     GraduationCap,
     CalendarDays,
     LayoutDashboard,
@@ -80,6 +81,11 @@ const navGroups = computed<NavGroup[]>(() => {
                         href: '/payment-lists',
                         icon: CircleDollarSign,
                     },
+                    {
+                        title: '收費標準單',
+                        href: '/fee-standard-templates',
+                        icon: ClipboardList,
+                    },
                 ],
             },
         ];
@@ -100,6 +106,11 @@ const navGroups = computed<NavGroup[]>(() => {
             title: '繳費名單',
             href: '/payment-lists',
             icon: CircleDollarSign,
+        },
+        {
+            title: '收費標準單',
+            href: '/fee-standard-templates',
+            icon: ClipboardList,
         },
     ];
 

@@ -53,8 +53,14 @@ final class EnrollmentPricing
                 'coursePrices:id,course_id,level',
                 'feePlans' => function ($query) use ($student): void {
                     $query
-                        ->with('periods.coursePrices')
+                        ->with(['periods.coursePrices', 'annualPrices'])
                         ->where('is_active', true)
+                        // 期別月價只用 period；年繳方案另於收款時 exact-match
+                        ->where(function ($builder): void {
+                            $builder->where('plan_kind', 'period')
+                                ->orWhereNull('plan_kind')
+                                ->orWhere('plan_kind', '');
+                        })
                         ->where(function ($builder) use ($student): void {
                             $builder
                                 ->whereNull('grade_level_id')
@@ -170,6 +176,16 @@ final class EnrollmentPricing
                 'end_date' => $course->end_date?->toDateString(),
                 'fee_plan_id' => $plan?->id,
                 'group_name' => $plan?->group_name,
+                'allow_annual' => (bool) ($plan?->allow_annual ?? false),
+                'annual_start_month' => $plan !== null && $plan->allow_annual
+                    ? $plan->annualStartMonth()
+                    : null,
+                'annual_end_month' => $plan !== null && $plan->allow_annual
+                    ? $plan->annualEndMonth()
+                    : null,
+                'annual_price' => $plan !== null
+                    ? $plan->annualAmountForCourse((int) $course->id)
+                    : null,
             ];
         })->values()->all();
 
@@ -214,6 +230,68 @@ final class EnrollmentPricing
      * @param  list<float>  $exacts
      * @return list<int>
      */
+    /**
+     * 帳期是否剛好涵蓋年繳起迄月（可跨年，例如 7–6、9–6）。
+     *
+     * @param  list<array{y:int,m:int}>  $months
+     */
+    public static function matchesAnnualMonthSpan(
+        array $months,
+        int $startMonth,
+        int $endMonth,
+    ): bool {
+        if ($months === [] || $startMonth < 1 || $startMonth > 12 || $endMonth < 1 || $endMonth > 12) {
+            return false;
+        }
+
+        $expected = [];
+        $month = $startMonth;
+        for ($i = 0; $i < 12; $i++) {
+            $expected[] = $month;
+            if ($month === $endMonth) {
+                break;
+            }
+            $month = ($month % 12) + 1;
+        }
+
+        if (count($months) !== count($expected)) {
+            return false;
+        }
+
+        $first = $months[0] ?? null;
+        if (! is_array($first) || (int) ($first['m'] ?? 0) !== $startMonth) {
+            return false;
+        }
+
+        $year = (int) $first['y'];
+        $month = $startMonth;
+        foreach ($months as $row) {
+            if ((int) ($row['y'] ?? 0) !== $year || (int) ($row['m'] ?? 0) !== $month) {
+                return false;
+            }
+            if ($month === $endMonth) {
+                break;
+            }
+            $month++;
+            if ($month > 12) {
+                $month = 1;
+                $year++;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @deprecated 請改用 matchesAnnualMonthSpan
+     *
+     * @param  list<array{y:int,m:int}>  $months
+     */
+    public static function isFullAcademicYearSpan(array $months): bool
+    {
+        return self::matchesAnnualMonthSpan($months, 7, 6);
+    }
+
     public static function allocateRoundedAmounts(array $exacts): array
     {
         if ($exacts === []) {
@@ -422,7 +500,41 @@ final class EnrollmentPricing
             $monthsUsed = $monthCount;
             $tuition = 0;
 
-            if ($isCustom) {
+            $annualPrice = isset($subject['annual_price']) && $subject['annual_price'] !== null
+                ? (int) $subject['annual_price']
+                : null;
+            $annualStart = (int) ($subject['annual_start_month'] ?? 7);
+            $annualEnd = (int) ($subject['annual_end_month'] ?? 6);
+            $useAnnualPreferential = $payCycle === 'annual'
+                && ! empty($subject['allow_annual'])
+                && $annualPrice !== null
+                && $annualPrice > 0
+                && self::matchesAnnualMonthSpan($subjectMonths, $annualStart, $annualEnd);
+
+            if ($useAnnualPreferential) {
+                // 年繳優惠：整學年 7–6 一次金額，均攤到 12 個月帳期
+                $keys = [];
+                foreach ($subjectMonths as $month) {
+                    $y = (int) $month['y'];
+                    $m = (int) $month['m'];
+                    $key = $y.'-'.$m;
+                    $keys[] = $key;
+                    $tuitionMonths[$key] = [
+                        'amount' => 0,
+                        'attended' => self::countDatesInMonth($subjectDates, $y, $m),
+                        'baseline' => $baseline,
+                    ];
+                }
+                $amounts = self::allocateRoundedAmounts(
+                    array_fill(0, count($keys), $annualPrice / max(1, count($keys)))
+                );
+                foreach ($keys as $index => $key) {
+                    $tuitionMonths[$key]['amount'] = (int) $amounts[$index];
+                    $tuition += (int) $amounts[$index];
+                }
+                $unitPrice = (int) round($annualPrice / max(1, count($keys)));
+                $monthsUsed = count($keys);
+            } elseif ($isCustom) {
                 // 自訂期別：依報科數取每月單價；一期應收＝月價×月數（期中＝剩餘月）
                 $periods = is_array($subject['periods'] ?? null) ? $subject['periods'] : [];
                 /** @var array<string, array{monthly:int, keys:list<string>}> $groups */
@@ -521,18 +633,19 @@ final class EnrollmentPricing
                 }
             }
 
+            $fixedTuition = $useAnnualPreferential || $isBlock || $isCustom;
             $draftLines[] = [
                 'course_id' => (int) $subject['id'],
                 'course_name' => (string) $subject['name'],
                 'unit_price' => $unitPrice,
                 'months' => $monthsUsed,
-                'tuition' => $isBlock || $isCustom ? $tuition : 0,
+                'tuition' => $fixedTuition ? $tuition : 0,
                 'material' => $material,
                 'material_unit' => (string) ($subject['material_unit'] ?? 'term'),
                 'material_months' => $materialMonths,
                 'tuition_months' => $tuitionMonths,
                 'material_note' => $materialNote,
-                'is_block' => $isBlock || $isCustom,
+                'is_block' => $fixedTuition,
                 'billing_months' => $subjectMonths,
                 'bundle_name' => $bundle['name'] ?? null,
             ];

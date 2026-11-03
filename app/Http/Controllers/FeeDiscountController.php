@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\FeeDiscount;
+use App\Models\GradeLevel;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -15,6 +16,7 @@ class FeeDiscountController extends Controller
     {
         return Inertia::render('FeeDiscounts/Index', [
             'discounts' => FeeDiscount::query()
+                ->with('gradeLevel:id,name')
                 ->orderBy('sort_order')
                 ->orderBy('name')
                 ->paginate(50)
@@ -24,7 +26,9 @@ class FeeDiscountController extends Controller
 
     public function create(): Response
     {
-        return Inertia::render('FeeDiscounts/Create');
+        return Inertia::render('FeeDiscounts/Create', [
+            'gradeLevels' => $this->gradeLevelOptions(),
+        ]);
     }
 
     public function store(Request $request): RedirectResponse
@@ -38,8 +42,11 @@ class FeeDiscountController extends Controller
 
     public function edit(FeeDiscount $feeDiscount): Response
     {
+        $feeDiscount->load('gradeLevel:id,name');
+
         return Inertia::render('FeeDiscounts/Edit', [
             'discount' => $this->payload($feeDiscount),
+            'gradeLevels' => $this->gradeLevelOptions(),
         ]);
     }
 
@@ -69,6 +76,7 @@ class FeeDiscountController extends Controller
     /**
      * @return array{
      *   name:string,
+     *   grade_level_id:?int,
      *   type:string,
      *   value:int,
      *   is_active:bool,
@@ -82,6 +90,7 @@ class FeeDiscountController extends Controller
     {
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'type' => ['required', Rule::in([FeeDiscount::TYPE_AMOUNT, FeeDiscount::TYPE_PERCENT])],
             'value' => ['required', 'integer', 'min:1'],
             'is_active' => ['nullable', 'boolean'],
@@ -100,6 +109,9 @@ class FeeDiscountController extends Controller
 
         return [
             'name' => $validated['name'],
+            'grade_level_id' => ! empty($validated['grade_level_id'])
+                ? (int) $validated['grade_level_id']
+                : null,
             'type' => $validated['type'],
             'value' => (int) $validated['value'],
             'is_active' => (bool) ($validated['is_active'] ?? true),
@@ -114,6 +126,8 @@ class FeeDiscountController extends Controller
      * @return array{
      *   id:int,
      *   name:string,
+     *   grade_level_id:?int,
+     *   grade_name:?string,
      *   type:string,
      *   value:int,
      *   is_active:bool,
@@ -129,6 +143,8 @@ class FeeDiscountController extends Controller
         return [
             'id' => $row->id,
             'name' => $row->name,
+            'grade_level_id' => $row->grade_level_id !== null ? (int) $row->grade_level_id : null,
+            'grade_name' => $row->gradeLevel?->name,
             'type' => $row->type,
             'value' => (int) $row->value,
             'is_active' => (bool) $row->is_active,
@@ -138,5 +154,22 @@ class FeeDiscountController extends Controller
             'notes' => $row->notes,
             'label' => $row->label(),
         ];
+    }
+
+    /**
+     * @return list<array{id:int, name:string}>
+     */
+    private function gradeLevelOptions(): array
+    {
+        return GradeLevel::query()
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->orderBy('code')
+            ->get(['id', 'name'])
+            ->map(fn (GradeLevel $g): array => [
+                'id' => (int) $g->id,
+                'name' => $g->name,
+            ])
+            ->all();
     }
 }

@@ -7,7 +7,6 @@ use App\Models\Course;
 use App\Models\CourseBundle;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
-use App\Support\CustomBillingPeriod;
 use App\Support\PricingGroup;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -77,12 +76,14 @@ class FeePlanController extends Controller
         $courseIds = $validated['course_ids'];
         $bundles = $validated['bundles'] ?? [];
         $periods = $validated['periods'] ?? [];
-        unset($validated['course_ids'], $validated['bundles'], $validated['periods']);
+        $annualPrices = $validated['annual_prices'] ?? [];
+        unset($validated['course_ids'], $validated['bundles'], $validated['periods'], $validated['annual_prices']);
 
-        DB::transaction(function () use ($validated, $courseIds, $bundles, $periods): void {
+        DB::transaction(function () use ($validated, $courseIds, $bundles, $periods, $annualPrices): void {
             $plan = FeePlan::query()->create($validated);
             $plan->courses()->sync($courseIds);
             $this->syncPeriods($plan, $periods, $courseIds);
+            $this->syncAnnualPrices($plan, $annualPrices, $courseIds);
             $this->syncBundles($plan, $bundles, []);
         });
 
@@ -91,7 +92,7 @@ class FeePlanController extends Controller
 
     public function edit(FeePlan $feePlan): Response
     {
-        $feePlan->load(['gradeLevel', 'academicYear', 'courses', 'periods.coursePrices']);
+        $feePlan->load(['gradeLevel', 'academicYear', 'courses', 'periods.coursePrices', 'annualPrices']);
 
         return Inertia::render('FeePlans/Edit', [
             'plan' => [
@@ -113,17 +114,19 @@ class FeePlanController extends Controller
         $courseIds = $validated['course_ids'];
         $bundles = $validated['bundles'] ?? [];
         $periods = $validated['periods'] ?? [];
-        unset($validated['course_ids'], $validated['bundles'], $validated['periods']);
+        $annualPrices = $validated['annual_prices'] ?? [];
+        unset($validated['course_ids'], $validated['bundles'], $validated['periods'], $validated['annual_prices']);
 
         $previousBundleIds = $this->matchingBundles(
             $feePlan->load('courses:id'),
             CourseBundle::query()->with('courses:id')->get()
         )->pluck('id')->all();
 
-        DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $periods, $previousBundleIds): void {
+        DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $periods, $annualPrices, $previousBundleIds): void {
             $feePlan->update($validated);
             $feePlan->courses()->sync($courseIds);
             $this->syncPeriods($feePlan, $periods, $courseIds);
+            $this->syncAnnualPrices($feePlan, $annualPrices, $courseIds);
             $this->syncBundles($feePlan, $bundles, $previousBundleIds);
         });
 
@@ -235,6 +238,31 @@ class FeePlanController extends Controller
     }
 
     /**
+     * @param  array<int|string, mixed>  $prices  course_id => amount
+     * @param  list<int>  $courseIds
+     */
+    private function syncAnnualPrices(FeePlan $plan, array $prices, array $courseIds): void
+    {
+        $plan->annualPrices()->delete();
+
+        if (! $plan->allow_annual) {
+            return;
+        }
+
+        foreach ($courseIds as $courseId) {
+            $raw = $prices[$courseId] ?? $prices[(string) $courseId] ?? null;
+            $amount = is_numeric($raw) ? (int) $raw : 0;
+            if ($amount < 1) {
+                continue;
+            }
+            $plan->annualPrices()->create([
+                'course_id' => $courseId,
+                'amount' => $amount,
+            ]);
+        }
+    }
+
+    /**
      * 表單上的雙科／多科優惠寫入組合優惠（年級、學年跟著收費設定）；表單拿掉的就刪除。
      *
      * @param  list<array<string, mixed>>  $rows
@@ -327,7 +355,7 @@ class FeePlanController extends Controller
     /** 複製整筆收費設定（含期別、各科月價），導向編輯頁。 */
     public function duplicate(FeePlan $feePlan): RedirectResponse
     {
-        $feePlan->load(['courses:id', 'periods.coursePrices']);
+        $feePlan->load(['courses:id', 'periods.coursePrices', 'annualPrices']);
 
         $copy = DB::transaction(function () use ($feePlan): FeePlan {
             $clone = $feePlan->replicate([
@@ -351,6 +379,12 @@ class FeePlanController extends Controller
                 }
             }
 
+            foreach ($feePlan->annualPrices as $row) {
+                $priceClone = $row->replicate(['created_at', 'updated_at']);
+                $priceClone->fee_plan_id = $clone->id;
+                $priceClone->save();
+            }
+
             return $clone;
         });
 
@@ -372,9 +406,16 @@ class FeePlanController extends Controller
             'group_name' => ['required', 'string', 'max:64'],
             'pricing_group' => ['required', 'string', Rule::in(PricingGroup::keys())],
             'unit' => ['required', 'in:custom_period'],
+            'plan_kind' => ['required', 'in:period,annual_package'],
             'per_course_periods' => ['boolean'],
+            'allow_annual' => ['boolean'],
+            'annual_start_month' => ['nullable', 'integer', 'between:1,12'],
+            'annual_end_month' => ['nullable', 'integer', 'between:1,12'],
+            'package_total' => ['nullable', 'integer', 'min:1'],
+            'annual_prices' => ['nullable', 'array'],
+            'annual_prices.*' => ['nullable', 'integer', 'min:1'],
             'session_block_size' => ['nullable', 'integer', 'min:1', 'max:99'],
-            'periods' => ['required', 'array', 'min:1'],
+            'periods' => ['nullable', 'array'],
             'periods.*.start_month' => ['required', 'integer', 'between:1,12'],
             'periods.*.end_month' => ['required', 'integer', 'between:1,12'],
             'periods.*.course_id' => ['nullable', 'integer', 'exists:courses,id'],
@@ -431,10 +472,74 @@ class FeePlanController extends Controller
             throw ValidationException::withMessages($bundleErrors);
         }
 
+        $validated['plan_kind'] = (string) ($validated['plan_kind'] ?? 'period');
         $validated['per_course_periods'] = (bool) ($validated['per_course_periods'] ?? false);
+        $validated['allow_annual'] = (bool) ($validated['allow_annual'] ?? false);
+        $isAnnualPackage = $validated['plan_kind'] === 'annual_package';
 
-        // 自訂期別：至少一期、月份不可重疊
-        if (($validated['unit'] ?? '') === 'custom_period') {
+        if ($isAnnualPackage) {
+            // 年繳方案：總額＋起迄月；可與期別設定共用科目
+            $packageErrors = [];
+            $packageTotal = (int) ($validated['package_total'] ?? 0);
+            if ($packageTotal < 1) {
+                $packageErrors['package_total'] = '請填寫年繳方案總額。';
+            }
+            $startMonth = (int) ($validated['annual_start_month'] ?? 0);
+            $endMonth = (int) ($validated['annual_end_month'] ?? 0);
+            if ($startMonth < 1 || $startMonth > 12) {
+                $packageErrors['annual_start_month'] = '請選擇方案起始月。';
+            }
+            if ($endMonth < 1 || $endMonth > 12) {
+                $packageErrors['annual_end_month'] = '請選擇方案結束月。';
+            }
+            if ($packageErrors !== []) {
+                throw ValidationException::withMessages($packageErrors);
+            }
+            $validated['package_total'] = $packageTotal;
+            $validated['allow_annual'] = true;
+            $validated['annual_start_month'] = $startMonth;
+            $validated['annual_end_month'] = $endMonth;
+            $validated['annual_prices'] = [];
+            $validated['periods'] = [];
+            $validated['per_course_periods'] = false;
+            $validated['material_fee'] = (int) ($validated['material_fee'] ?? 0);
+        } else {
+            $validated['package_total'] = null;
+
+            if ($validated['allow_annual']) {
+                $annualErrors = [];
+                $startMonth = (int) ($validated['annual_start_month'] ?? 0);
+                $endMonth = (int) ($validated['annual_end_month'] ?? 0);
+                if ($startMonth < 1 || $startMonth > 12) {
+                    $annualErrors['annual_start_month'] = '請選擇年繳起始月。';
+                }
+                if ($endMonth < 1 || $endMonth > 12) {
+                    $annualErrors['annual_end_month'] = '請選擇年繳結束月。';
+                }
+                $rawAnnual = is_array($validated['annual_prices'] ?? null) ? $validated['annual_prices'] : [];
+                $normalizedAnnual = [];
+                foreach (array_map('intval', $validated['course_ids']) as $courseId) {
+                    $raw = $rawAnnual[$courseId] ?? $rawAnnual[(string) $courseId] ?? null;
+                    if ($raw === null || $raw === '' || (int) $raw < 1) {
+                        $annualErrors["annual_prices.{$courseId}"] = '開放年繳時，請為每一科填寫年繳金額。';
+
+                        continue;
+                    }
+                    $normalizedAnnual[$courseId] = (int) $raw;
+                }
+                if ($annualErrors !== []) {
+                    throw ValidationException::withMessages($annualErrors);
+                }
+                $validated['annual_start_month'] = $startMonth;
+                $validated['annual_end_month'] = $endMonth;
+                $validated['annual_prices'] = $normalizedAnnual;
+            } else {
+                $validated['annual_start_month'] = null;
+                $validated['annual_end_month'] = null;
+                $validated['annual_prices'] = [];
+            }
+
+            // 期別收費：至少一期；月份允許重疊
             $periods = $validated['periods'] ?? [];
             if ($periods === []) {
                 throw ValidationException::withMessages([
@@ -446,7 +551,6 @@ class FeePlanController extends Controller
             $planCourseSet = array_fill_keys($planCourseIds, true);
 
             if ($validated['per_course_periods']) {
-                $seenByCourse = [];
                 $hasPeriodByCourse = [];
                 foreach ($periods as $i => $period) {
                     $courseId = (int) ($period['course_id'] ?? 0);
@@ -456,13 +560,6 @@ class FeePlanController extends Controller
                         continue;
                     }
                     $hasPeriodByCourse[$courseId] = true;
-                    foreach (CustomBillingPeriod::monthNumbers((int) $period['start_month'], (int) $period['end_month']) as $month) {
-                        if (isset($seenByCourse[$courseId][$month])) {
-                            $periodErrors["periods.{$i}.start_month"] = '同科期別月份重疊：'.$month.' 月。';
-                            break;
-                        }
-                        $seenByCourse[$courseId][$month] = true;
-                    }
                     $total = $period['total_price'] ?? null;
                     if ($total === null || $total === '') {
                         $raw = is_array($period['course_prices'] ?? null)
@@ -481,15 +578,7 @@ class FeePlanController extends Controller
                     }
                 }
             } else {
-                $seenMonths = [];
                 foreach ($periods as $i => $period) {
-                    foreach (CustomBillingPeriod::monthNumbers((int) $period['start_month'], (int) $period['end_month']) as $month) {
-                        if (isset($seenMonths[$month])) {
-                            $periodErrors["periods.{$i}.start_month"] = '期別月份重疊：'.$month.' 月已被其他期別使用。';
-                            break;
-                        }
-                        $seenMonths[$month] = true;
-                    }
                     $prices = is_array($period['course_prices'] ?? null) ? $period['course_prices'] : [];
                     foreach ($planCourseIds as $courseId) {
                         $raw = $prices[$courseId] ?? $prices[(string) $courseId] ?? null;
@@ -504,15 +593,9 @@ class FeePlanController extends Controller
                 throw ValidationException::withMessages($periodErrors);
             }
             $validated['periods'] = array_values($periods);
-        } else {
-            $validated['periods'] = [];
         }
 
-        if (($validated['unit'] ?? '') === 'session_block') {
-            $validated['session_block_size'] = $validated['session_block_size'] ?? 4;
-        } else {
-            $validated['session_block_size'] = null;
-        }
+        $validated['session_block_size'] = null;
 
         // 不再使用參考原價；欄位保留相容，存檔一律寫 0
         $validated['list_price'] = 0;
@@ -527,31 +610,37 @@ class FeePlanController extends Controller
 
         $gradeId = $validated['grade_level_id'];
 
-        $conflictingPlan = FeePlan::query()
-            ->when(
-                $gradeId === null,
-                // 全年級：同學年下任何年級已套用同課目即衝突
-                fn ($query) => $query,
-                // 指定年級：與同年級或全年級衝突
-                fn ($query) => $query->where(function ($builder) use ($gradeId): void {
-                    $builder->whereNull('grade_level_id')
-                        ->orWhere('grade_level_id', $gradeId);
+        // 期別設定：同課不可重複掛兩筆「期別」；年繳方案可與期別／其他方案共用科目
+        if (! $isAnnualPackage) {
+            $conflictingPlan = FeePlan::query()
+                ->where(function ($builder): void {
+                    $builder->where('plan_kind', 'period')
+                        ->orWhereNull('plan_kind')
+                        ->orWhere('plan_kind', '');
                 })
-            )
-            ->when(
-                $validated['academic_year_id'] === null,
-                fn ($query) => $query->whereNull('academic_year_id'),
-                fn ($query) => $query->where('academic_year_id', $validated['academic_year_id'])
-            )
-            ->when($currentPlan !== null, fn ($query) => $query->whereKeyNot($currentPlan->getKey()))
-            ->whereHas('courses', fn ($query) => $query->whereIn('courses.id', $validated['course_ids']))
-            ->first();
+                ->when(
+                    $gradeId === null,
+                    fn ($query) => $query,
+                    fn ($query) => $query->where(function ($builder) use ($gradeId): void {
+                        $builder->whereNull('grade_level_id')
+                            ->orWhere('grade_level_id', $gradeId);
+                    })
+                )
+                ->when(
+                    $validated['academic_year_id'] === null,
+                    fn ($query) => $query->whereNull('academic_year_id'),
+                    fn ($query) => $query->where('academic_year_id', $validated['academic_year_id'])
+                )
+                ->when($currentPlan !== null, fn ($query) => $query->whereKeyNot($currentPlan->getKey()))
+                ->whereHas('courses', fn ($query) => $query->whereIn('courses.id', $validated['course_ids']))
+                ->first();
 
-        if ($conflictingPlan !== null) {
-            $conflictGrade = $conflictingPlan->gradeLevel?->name ?? '全年級';
-            throw ValidationException::withMessages([
-                'course_ids' => "所選課目已套用於同學年、「{$conflictGrade}」的「{$conflictingPlan->group_name}」，請勿重複設定。",
-            ]);
+            if ($conflictingPlan !== null) {
+                $conflictGrade = $conflictingPlan->gradeLevel?->name ?? '全年級';
+                throw ValidationException::withMessages([
+                    'course_ids' => "所選課目已套用於同學年、「{$conflictGrade}」的期別設定「{$conflictingPlan->group_name}」，請勿重複設定。",
+                ]);
+            }
         }
 
         return $validated;
@@ -643,7 +732,21 @@ class FeePlanController extends Controller
             'course_ids' => $plan->courses->pluck('id')->map(fn ($id): int => (int) $id)->values()->all(),
             'course_names' => $plan->courses->pluck('name')->values()->all(),
             'unit' => $plan->unit,
+            'plan_kind' => $plan->isAnnualPackage() ? 'annual_package' : 'period',
             'per_course_periods' => (bool) $plan->per_course_periods,
+            'allow_annual' => (bool) $plan->allow_annual,
+            'annual_start_month' => ($plan->allow_annual || $plan->isAnnualPackage())
+                ? $plan->annualStartMonth()
+                : null,
+            'annual_end_month' => ($plan->allow_annual || $plan->isAnnualPackage())
+                ? $plan->annualEndMonth()
+                : null,
+            'package_total' => $plan->package_total !== null ? (int) $plan->package_total : null,
+            'annual_prices' => $plan->relationLoaded('annualPrices')
+                ? $plan->annualPrices
+                    ->mapWithKeys(fn ($row): array => [(int) $row->course_id => (int) $row->amount])
+                    ->all()
+                : [],
             'session_block_size' => $plan->session_block_size,
             'list_price' => $plan->list_price,
             'quarter_price' => $plan->quarter_price,
@@ -656,7 +759,7 @@ class FeePlanController extends Controller
             'list_label' => $plan->listPriceLabel(),
             'quarter_label' => $plan->quarterLabel(),
             'material_label' => $plan->materialLabel(),
-            'unit_label' => '自訂期別',
+            'unit_label' => $plan->isAnnualPackage() ? '年繳方案' : '自訂期別',
             'periods' => $plan->relationLoaded('periods')
                 ? $plan->periods->map(function ($period) use ($plan): array {
                     $coursePrices = [];

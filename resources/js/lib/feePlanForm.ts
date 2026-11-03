@@ -93,15 +93,37 @@ export type FeePlanFormData = {
     material_unit: 'term' | 'subject' | 'class_day';
     sort_order: number;
     is_active: boolean;
+    /** period＝期別月價；annual_package＝年繳固定方案 */
+    plan_kind: 'period' | 'annual_package';
     /** true＝各科各自期別；false＝共用期別（現況） */
     per_course_periods: boolean;
+    /** 開放年繳優惠（期別設定用） */
+    allow_annual: boolean;
+    /** 年繳帳期／方案起始月 */
+    annual_start_month: number | '';
+    /** 年繳帳期／方案結束月 */
+    annual_end_month: number | '';
+    /** 年繳方案總額（含教材） */
+    package_total: number | '';
+    /** 各科年繳金額；key=course_id（期別＋開放年繳用） */
+    annual_prices: Record<number, number | ''>;
     periods: FeePlanPeriodRow[];
     /** 僅編輯時載入舊資料；存檔改由 double/triple_monthly 產生 */
     bundles: FeePlanBundleRow[];
 };
 
-const emptyToNull = (v: number | string | undefined) =>
-    v === '' || v === undefined || Number.isNaN(Number(v)) ? null : Number(v);
+const emptyToNull = (v: number | string | undefined | null) => {
+    if (v === '' || v === undefined || v === null) {
+        return null;
+    }
+    const n = Number(v);
+    // 選填金額：空白或 0 都當未設定（避免 number input 清空後變成 0 擋儲存）
+    if (Number.isNaN(n) || n < 1) {
+        return null;
+    }
+
+    return n;
+};
 
 export function billingKindFromPlan(
     unit: 'month' | 'session_block' | 'custom_period',
@@ -214,11 +236,48 @@ export function feePlanPayload(data: FeePlanFormData) {
         group_name: data.group_name,
         pricing_group: data.pricing_group,
         unit: 'custom_period' as const,
-        per_course_periods: !!data.per_course_periods,
+        plan_kind: data.plan_kind === 'annual_package' ? 'annual_package' : 'period',
+        per_course_periods:
+            data.plan_kind === 'annual_package' ? false : !!data.per_course_periods,
+        allow_annual:
+            data.plan_kind === 'annual_package' ? true : !!data.allow_annual,
+        annual_start_month:
+            data.plan_kind === 'annual_package' || data.allow_annual
+                ? Number(data.annual_start_month || 7)
+                : null,
+        annual_end_month:
+            data.plan_kind === 'annual_package' || data.allow_annual
+                ? Number(data.annual_end_month || 6)
+                : null,
+        package_total:
+            data.plan_kind === 'annual_package'
+                ? Number(data.package_total || 0) || null
+                : null,
+        annual_prices:
+            data.plan_kind === 'annual_package'
+                ? {}
+                : data.allow_annual
+                  ? Object.fromEntries(
+                        data.course_ids.map((id) => {
+                            const raw =
+                                data.annual_prices?.[id] ??
+                                data.annual_prices?.[Number(id)];
+                            return [
+                                id,
+                                raw === '' || raw === undefined || raw === null
+                                    ? null
+                                    : Number(raw),
+                            ];
+                        }),
+                    )
+                  : {},
         session_block_size: null,
         list_price: Number(data.list_price || 0),
         quarter_price: null,
-        periods: data.per_course_periods
+        periods:
+            data.plan_kind === 'annual_package'
+                ? []
+                : data.per_course_periods
             ? data.periods.map((period) => {
                   const courseId = Number(period.course_id);
                   const row =

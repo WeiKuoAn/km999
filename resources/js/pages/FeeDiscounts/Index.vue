@@ -13,6 +13,8 @@ import TableEditIconLink from '@/components/table/TableEditIconLink.vue';
 type Discount = {
     id: number;
     name: string;
+    grade_level_id: number | null;
+    grade_name: string | null;
     type: 'amount' | 'percent';
     value: number;
     is_active: boolean;
@@ -65,7 +67,7 @@ const destroyDiscount = (id: number) => {
     <div class="page-shell">
         <PageHeader
             title="優惠設定"
-            description="設定固定折讓金額或打折％數，新增收款時可選用。"
+            description="設定固定折讓或打折％，可指定適用年級；收款時只顯示該學生年級（或全年級）的優惠。"
         >
             <template #actions>
                 <Button as-child>
@@ -89,6 +91,9 @@ const destroyDiscount = (id: number) => {
                 :title="row.name"
                 :subtitle="row.label"
             >
+                <MobileRecordField label="適用年級">{{
+                    row.grade_name ?? '全年級'
+                }}</MobileRecordField>
                 <MobileRecordField label="類型">{{
                     typeLabel(row.type)
                 }}</MobileRecordField>
@@ -122,6 +127,7 @@ const destroyDiscount = (id: number) => {
                 <thead>
                     <tr class="border-b">
                         <th class="py-2 text-left">名稱</th>
+                        <th class="py-2 text-left">適用年級</th>
                         <th class="py-2 text-left">類型</th>
                         <th class="py-2 text-right">數值</th>
                         <th class="py-2 text-left">有效期間</th>
@@ -137,6 +143,9 @@ const destroyDiscount = (id: number) => {
                         class="border-b"
                     >
                         <td class="py-2.5">{{ row.name }}</td>
+                        <td class="py-2.5 text-muted-foreground">
+                            {{ row.grade_name ?? '全年級' }}
+                        </td>
                         <td class="py-2.5">{{ typeLabel(row.type) }}</td>
                         <td class="py-2.5 text-right tabular-nums">
                             {{ valueLabel(row) }}
@@ -165,7 +174,7 @@ const destroyDiscount = (id: number) => {
                     </tr>
                     <tr v-if="discounts.data.length === 0">
                         <td
-                            colspan="7"
+                            colspan="8"
                             class="py-10 text-center text-muted-foreground"
                         >
                             尚無優惠。

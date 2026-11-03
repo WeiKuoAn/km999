@@ -30,6 +30,7 @@ type Plan = {
     id: number;
     grade_name: string | null;
     group_name: string;
+    plan_kind?: 'period' | 'annual_package';
     course_names: string[];
     period_lines: PeriodLine[];
     tier_lines: TierLine[];
@@ -101,7 +102,7 @@ const hasTierInfo = (plan: Plan) =>
     <div class="page-shell">
         <PageHeader
             title="收費設定"
-            description="各期填每月單價；一期應收＝月價×月數。雙／多科可另設優惠月價。"
+            description="期別：各期填每月單價（一期＝月價×月數）。年繳方案：在設定類型選「年繳方案」填固定總額，收款科目剛好符合時套用。"
         >
             <template v-if="canManage" #actions>
                 <Button as-child>
@@ -138,16 +139,24 @@ const hasTierInfo = (plan: Plan) =>
                 :subtitle="plan.grade_name ?? undefined"
             >
                 <template #badge>
-                    <span
-                        class="rounded-full px-2 py-0.5 text-xs font-medium"
-                        :class="
-                            plan.is_active
-                                ? 'bg-emerald-50 text-emerald-700'
-                                : 'bg-muted text-muted-foreground'
-                        "
-                    >
-                        {{ plan.is_active ? '啟用' : '停用' }}
-                    </span>
+                    <div class="flex flex-wrap items-center justify-end gap-1">
+                        <span
+                            v-if="plan.plan_kind === 'annual_package'"
+                            class="rounded bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-800"
+                        >
+                            年繳方案
+                        </span>
+                        <span
+                            class="rounded-full px-2 py-0.5 text-xs font-medium"
+                            :class="
+                                plan.is_active
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : 'bg-muted text-muted-foreground'
+                            "
+                        >
+                            {{ plan.is_active ? '啟用' : '停用' }}
+                        </span>
+                    </div>
                 </template>
                 <MobileRecordField label="適用課目">
                     <ul
@@ -273,8 +282,14 @@ const hasTierInfo = (plan: Plan) =>
                     >
                         <td class="py-3">
                             <div class="font-medium">{{ plan.group_name }}</div>
-                            <div class="mt-0.5 text-xs text-muted-foreground">
-                                {{ plan.grade_name ?? '全年級' }}
+                            <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                <span>{{ plan.grade_name ?? '全年級' }}</span>
+                                <span
+                                    v-if="plan.plan_kind === 'annual_package'"
+                                    class="rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-800"
+                                >
+                                    年繳方案
+                                </span>
                             </div>
                         </td>
                         <td class="max-w-[10rem] py-3 text-muted-foreground">

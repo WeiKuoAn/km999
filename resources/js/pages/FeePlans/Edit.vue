@@ -24,7 +24,13 @@ const props = defineProps<{
         group_name: string;
         pricing_group: string;
         unit: 'month' | 'session_block' | 'custom_period';
+        plan_kind?: 'period' | 'annual_package';
         per_course_periods?: boolean;
+        allow_annual?: boolean;
+        annual_start_month?: number | null;
+        annual_end_month?: number | null;
+        package_total?: number | null;
+        annual_prices?: Record<number, number>;
         periods: Array<{
             course_id?: number | null;
             start_month: number;
@@ -85,7 +91,24 @@ const form = useForm<FeePlanFormData>({
     material_unit: props.plan.material_unit,
     sort_order: props.plan.sort_order,
     is_active: props.plan.is_active,
+    plan_kind: props.plan.plan_kind === 'annual_package' ? 'annual_package' : 'period',
     per_course_periods: !!props.plan.per_course_periods,
+    allow_annual: !!props.plan.allow_annual,
+    annual_start_month: props.plan.annual_start_month ?? 7,
+    annual_end_month: props.plan.annual_end_month ?? 6,
+    package_total: props.plan.package_total ?? '',
+    annual_prices: Object.fromEntries(
+        props.plan.course_ids.map((id) => {
+            const raw =
+                props.plan.annual_prices?.[id] ??
+                (
+                    props.plan.annual_prices as
+                        | Record<string, number>
+                        | undefined
+                )?.[String(id)];
+            return [id, raw ?? ('' as const)];
+        }),
+    ),
     periods: (props.plan.periods ?? []).map((period) => {
         const courseIds = [...props.plan.course_ids];
         const perCourse = !!props.plan.per_course_periods && period.course_id != null;
@@ -195,14 +218,33 @@ defineOptions({
 });
 
 const submit = () =>
-    form.transform(feePlanPayload).put(`/fee-plans/${props.plan.id}`);
+    form.transform(feePlanPayload).put(`/fee-plans/${props.plan.id}`, {
+        onError: () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        },
+    });
 </script>
 
 <template>
     <Head title="編輯收費設定" />
     <div class="page-shell mx-auto w-full max-w-6xl">
         <h1 class="text-xl font-semibold tracking-tight">編輯收費設定</h1>
-        <form class="mt-4 space-y-5" @submit.prevent="submit">
+        <form class="mt-4 space-y-5" novalidate @submit.prevent="submit">
+            <div
+                v-if="Object.keys(form.errors).length > 0"
+                class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+            >
+                尚有欄位未填妥或格式不正確，請往下檢查紅字提示後再儲存。
+                <ul class="mt-1 list-disc pl-5">
+                    <li
+                        v-for="(message, key) in form.errors"
+                        :key="key"
+                    >
+                        {{ message }}
+                    </li>
+                </ul>
+            </div>
+
             <FeePlanFields
                 :form="form"
                 :academic-years="academicYears"
