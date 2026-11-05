@@ -164,9 +164,16 @@ class FeePlanController extends Controller
                 }
                 $double = $row['double_price'] ?? null;
                 $triple = $row['triple_price'] ?? null;
-                if (($double === null || $double === '') && is_array($row['course_prices'][$courseId] ?? null)) {
-                    $double = $row['course_prices'][$courseId]['double_price'] ?? null;
-                    $triple = $row['course_prices'][$courseId]['triple_price'] ?? null;
+                $nestedPrices = is_array($row['course_prices'] ?? null)
+                    ? ($row['course_prices'][$courseId] ?? $row['course_prices'][(string) $courseId] ?? null)
+                    : null;
+                if (is_array($nestedPrices)) {
+                    if ($double === null || $double === '') {
+                        $double = $nestedPrices['double_price'] ?? null;
+                    }
+                    if ($triple === null || $triple === '') {
+                        $triple = $nestedPrices['triple_price'] ?? null;
+                    }
                 }
                 $doublePrice = $double === null || $double === '' ? null : (int) $double;
                 $triplePrice = $triple === null || $triple === '' ? null : (int) $triple;

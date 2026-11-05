@@ -284,20 +284,23 @@ export function feePlanPayload(data: FeePlanFormData) {
                       period.course_prices?.[courseId] ??
                       period.course_prices?.[Number(courseId)] ??
                       emptyPeriodCoursePrice();
-                  const total =
-                      period.total_price !== undefined && period.total_price !== ''
-                          ? Number(period.total_price)
-                          : row.total_price === ''
-                            ? ''
-                            : Number(row.total_price);
-                  const double =
-                      period.double_price !== undefined
-                          ? emptyToNull(period.double_price)
-                          : emptyToNull(row.double_price);
-                  const triple =
-                      period.triple_price !== undefined
-                          ? emptyToNull(period.triple_price)
-                          : emptyToNull(row.triple_price);
+                  // 畫面綁在 course_prices；頂層欄位可能仍是空字串，需回退讀 row
+                  const pickAmount = (
+                      top: number | '' | undefined,
+                      nested: number | '',
+                  ): number | '' => {
+                      if (top !== undefined && top !== '') {
+                          return Number(top);
+                      }
+                      return nested === '' ? '' : Number(nested);
+                  };
+                  const total = pickAmount(period.total_price, row.total_price);
+                  const double = emptyToNull(
+                      pickAmount(period.double_price, row.double_price),
+                  );
+                  const triple = emptyToNull(
+                      pickAmount(period.triple_price, row.triple_price),
+                  );
 
                   return {
                       course_id: courseId,

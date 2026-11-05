@@ -132,13 +132,15 @@ test('removing course from fee plan does not change paid reconciliations', funct
     expect($before)->toBe(18000);
 
     $this->actingAs($admin)
+        ->from(route('fee-plans.edit', $plan))
         ->put(route('fee-plans.update', $plan), [
             'academic_year_id' => $plan->academic_year_id,
             'grade_level_id' => $plan->grade_level_id,
-            'course_ids' => [$english->id], // 拿掉數學
+            'course_ids' => [$english->id],
             'group_name' => $plan->group_name,
             'pricing_group' => $plan->pricing_group,
             'unit' => 'custom_period',
+            'plan_kind' => 'period',
             'per_course_periods' => false,
             'allow_annual' => false,
             'list_price' => 0,
@@ -169,14 +171,33 @@ test('removing course from fee plan does not change paid reconciliations', funct
         ->and(Reconciliation::query()->where('student_id', $student->id)->where('course_id', $math->id)->count())->toBe(3);
 });
 
-test('store rejects edit requote for paid period', function () {
+test('paid period opens full edit create screen', function () {
+    ['english' => $english, 'student' => $student, 'admin' => $admin] = paidLockCtx();
+    seedPaidQuarter($student, $english, 9000);
+
+    $this->actingAs($admin)
+        ->get(route('student-payments.create', [
+            'student_id' => $student->id,
+            'edit_from' => '2026-7',
+            'edit_to' => '2026-9',
+        ]))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('StudentPayments/Create')
+            ->where('edit.from', '2026-7')
+            ->where('edit.to', '2026-9')
+            ->where('edit.period_label', '2026/7 — 2026/9')
+            ->has('edit.course_ids', 1)
+        );
+});
+
+test('store can requote paid period via edit', function () {
     ['english' => $english, 'student' => $student, 'admin' => $admin] = paidLockCtx();
     seedPaidQuarter($student, $english, 9000);
 
     $sessions = BillingRenewal::defaultSessions($student, [$english->id], '2026-07-01', 'quarterly');
 
     $this->actingAs($admin)
-        ->from(route('student-payments.index'))
         ->post(route('student-payments.store', $student), [
             'course_ids' => [$english->id],
             'pay_cycle' => 'quarterly',
@@ -186,10 +207,11 @@ test('store rejects edit requote for paid period', function () {
             'edit_from' => '2026-7',
             'edit_to' => '2026-9',
         ])
-        ->assertRedirect(route('student-payments.index'))
-        ->assertSessionHasErrors('edit');
+        ->assertRedirect();
 
-    expect((int) Reconciliation::query()->where('student_id', $student->id)->sum('paid_amount'))->toBe(9000);
+    $rows = Reconciliation::query()->where('student_id', $student->id)->get();
+    expect($rows)->not->toBeEmpty()
+        ->and($rows->every(fn (Reconciliation $r) => $r->course_id === $english->id))->toBeTrue();
 });
 
 test('period meta can update receipt without changing amounts', function () {
@@ -209,21 +231,4 @@ test('period meta can update receipt without changing amounts', function () {
     expect((int) $rows->sum('paid_amount'))->toBe(9000)
         ->and($rows->every(fn (Reconciliation $r) => $r->receipt_no === 'NEW-001'))->toBeTrue()
         ->and($rows->first()->paid_date?->toDateString())->toBe('2026-07-15');
-});
-
-test('create with edit params redirects to period meta', function () {
-    ['english' => $english, 'student' => $student, 'admin' => $admin] = paidLockCtx();
-    seedPaidQuarter($student, $english, 9000);
-
-    $this->actingAs($admin)
-        ->get(route('student-payments.create', [
-            'student_id' => $student->id,
-            'edit_from' => '2026-7',
-            'edit_to' => '2026-9',
-        ]))
-        ->assertRedirect(route('student-payments.period-meta.edit', [
-            'student' => $student->id,
-            'from' => '2026-7',
-            'to' => '2026-9',
-        ]));
 });

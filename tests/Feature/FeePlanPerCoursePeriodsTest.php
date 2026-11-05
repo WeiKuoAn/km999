@@ -49,9 +49,12 @@ function perCourseCourse(CourseCategory $category, string $name): Course
 /** 避開本機缺 intl 時 Faker 產生 email 失敗 */
 function perCourseUser(): User
 {
-    return User::factory()->create([
+    return User::query()->create([
         'name' => '測試管理員',
         'email' => 'per-course-'.uniqid('', true).'@example.test',
+        'password' => bcrypt('password'),
+        'role' => 'admin',
+        'is_active' => true,
     ]);
 }
 
@@ -64,6 +67,7 @@ function sharedPeriodPayload(AcademicYear $year, GradeLevel $grade, array $cours
         'group_name' => '英數理',
         'pricing_group' => PricingGroup::CORE,
         'unit' => 'custom_period',
+        'plan_kind' => 'period',
         'per_course_periods' => false,
         'session_block_size' => null,
         'list_price' => 0,
@@ -112,6 +116,72 @@ test('shared custom period plan stores course prices without course_id on period
         ->and((int) $byCourse[$math->id]->total_price)->toBe(1900);
 });
 
+test('per-course periods save double and triple from nested course_prices', function () {
+    ['year' => $year, 'grade' => $grade, 'category' => $category] = perCourseCtx();
+    $english = perCourseCourse($category, '英文');
+    $math = perCourseCourse($category, '數學');
+
+    // 模擬前端舊 bug：頂層 double/triple 為空，實際值在 course_prices
+    $this->actingAs(perCourseUser())
+        ->post(route('fee-plans.store'), [
+            'academic_year_id' => $year->id,
+            'grade_level_id' => $grade->id,
+            'course_ids' => [$english->id, $math->id],
+            'group_name' => '英數每科期',
+            'pricing_group' => PricingGroup::CORE,
+            'unit' => 'custom_period',
+            'plan_kind' => 'period',
+            'per_course_periods' => true,
+            'list_price' => 0,
+            'material_fee' => 0,
+            'material_unit' => 'term',
+            'sort_order' => 0,
+            'is_active' => true,
+            'periods' => [
+                [
+                    'course_id' => $english->id,
+                    'start_month' => 7,
+                    'end_month' => 8,
+                    'total_price' => 3200,
+                    'double_price' => null,
+                    'triple_price' => null,
+                    'course_prices' => [
+                        $english->id => [
+                            'total_price' => 3200,
+                            'double_price' => 3100,
+                            'triple_price' => 3000,
+                        ],
+                    ],
+                ],
+                [
+                    'course_id' => $math->id,
+                    'start_month' => 7,
+                    'end_month' => 8,
+                    'total_price' => 3200,
+                    'double_price' => null,
+                    'triple_price' => null,
+                    'course_prices' => [
+                        $math->id => [
+                            'total_price' => 3200,
+                            'double_price' => 3100,
+                            'triple_price' => 3000,
+                        ],
+                    ],
+                ],
+            ],
+            'bundles' => [],
+        ])
+        ->assertRedirect(route('fee-plans.index'));
+
+    $plan = FeePlan::query()->with('periods.coursePrices')->sole();
+    $englishPeriod = $plan->periods->firstWhere('course_id', $english->id);
+    expect($englishPeriod)->not->toBeNull()
+        ->and((int) $englishPeriod->double_price)->toBe(3100)
+        ->and((int) $englishPeriod->triple_price)->toBe(3000)
+        ->and((int) $englishPeriod->coursePrices->first()->double_price)->toBe(3100)
+        ->and((int) $englishPeriod->coursePrices->first()->triple_price)->toBe(3000);
+});
+
 test('per-course periods allow different month ranges and multi-subject discount', function () {
     ['year' => $year, 'grade' => $grade, 'category' => $category] = perCourseCtx();
     $english = perCourseCourse($category, '英文');
@@ -125,6 +195,7 @@ test('per-course periods allow different month ranges and multi-subject discount
         'group_name' => '英數理異期',
         'pricing_group' => PricingGroup::CORE,
         'unit' => 'custom_period',
+        'plan_kind' => 'period',
         'per_course_periods' => true,
         'session_block_size' => null,
         'list_price' => 0,
@@ -252,6 +323,7 @@ test('per-course mode requires a period for every selected course', function () 
             'group_name' => '缺數期',
             'pricing_group' => PricingGroup::CORE,
             'unit' => 'custom_period',
+            'plan_kind' => 'period',
             'per_course_periods' => true,
             'list_price' => 0,
             'material_fee' => 0,

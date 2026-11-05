@@ -212,6 +212,17 @@ const coursePeriodPrice = (period: FeePlanPeriodRow): FeePlanPeriodCoursePrice =
     return period.course_prices[courseId];
 };
 
+/** 每科不同期：畫面改頂層金額時，同步 course_prices 供 payload 回退 */
+const syncCoursePeriodTopPrice = (
+    period: FeePlanPeriodRow,
+    field: 'total_price' | 'double_price' | 'triple_price',
+    value: number | '',
+) => {
+    period[field] = value;
+    const row = coursePeriodPrice(period);
+    row[field] = value;
+};
+
 const convertToPerCoursePeriods = () => {
     const shared = props.form.periods.filter((p) => p.course_id == null);
     const source =
@@ -935,13 +946,20 @@ if (props.form.material_unit === 'subject') {
                                     >
                                     <Input
                                         :id="`pc-single-${index}`"
-                                        v-model.number="
-                                            coursePeriodPrice(period).total_price
-                                        "
+                                        :model-value="period.total_price"
                                         type="number"
                                         min="1"
                                         class="h-9"
                                         required
+                                        @update:model-value="
+                                            syncCoursePeriodTopPrice(
+                                                period,
+                                                'total_price',
+                                                $event === '' || $event == null
+                                                    ? ''
+                                                    : Number($event),
+                                            )
+                                        "
                                     />
                                     <InputError
                                         :message="
@@ -960,13 +978,20 @@ if (props.form.material_unit === 'subject') {
                                     >
                                     <Input
                                         :id="`pc-double-${index}`"
-                                        v-model="
-                                            coursePeriodPrice(period).double_price
-                                        "
+                                        :model-value="period.double_price"
                                         type="number"
                                         min="0"
                                         class="h-9"
                                         placeholder="留白＝單科價"
+                                        @update:model-value="
+                                            syncCoursePeriodTopPrice(
+                                                period,
+                                                'double_price',
+                                                $event === '' || $event == null
+                                                    ? ''
+                                                    : Number($event),
+                                            )
+                                        "
                                     />
                                 </div>
                                 <div v-if="showTripleTier" class="grid gap-1.5">
@@ -975,13 +1000,20 @@ if (props.form.material_unit === 'subject') {
                                     >
                                     <Input
                                         :id="`pc-triple-${index}`"
-                                        v-model="
-                                            coursePeriodPrice(period).triple_price
-                                        "
+                                        :model-value="period.triple_price"
                                         type="number"
                                         min="0"
                                         class="h-9"
                                         placeholder="留白＝單科價"
+                                        @update:model-value="
+                                            syncCoursePeriodTopPrice(
+                                                period,
+                                                'triple_price',
+                                                $event === '' || $event == null
+                                                    ? ''
+                                                    : Number($event),
+                                            )
+                                        "
                                     />
                                 </div>
                             </div>

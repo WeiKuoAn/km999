@@ -616,12 +616,17 @@ class StudentPaymentController extends Controller
             }
 
             if (! empty($validated['edit_from']) && ! empty($validated['edit_to'])) {
-                // 已繳帳期不可整期重算；導向僅調收據／收款日的頁面
-                return redirect()->route('student-payments.period-meta.edit', [
-                    'student' => $student,
-                    'from' => $validated['edit_from'],
-                    'to' => $validated['edit_to'],
-                ]);
+                $edit = $this->editContext($student, $validated['edit_from'], $validated['edit_to']);
+                if ($edit !== null) {
+                    $suggestedCourseIds = array_values(array_filter(
+                        $edit['course_ids'],
+                        fn (int $id) => in_array($id, $subjectIdSet, true)
+                    ));
+                    $suggestedPayCycle = $edit['pay_cycle'];
+                    $suggestedStartDate = $edit['start_date'];
+                    $suggestedCourseMonths = $edit['course_months'];
+                    $hasPriorPayments = true;
+                }
             }
 
             if ($edit === null && $suggestedStartDate !== null && $suggestedCourseIds !== []) {
@@ -1272,9 +1277,12 @@ class StudentPaymentController extends Controller
 
         $edit = null;
         if (! empty($validated['edit_from']) && ! empty($validated['edit_to'])) {
-            return back()->withErrors([
-                'edit' => '已收款帳期金額已鎖定，無法用新收費設定重算覆蓋。請改「調整收據／收款日」，或刪除後依最新收費重新收款。',
-            ]);
+            $edit = $this->editContext($student, $validated['edit_from'], $validated['edit_to']);
+            if ($edit === null) {
+                return back()->withErrors([
+                    'edit' => '找不到要編輯的帳期，可能已被刪除。',
+                ]);
+            }
         }
 
         /** @var array<int, list<string>>|null $courseMonths */

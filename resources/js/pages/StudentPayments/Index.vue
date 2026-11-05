@@ -70,6 +70,9 @@ const detailHref = (row: Row) =>
     `/student-payments/${row.student_id}?from_year=${row.start_year}&from_month=${row.start_month}&to_year=${row.end_year}&to_month=${row.end_month}`;
 
 const editHref = (row: Row) =>
+    `/student-payments/create?student_id=${row.student_id}&edit_from=${row.start_year}-${row.start_month}&edit_to=${row.end_year}-${row.end_month}`;
+
+const receiptHref = (row: Row) =>
     `/student-payments/${row.student_id}/period-meta?from=${row.start_year}-${row.start_month}&to=${row.end_year}-${row.end_month}`;
 
 const deleteError = computed(
@@ -228,7 +231,15 @@ defineOptions({
                             size="sm"
                             as-child
                         >
-                            <Link :href="editHref(row)">調整收據</Link>
+                            <Link :href="editHref(row)">編輯</Link>
+                        </Button>
+                        <Button
+                            v-if="row.status !== 'cancelled'"
+                            variant="outline"
+                            size="sm"
+                            as-child
+                        >
+                            <Link :href="receiptHref(row)">調整收據</Link>
                         </Button>
                         <Button
                             variant="outline"
@@ -304,6 +315,13 @@ defineOptions({
                                 <Link
                                     v-if="row.status !== 'cancelled'"
                                     :href="editHref(row)"
+                                    class="text-primary underline-offset-4 hover:underline"
+                                >
+                                    編輯
+                                </Link>
+                                <Link
+                                    v-if="row.status !== 'cancelled'"
+                                    :href="receiptHref(row)"
                                     class="text-primary underline-offset-4 hover:underline"
                                 >
                                     調整收據
