@@ -412,13 +412,14 @@ final class PaymentRosterBuilder
             return [];
         }
 
+        // 用課程名稱，去掉結尾「課／班」；科研／高瞻等辨識字保留
+        // 例：英文課→英文、理化科研班→理化科研、科研數學→科研數學、高瞻英文班→高瞻英文
         return Course::query()
-            ->with('courseCategory:id,name')
             ->whereIn('id', array_values(array_unique($courseIds)))
             ->orderBy('name')
-            ->get()
+            ->get(['id', 'name'])
             ->mapWithKeys(fn (Course $c): array => [
-                (int) $c->id => (string) ($c->courseCategory?->name ?: $c->name),
+                (int) $c->id => self::shortSubjectName((string) $c->name),
             ])
             ->all();
     }
@@ -514,7 +515,7 @@ final class PaymentRosterBuilder
             foreach ($quote['lines'] as $line) {
                 $cid = (int) ($line['course_id'] ?? 0);
                 $rawName = (string) ($line['course_name'] ?? ($subjectsById[$cid]['name'] ?? '課程'));
-                // 列表顯示用類別名時，優先對應 courseIds 順序的 subjects 標籤
+                // 優先對應 courseIds 順序的課程名稱標籤
                 $labelIndex = array_search($cid, $courseIds, true);
                 if ($labelIndex !== false && isset($subjects[$labelIndex])) {
                     $rawName = $subjects[$labelIndex];
