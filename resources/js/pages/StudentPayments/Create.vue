@@ -535,6 +535,33 @@ const applyGrade9Package = (code?: string) => {
     refillSessionDates();
 };
 
+/** 顯示用課程名：去掉結尾「課／班」，科研／高瞻等保留 */
+const shortCourseLabel = (name: string): string => {
+    const trimmed = name.trim().replace(/(課|班)$/u, '');
+
+    return trimmed !== '' ? trimmed : name;
+};
+
+type MonthCourseLine = {
+    id: number;
+    name: string;
+    tuition: number;
+    material: number;
+    subtotal: number;
+};
+
+type MonthBreakdownRow = {
+    y: number;
+    m: number;
+    label: string;
+    tuition: number;
+    material: number;
+    subtotal: number;
+    courses: MonthCourseLine[];
+    prorateHints: string[];
+    materialHalfHint: string | null;
+};
+
 /** 國三方案：當月總額均攤各科 */
 const packageShareForCourse = (index: number, count: number) => {
     const monthly = activeGrade9Package.value?.monthly_total ?? 20000;
@@ -544,18 +571,9 @@ const packageShareForCourse = (index: number, count: number) => {
     return base + (index < rem ? 1 : 0);
 };
 
-const packageMonthBreakdown = computed(() => {
+const packageMonthBreakdown = computed((): MonthBreakdownRow[] => {
     if (!isGrade9PackageMode.value || !startDate.value) {
-        return [] as Array<{
-            y: number;
-            m: number;
-            label: string;
-            tuition: number;
-            material: number;
-            subtotal: number;
-            prorateHints: string[];
-            materialHalfHint: string | null;
-        }>;
+        return [];
     }
 
     const year = Number(startDate.value.slice(0, 4));
@@ -563,20 +581,32 @@ const packageMonthBreakdown = computed(() => {
     const n = ids.length;
     const monthly = activeGrade9Package.value?.monthly_total ?? 20000;
 
-    return [7, 8, 9, 10, 11, 12].map((m) => ({
-        y: year,
-        m,
-        label: `${year}/${m}`,
-        tuition: monthly,
-        material: 0,
-        subtotal: monthly,
-        prorateHints: ids.map((id, index) => {
+    return [7, 8, 9, 10, 11, 12].map((m) => {
+        const courses: MonthCourseLine[] = ids.map((id, index) => {
             const s = props.subjects.find((x) => x.id === id);
+            const share = packageShareForCourse(index, n);
 
-            return `${s?.name ?? id} ${packageShareForCourse(index, n).toLocaleString()}`;
-        }),
-        materialHalfHint: null,
-    }));
+            return {
+                id,
+                name: shortCourseLabel(s?.name ?? String(id)),
+                tuition: share,
+                material: 0,
+                subtotal: share,
+            };
+        });
+
+        return {
+            y: year,
+            m,
+            label: `${year}/${m}`,
+            tuition: monthly,
+            material: 0,
+            subtotal: monthly,
+            courses,
+            prorateHints: [],
+            materialHalfHint: null,
+        };
+    });
 });
 
 const selectedMonths = computed((): YearMonth[] =>
@@ -1908,7 +1938,7 @@ const materialTotal = computed(() => {
     }, 0);
 });
 
-const monthBreakdown = computed(() => {
+const monthBreakdown = computed((): MonthBreakdownRow[] => {
     if (isGrade9PackageMode.value) {
         return packageMonthBreakdown.value;
     }
@@ -1944,6 +1974,32 @@ const monthBreakdown = computed(() => {
             0,
         );
 
+        const courses: MonthCourseLine[] = selectedSubjects
+            .map((s) => {
+                const courseTuition =
+                    s.unit === 'session_block'
+                        ? isCourseMonth(s.id, month.y, month.m)
+                            ? unitPrice(s)
+                            : 0
+                        : Math.round(
+                              lineTuitionForMonthExact(s, month.y, month.m),
+                          );
+                const courseMaterial = lineMaterialForMonth(
+                    s,
+                    month.y,
+                    month.m,
+                );
+
+                return {
+                    id: s.id,
+                    name: shortCourseLabel(s.name),
+                    tuition: courseTuition,
+                    material: courseMaterial,
+                    subtotal: courseTuition + courseMaterial,
+                };
+            })
+            .filter((row) => row.tuition > 0 || row.material > 0);
+
         const materialHalfHint =
             material > 0 &&
             selectedSubjects.some(
@@ -1962,7 +2018,8 @@ const monthBreakdown = computed(() => {
             tuition,
             material,
             subtotal: tuition + material,
-            prorateHints: [] as string[],
+            courses,
+            prorateHints: [],
             materialHalfHint,
         };
     });
@@ -3065,6 +3122,40 @@ defineOptions({
                                                     }}</span
                                                 >
                                             </div>
+                                            <ul
+                                                v-if="row.courses.length"
+                                                class="mt-1.5 space-y-1 border-t border-dashed border-sidebar-border/50 pt-1.5 text-sm"
+                                            >
+                                                <li
+                                                    v-for="course in row.courses"
+                                                    :key="`${row.y}-${row.m}-${course.id}`"
+                                                    class="flex items-baseline justify-between gap-2"
+                                                >
+                                                    <span
+                                                        class="min-w-0 truncate text-foreground"
+                                                        >{{ course.name }}</span
+                                                    >
+                                                    <span
+                                                        class="shrink-0 tabular-nums text-muted-foreground"
+                                                    >
+                                                        {{
+                                                            course.subtotal.toLocaleString()
+                                                        }}
+                                                        <span
+                                                            v-if="
+                                                                course.material >
+                                                                0
+                                                            "
+                                                            class="text-xs"
+                                                        >
+                                                            （含教材
+                                                            {{
+                                                                course.material.toLocaleString()
+                                                            }}）
+                                                        </span>
+                                                    </span>
+                                                </li>
+                                            </ul>
                                             <p
                                                 v-if="row.materialHalfHint"
                                                 class="mt-1 text-sm text-muted-foreground"
@@ -3072,14 +3163,6 @@ defineOptions({
                                                 教材：{{
                                                     row.materialHalfHint
                                                 }}（半年一次）
-                                            </p>
-                                            <p
-                                                v-if="row.prorateHints.length"
-                                                class="mt-1 text-sm text-muted-foreground"
-                                            >
-                                                各科該月應收：{{
-                                                    row.prorateHints.join('、')
-                                                }}
                                             </p>
                                         </li>
                                     </ul>
