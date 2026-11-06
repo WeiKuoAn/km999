@@ -78,7 +78,8 @@ class Course extends Model
 
     public function feePlans(): BelongsToMany
     {
-        return $this->belongsToMany(FeePlan::class);
+        return $this->belongsToMany(FeePlan::class)
+            ->withPivot('material_fee');
     }
 
     public function bundles(): BelongsToMany

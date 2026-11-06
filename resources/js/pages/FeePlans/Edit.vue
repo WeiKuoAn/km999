@@ -54,6 +54,7 @@ const props = defineProps<{
         quarter_double_price: number | null;
         material_fee: number;
         material_unit: 'term' | 'subject' | 'class_day';
+        course_material_fees?: Record<number, number>;
         sort_order: number;
         is_active: boolean;
         bundles: Array<{
@@ -89,6 +90,18 @@ const form = useForm<FeePlanFormData>({
     triple_monthly: '',
     material_fee: props.plan.material_fee,
     material_unit: props.plan.material_unit,
+    course_material_fees: Object.fromEntries(
+        props.plan.course_ids.map((id) => {
+            const raw =
+                props.plan.course_material_fees?.[id] ??
+                (
+                    props.plan.course_material_fees as
+                        | Record<string, number>
+                        | undefined
+                )?.[String(id)];
+            return [id, raw ?? props.plan.material_fee];
+        }),
+    ),
     sort_order: props.plan.sort_order,
     is_active: props.plan.is_active,
     plan_kind: props.plan.plan_kind === 'annual_package' ? 'annual_package' : 'period',

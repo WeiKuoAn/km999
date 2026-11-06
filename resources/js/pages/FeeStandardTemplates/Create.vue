@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import FeeStandardTemplateFields from '@/components/fee-standards/FeeStandardTemplateFields.vue';
-import type { FeeStandardFormData } from '@/components/fee-standards/FeeStandardTemplateFields.vue';
 import { Button } from '@/components/ui/button';
+import {
+    emptyCheckItem,
+    type FeeStandardFormData,
+} from '@/lib/feeStandardForm';
 
 const props = defineProps<{
     academicYears: Array<{ id: number; year_code: string; name: string }>;
@@ -21,7 +24,7 @@ const form = useForm<FeeStandardFormData>({
     footer_note: props.defaultFooter,
     is_active: true,
     sort_order: 0,
-    items: [{ label: '', detail: '', sort_order: 0 }],
+    items: [emptyCheckItem(0)],
 });
 
 defineOptions({
@@ -43,8 +46,14 @@ const submit = () => {
                     : Number(data.academic_year_id),
             grade_level_id: Number(data.grade_level_id),
             items: data.items.map((item, i) => ({
+                kind: item.kind === 'table' ? 'table' : 'check',
                 label: item.label,
-                detail: item.detail,
+                heading_color:
+                    item.kind === 'table' ? item.heading_color || null : null,
+                detail: item.kind === 'table' ? null : item.detail,
+                table_headers:
+                    item.kind === 'table' ? item.table_headers : null,
+                table_rows: item.kind === 'table' ? item.table_rows : null,
                 sort_order: i,
             })),
         }))

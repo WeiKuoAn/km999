@@ -758,3 +758,19 @@
         }
     }
 }
+
+/* 繳費名單「編輯」浮層 iframe：隱藏側欄與頂部列 */
+body.payment-embed [data-slot='sidebar'],
+body.payment-embed [data-slot='sidebar-wrapper'] > [data-slot='sidebar'],
+body.payment-embed [data-sidebar='sidebar'],
+body.payment-embed header.sticky {
+    display: none !important;
+}
+
+body.payment-embed [data-slot='sidebar-inset'],
+body.payment-embed [data-slot='sidebar-wrapper'] {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+}

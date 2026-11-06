@@ -78,6 +78,46 @@ test('admin can create fee standard template with items', function () {
         ->and($template->items->first()->label)->toContain('理化');
 });
 
+test('admin can create fee standard template with yellow header tables', function () {
+    ['year' => $year, 'grade' => $grade] = feeStandardCtx();
+
+    $this->actingAs(feeStandardAdmin())
+        ->post(route('fee-standard-templates.store'), feeStandardPayload($year, $grade, [
+            'items' => [
+                [
+                    'kind' => 'table',
+                    'label' => '英文+數學雙科',
+                    'heading_color' => '#1d4ed8',
+                    'table_headers' => ['繳費月份', '英數雙科收費標準', '教材費/學期'],
+                    'table_rows' => [
+                        ['7-11月(5個月)', '3600元*5個月*2科=36000元', '1200元*2科=2400元'],
+                    ],
+                    'sort_order' => 0,
+                ],
+                [
+                    'kind' => 'check',
+                    'label' => '暑訓 8/7-8/12',
+                    'detail' => '班內生優惠價 1000 元',
+                    'sort_order' => 1,
+                ],
+            ],
+        ]))
+        ->assertRedirect(route('fee-standard-templates.index'));
+
+    $template = FeeStandardTemplate::query()->with('items')->sole();
+    $table = $template->items->firstWhere('kind', 'table');
+    expect($table)->not->toBeNull()
+        ->and($table->label)->toBe('英文+數學雙科')
+        ->and($table->heading_color)->toBe('#1d4ed8')
+        ->and($table->table_headers)->toHaveCount(3)
+        ->and($table->table_rows[0][1])->toContain('36000')
+        ->and($template->items)->toHaveCount(2);
+
+    $exported = $table->toExportArray();
+    expect($exported['kind'])->toBe('table')
+        ->and($exported['table_headers'][0])->toBe('繳費月份');
+});
+
 test('template requires at least one item', function () {
     ['year' => $year, 'grade' => $grade] = feeStandardCtx();
 

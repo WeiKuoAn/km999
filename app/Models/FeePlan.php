@@ -64,7 +64,31 @@ class FeePlan extends Model
 
     public function courses(): BelongsToMany
     {
-        return $this->belongsToMany(Course::class);
+        return $this->belongsToMany(Course::class)
+            ->withPivot('material_fee');
+    }
+
+    /** 該科教材費；未分科設定時用方案預設 material_fee */
+    public function materialFeeForCourse(int $courseId): int
+    {
+        // Course->feePlans 載入時，pivot 即該科列
+        if (
+            isset($this->pivot)
+            && $this->pivot->material_fee !== null
+            && (! isset($this->pivot->course_id) || (int) $this->pivot->course_id === $courseId)
+        ) {
+            return max(0, (int) $this->pivot->material_fee);
+        }
+
+        $course = $this->relationLoaded('courses')
+            ? $this->courses->firstWhere('id', $courseId)
+            : $this->courses()->whereKey($courseId)->first();
+
+        if ($course !== null && $course->pivot !== null && $course->pivot->material_fee !== null) {
+            return max(0, (int) $course->pivot->material_fee);
+        }
+
+        return max(0, (int) ($this->material_fee ?? 0));
     }
 
     public function periods(): HasMany
@@ -334,12 +358,29 @@ class FeePlan extends Model
             return '含於方案總額';
         }
 
-        $price = number_format($this->material_fee);
         $unit = match ($this->material_unit) {
             'class_day' => '日',
             default => '年（半年）',
         };
 
-        return "{$price}／{$unit}";
+        $courses = $this->relationLoaded('courses')
+            ? $this->courses
+            : $this->courses()->get();
+
+        if ($courses->isNotEmpty()) {
+            $fees = $courses
+                ->map(fn (Course $course): int => $this->materialFeeForCourse((int) $course->id))
+                ->unique()
+                ->sort()
+                ->values();
+            if ($fees->count() > 1) {
+                return number_format((int) $fees->first()).'–'.number_format((int) $fees->last()).'／'.$unit.'（分科）';
+            }
+            if ($fees->count() === 1) {
+                return number_format((int) $fees->first()).'／'.$unit;
+            }
+        }
+
+        return number_format((int) $this->material_fee).'／'.$unit;
     }
 }

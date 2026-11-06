@@ -77,11 +77,18 @@ class FeePlanController extends Controller
         $bundles = $validated['bundles'] ?? [];
         $periods = $validated['periods'] ?? [];
         $annualPrices = $validated['annual_prices'] ?? [];
-        unset($validated['course_ids'], $validated['bundles'], $validated['periods'], $validated['annual_prices']);
+        $courseMaterialFees = $validated['course_material_fees'] ?? [];
+        unset(
+            $validated['course_ids'],
+            $validated['bundles'],
+            $validated['periods'],
+            $validated['annual_prices'],
+            $validated['course_material_fees'],
+        );
 
-        DB::transaction(function () use ($validated, $courseIds, $bundles, $periods, $annualPrices): void {
+        DB::transaction(function () use ($validated, $courseIds, $bundles, $periods, $annualPrices, $courseMaterialFees): void {
             $plan = FeePlan::query()->create($validated);
-            $plan->courses()->sync($courseIds);
+            $this->syncCoursesWithMaterial($plan, $courseIds, $courseMaterialFees, (int) ($validated['material_fee'] ?? 0));
             $this->syncPeriods($plan, $periods, $courseIds);
             $this->syncAnnualPrices($plan, $annualPrices, $courseIds);
             $this->syncBundles($plan, $bundles, []);
@@ -115,22 +122,44 @@ class FeePlanController extends Controller
         $bundles = $validated['bundles'] ?? [];
         $periods = $validated['periods'] ?? [];
         $annualPrices = $validated['annual_prices'] ?? [];
-        unset($validated['course_ids'], $validated['bundles'], $validated['periods'], $validated['annual_prices']);
+        $courseMaterialFees = $validated['course_material_fees'] ?? [];
+        unset(
+            $validated['course_ids'],
+            $validated['bundles'],
+            $validated['periods'],
+            $validated['annual_prices'],
+            $validated['course_material_fees'],
+        );
 
         $previousBundleIds = $this->matchingBundles(
             $feePlan->load('courses:id'),
             CourseBundle::query()->with('courses:id')->get()
         )->pluck('id')->all();
 
-        DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $periods, $annualPrices, $previousBundleIds): void {
+        DB::transaction(function () use ($feePlan, $validated, $courseIds, $bundles, $periods, $annualPrices, $courseMaterialFees, $previousBundleIds): void {
             $feePlan->update($validated);
-            $feePlan->courses()->sync($courseIds);
+            $this->syncCoursesWithMaterial($feePlan, $courseIds, $courseMaterialFees, (int) ($validated['material_fee'] ?? 0));
             $this->syncPeriods($feePlan, $periods, $courseIds);
             $this->syncAnnualPrices($feePlan, $annualPrices, $courseIds);
             $this->syncBundles($feePlan, $bundles, $previousBundleIds);
         });
 
         return to_route('fee-plans.index');
+    }
+
+    /**
+     * @param  list<int>  $courseIds
+     * @param  array<int|string, mixed>  $fees
+     */
+    private function syncCoursesWithMaterial(FeePlan $plan, array $courseIds, array $fees, int $fallbackFee): void
+    {
+        $sync = [];
+        foreach ($courseIds as $courseId) {
+            $raw = $fees[$courseId] ?? $fees[(string) $courseId] ?? null;
+            $amount = is_numeric($raw) ? (int) $raw : $fallbackFee;
+            $sync[$courseId] = ['material_fee' => max(0, $amount)];
+        }
+        $plan->courses()->sync($sync);
     }
 
     /**
@@ -372,7 +401,17 @@ class FeePlanController extends Controller
             $clone->group_name = $feePlan->group_name.'（複製）';
             $clone->is_active = false;
             $clone->save();
-            $clone->courses()->sync($feePlan->courses->pluck('id')->all());
+            $clone->courses()->sync(
+                $feePlan->courses
+                    ->mapWithKeys(fn (Course $course): array => [
+                        (int) $course->id => [
+                            'material_fee' => $course->pivot->material_fee !== null
+                                ? (int) $course->pivot->material_fee
+                                : (int) ($feePlan->material_fee ?? 0),
+                        ],
+                    ])
+                    ->all()
+            );
 
             foreach ($feePlan->periods as $period) {
                 $periodClone = $period->replicate(['created_at', 'updated_at']);
@@ -421,6 +460,8 @@ class FeePlanController extends Controller
             'package_total' => ['nullable', 'integer', 'min:1'],
             'annual_prices' => ['nullable', 'array'],
             'annual_prices.*' => ['nullable', 'integer', 'min:1'],
+            'course_material_fees' => ['nullable', 'array'],
+            'course_material_fees.*' => ['nullable', 'integer', 'min:0'],
             'session_block_size' => ['nullable', 'integer', 'min:1', 'max:99'],
             'periods' => ['nullable', 'array'],
             'periods.*.start_month' => ['required', 'integer', 'between:1,12'],
@@ -604,6 +645,24 @@ class FeePlanController extends Controller
 
         $validated['session_block_size'] = null;
 
+        // 各科教材費；方案 material_fee 取第一科（列表／舊邏輯相容）
+        $rawMaterials = is_array($validated['course_material_fees'] ?? null)
+            ? $validated['course_material_fees']
+            : [];
+        $normalizedMaterials = [];
+        foreach (array_map('intval', $validated['course_ids']) as $courseId) {
+            $raw = $rawMaterials[$courseId] ?? $rawMaterials[(string) $courseId] ?? null;
+            if ($raw === null || $raw === '') {
+                $normalizedMaterials[$courseId] = max(0, (int) ($validated['material_fee'] ?? 0));
+            } else {
+                $normalizedMaterials[$courseId] = max(0, (int) $raw);
+            }
+        }
+        $validated['course_material_fees'] = $normalizedMaterials;
+        $validated['material_fee'] = $normalizedMaterials !== []
+            ? (int) reset($normalizedMaterials)
+            : max(0, (int) ($validated['material_fee'] ?? 0));
+
         // 不再使用參考原價；欄位保留相容，存檔一律寫 0
         $validated['list_price'] = 0;
         $validated['sort_order'] = $validated['sort_order'] ?? 0;
@@ -754,6 +813,13 @@ class FeePlanController extends Controller
                     ->mapWithKeys(fn ($row): array => [(int) $row->course_id => (int) $row->amount])
                     ->all()
                 : [],
+            'course_material_fees' => $plan->courses
+                ->mapWithKeys(fn (Course $course): array => [
+                    (int) $course->id => $course->pivot->material_fee !== null
+                        ? (int) $course->pivot->material_fee
+                        : (int) ($plan->material_fee ?? 0),
+                ])
+                ->all(),
             'session_block_size' => $plan->session_block_size,
             'list_price' => $plan->list_price,
             'quarter_price' => $plan->quarter_price,

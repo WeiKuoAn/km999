@@ -104,6 +104,37 @@
             white-space: pre-wrap;
         }
 
+        .table-block {
+            margin: 0 0 4.5mm;
+        }
+
+        .table-heading {
+            font-size: 12pt;
+            margin-bottom: 1.5mm;
+            letter-spacing: 0.04em;
+        }
+
+        .fee-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: 10pt;
+        }
+
+        .fee-table th,
+        .fee-table td {
+            border: 0.7pt solid #333;
+            padding: 1.6mm 2mm;
+            vertical-align: middle;
+            text-align: center;
+            word-wrap: break-word;
+        }
+
+        .fee-table th {
+            background-color: #ffe566;
+            font-weight: normal;
+        }
+
         .total {
             margin-top: 5mm;
             font-size: 12pt;
@@ -144,17 +175,47 @@
                 </div>
 
                 @foreach ($page['items'] as $item)
-                    <div class="item">
-                        <div class="item-row">
-                            <div class="checkbox">□</div>
-                            <div class="item-body">
-                                <div class="item-label">{{ $item['label'] }}@if (!str_ends_with(rtrim($item['label']), '：') && !str_ends_with(rtrim($item['label']), ':'))：@endif</div>
-                                @if (!empty($item['detail']))
-                                    <div class="item-detail">{{ $item['detail'] }}</div>
-                                @endif
+                    @if (($item['kind'] ?? 'check') === 'table')
+                        <div class="table-block">
+                            @if (!empty($item['label']))
+                                <div class="table-heading"@if (!empty($item['heading_color'])) style="color: {{ $item['heading_color'] }};"@endif>
+                                    {{ $item['label'] }}
+                                </div>
+                            @endif
+                            @if (!empty($item['table_headers']))
+                                <table class="fee-table">
+                                    <thead>
+                                        <tr>
+                                            @foreach ($item['table_headers'] as $header)
+                                                <th>{{ $header }}</th>
+                                            @endforeach
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (($item['table_rows'] ?? []) as $row)
+                                            <tr>
+                                                @foreach ($item['table_headers'] as $colIndex => $header)
+                                                    <td>{{ $row[$colIndex] ?? '' }}</td>
+                                                @endforeach
+                                            </tr>
+                                        @endforeach
+                                    </tbody>
+                                </table>
+                            @endif
+                        </div>
+                    @else
+                        <div class="item">
+                            <div class="item-row">
+                                <div class="checkbox">□</div>
+                                <div class="item-body">
+                                    <div class="item-label">{{ $item['label'] }}@if (!str_ends_with(rtrim($item['label']), '：') && !str_ends_with(rtrim($item['label']), ':'))：@endif</div>
+                                    @if (!empty($item['detail']))
+                                        <div class="item-detail">{{ $item['detail'] }}</div>
+                                    @endif
+                                </div>
                             </div>
                         </div>
-                    </div>
+                    @endif
                 @endforeach
 
                 <div class="total">合計：<span class="total-slot">&nbsp;</span>元</div>

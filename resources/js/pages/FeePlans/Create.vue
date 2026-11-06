@@ -28,6 +28,7 @@ const form = useForm<FeePlanFormData>({
     triple_monthly: '',
     material_fee: 0,
     material_unit: 'term',
+    course_material_fees: {},
     sort_order: 0,
     is_active: true,
     plan_kind: 'period',

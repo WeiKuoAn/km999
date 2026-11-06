@@ -303,12 +303,19 @@ class FeeStandardTemplateController extends Controller
             'is_active' => ['boolean'],
             'sort_order' => ['nullable', 'integer', 'min:0', 'max:999'],
             'items' => ['required', 'array', 'min:1'],
+            'items.*.kind' => ['nullable', 'in:check,table'],
             'items.*.label' => ['required', 'string', 'max:255'],
+            'items.*.heading_color' => ['nullable', 'string', 'max:32'],
             'items.*.detail' => ['nullable', 'string', 'max:2000'],
+            'items.*.table_headers' => ['nullable', 'array'],
+            'items.*.table_headers.*' => ['nullable', 'string', 'max:128'],
+            'items.*.table_rows' => ['nullable', 'array'],
+            'items.*.table_rows.*' => ['nullable', 'array'],
+            'items.*.table_rows.*.*' => ['nullable', 'string', 'max:500'],
             'items.*.sort_order' => ['nullable', 'integer', 'min:0', 'max:999'],
         ], [
-            'items.required' => '請至少新增一個勾選項目。',
-            'items.min' => '請至少新增一個勾選項目。',
+            'items.required' => '請至少新增一個項目或表格。',
+            'items.min' => '請至少新增一個項目或表格。',
         ]);
 
         $validated['academic_year_id'] = isset($validated['academic_year_id'])
@@ -323,33 +330,109 @@ class FeeStandardTemplateController extends Controller
             : null;
         $validated['is_active'] = $request->boolean('is_active', true);
         $validated['sort_order'] = (int) ($validated['sort_order'] ?? 0);
-        $validated['items'] = array_values(array_map(
-            function (array $item, int $i): array {
-                return [
-                    'label' => trim((string) $item['label']),
+
+        $itemErrors = [];
+        $normalizedItems = [];
+        foreach (array_values($validated['items']) as $i => $item) {
+            $kind = ($item['kind'] ?? FeeStandardTemplateItem::KIND_CHECK) === FeeStandardTemplateItem::KIND_TABLE
+                ? FeeStandardTemplateItem::KIND_TABLE
+                : FeeStandardTemplateItem::KIND_CHECK;
+            $label = trim((string) $item['label']);
+            $headingColor = isset($item['heading_color']) && trim((string) $item['heading_color']) !== ''
+                ? trim((string) $item['heading_color'])
+                : null;
+
+            if ($kind === FeeStandardTemplateItem::KIND_TABLE) {
+                $headers = array_values(array_map(
+                    fn ($h): string => trim((string) $h),
+                    is_array($item['table_headers'] ?? null) ? $item['table_headers'] : [],
+                ));
+                if (count($headers) < 2) {
+                    $itemErrors["items.{$i}.table_headers"] = '表格至少需要 2 欄。';
+                }
+                if (count($headers) > 6) {
+                    $itemErrors["items.{$i}.table_headers"] = '表格最多 6 欄。';
+                }
+                foreach ($headers as $hi => $header) {
+                    if ($header === '') {
+                        $itemErrors["items.{$i}.table_headers.{$hi}"] = '請填寫欄位標題。';
+                    }
+                }
+                $rows = [];
+                foreach (is_array($item['table_rows'] ?? null) ? $item['table_rows'] : [] as $row) {
+                    if (! is_array($row)) {
+                        continue;
+                    }
+                    $cells = array_values(array_map(
+                        fn ($cell): string => trim((string) $cell),
+                        $row,
+                    ));
+                    while (count($cells) < count($headers)) {
+                        $cells[] = '';
+                    }
+                    $cells = array_slice($cells, 0, max(2, count($headers)));
+                    if (collect($cells)->every(fn (string $c): bool => $c === '')) {
+                        continue;
+                    }
+                    $rows[] = $cells;
+                }
+                if ($rows === []) {
+                    $itemErrors["items.{$i}.table_rows"] = '請至少填一列表格內容。';
+                }
+
+                $normalizedItems[] = [
+                    'kind' => FeeStandardTemplateItem::KIND_TABLE,
+                    'label' => $label,
+                    'heading_color' => $headingColor,
+                    'detail' => null,
+                    'table_headers' => $headers,
+                    'table_rows' => $rows,
+                    'sort_order' => (int) ($item['sort_order'] ?? $i),
+                ];
+            } else {
+                $normalizedItems[] = [
+                    'kind' => FeeStandardTemplateItem::KIND_CHECK,
+                    'label' => $label,
+                    'heading_color' => null,
                     'detail' => isset($item['detail']) && trim((string) $item['detail']) !== ''
                         ? trim((string) $item['detail'])
                         : null,
+                    'table_headers' => null,
+                    'table_rows' => null,
                     'sort_order' => (int) ($item['sort_order'] ?? $i),
                 ];
-            },
-            $validated['items'],
-            array_keys($validated['items']),
-        ));
+            }
+        }
+        if ($itemErrors !== []) {
+            throw ValidationException::withMessages($itemErrors);
+        }
+        $validated['items'] = $normalizedItems;
 
         return $validated;
     }
 
     /**
-     * @param  list<array{label:string, detail:?string, sort_order:int}>  $items
+     * @param  list<array{
+     *   kind:string,
+     *   label:string,
+     *   heading_color:?string,
+     *   detail:?string,
+     *   table_headers:?list<string>,
+     *   table_rows:?list<list<string>>,
+     *   sort_order:int
+     * }>  $items
      */
     private function syncItems(FeeStandardTemplate $template, array $items): void
     {
         $template->items()->delete();
         foreach (array_values($items) as $i => $item) {
             $template->items()->create([
+                'kind' => $item['kind'] ?? FeeStandardTemplateItem::KIND_CHECK,
                 'label' => $item['label'],
-                'detail' => $item['detail'],
+                'heading_color' => $item['heading_color'] ?? null,
+                'detail' => $item['detail'] ?? null,
+                'table_headers' => $item['table_headers'] ?? null,
+                'table_rows' => $item['table_rows'] ?? null,
                 'sort_order' => $item['sort_order'] ?? $i,
             ]);
         }
@@ -387,8 +470,14 @@ class FeeStandardTemplateController extends Controller
             'is_active' => (bool) $template->is_active,
             'sort_order' => (int) $template->sort_order,
             'items' => $template->items->map(fn (FeeStandardTemplateItem $item): array => [
+                'kind' => $item->isTable()
+                    ? FeeStandardTemplateItem::KIND_TABLE
+                    : FeeStandardTemplateItem::KIND_CHECK,
                 'label' => $item->label,
+                'heading_color' => $item->heading_color ?? '',
                 'detail' => $item->detail ?? '',
+                'table_headers' => is_array($item->table_headers) ? $item->table_headers : [],
+                'table_rows' => is_array($item->table_rows) ? $item->table_rows : [],
                 'sort_order' => (int) $item->sort_order,
             ])->values()->all(),
         ];

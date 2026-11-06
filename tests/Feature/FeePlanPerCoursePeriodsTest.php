@@ -375,3 +375,43 @@ test('shared period months may overlap', function () {
 
     expect(FeePlan::query()->sole()->periods)->toHaveCount(2);
 });
+
+test('fee plan stores different material fees per course', function () {
+    ['year' => $year, 'grade' => $grade, 'category' => $category] = perCourseCtx();
+    $english = perCourseCourse($category, '英文');
+    $math = perCourseCourse($category, '數學');
+    $science = perCourseCourse($category, '理化科研');
+
+    $payload = sharedPeriodPayload($year, $grade, [$english->id, $math->id, $science->id], [
+        $english->id => ['total_price' => 3200],
+        $math->id => ['total_price' => 3200],
+        $science->id => ['total_price' => 3800],
+    ]);
+    $payload['material_fee'] = 2400;
+    $payload['course_material_fees'] = [
+        $english->id => 2400,
+        $math->id => 2400,
+        $science->id => 3600,
+    ];
+
+    $this->actingAs(perCourseUser())
+        ->post(route('fee-plans.store'), $payload)
+        ->assertRedirect(route('fee-plans.index'));
+
+    $plan = FeePlan::query()->with('courses')->sole();
+    expect($plan->materialFeeForCourse((int) $english->id))->toBe(2400)
+        ->and($plan->materialFeeForCourse((int) $math->id))->toBe(2400)
+        ->and($plan->materialFeeForCourse((int) $science->id))->toBe(3600)
+        ->and($plan->materialLabel())->toContain('分科');
+
+    $student = Student::query()->create([
+        'name' => '教材費學生',
+        'academic_year_id' => $year->id,
+        'grade_level_id' => $grade->id,
+    ]);
+    $subjects = collect(EnrollmentPricing::subjectsForStudent($student->load(['academicYear', 'gradeLevel'])))
+        ->keyBy('id');
+
+    expect((int) $subjects[$english->id]['material'])->toBe(2400)
+        ->and((int) $subjects[$science->id]['material'])->toBe(3600);
+});

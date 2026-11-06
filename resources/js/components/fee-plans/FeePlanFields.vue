@@ -344,10 +344,34 @@ const ensureAnnualPrices = () => {
     props.form.annual_prices = next;
 };
 
+const ensureCourseMaterialFees = () => {
+    if (!props.form.course_material_fees) {
+        props.form.course_material_fees = {};
+    }
+    const fallback = Number(props.form.material_fee || 0);
+    const next: Record<number, number | ''> = {};
+    for (const id of props.form.course_ids.map(Number)) {
+        const raw =
+            props.form.course_material_fees[id] ??
+            props.form.course_material_fees[Number(id)];
+        next[id] =
+            raw === '' || raw === undefined || raw === null ? fallback : raw;
+    }
+    props.form.course_material_fees = next;
+    if (props.form.course_ids.length > 0) {
+        const first = next[Number(props.form.course_ids[0])];
+        props.form.material_fee =
+            first === '' || first === undefined || first === null
+                ? fallback
+                : Number(first);
+    }
+};
+
 watch(
     () => [...props.form.course_ids],
     (ids, prevIds) => {
         ensureAnnualPrices();
+        ensureCourseMaterialFees();
         if (props.form.per_course_periods) {
             const next = new Set(ids.map(Number));
             const prev = new Set((prevIds ?? []).map(Number));
@@ -1185,38 +1209,82 @@ if (props.form.material_unit === 'subject') {
                     <h2 class="text-sm font-semibold">④ 教材費與啟用</h2>
                 </div>
 
-                <div class="grid gap-4 sm:grid-cols-2">
-                    <div class="grid gap-1.5">
-                        <Label for="material_unit">教材費收法</Label>
-                        <select
-                            id="material_unit"
-                            v-model="form.material_unit"
-                            class="h-9 rounded-md border px-3"
-                        >
-                            <option value="term">每年（上、下半年各收一半）</option>
-                            <option value="class_day">每個上課日（耗材）</option>
-                        </select>
-                    </div>
-                    <div class="grid gap-1.5">
-                        <Label for="material_fee">{{
+                <div class="grid gap-1.5 sm:max-w-xs">
+                    <Label for="material_unit">教材費收法</Label>
+                    <select
+                        id="material_unit"
+                        v-model="form.material_unit"
+                        class="h-9 rounded-md border px-3"
+                    >
+                        <option value="term">每年（上、下半年各收一半）</option>
+                        <option value="class_day">每個上課日（耗材）</option>
+                    </select>
+                    <p class="text-xs text-muted-foreground">
+                        {{
                             form.material_unit === 'class_day'
-                                ? '每日耗材費'
-                                : '教材年費'
-                        }}</Label>
-                        <Input
-                            id="material_fee"
-                            v-model.number="form.material_fee"
-                            type="number"
-                            min="0"
-                        />
-                        <p class="text-xs text-muted-foreground">
-                            {{
-                                form.material_unit === 'class_day'
-                                    ? '依實際上課日數計算，例：一天 200。'
-                                    : '例：1,200 → 1 月、7 月各收 600。沒有教材填 0。'
-                            }}
-                        </p>
-                    </div>
+                                ? '依實際上課日數計算；各科可設不同單日金額。'
+                                : '例：1,200 → 1 月、7 月各收 600。沒有教材填 0；各科可設不同年費。'
+                        }}
+                    </p>
+                </div>
+
+                <div
+                    v-if="selectedCourses.length === 0"
+                    class="text-sm text-muted-foreground"
+                >
+                    請先勾選適用科目，再填各科教材費。
+                </div>
+                <div v-else class="overflow-x-auto rounded-md border">
+                    <table class="w-full min-w-[16rem] text-sm">
+                        <thead
+                            class="bg-muted/50 text-left text-xs text-muted-foreground"
+                        >
+                            <tr>
+                                <th class="px-3 py-2 font-medium">科目</th>
+                                <th class="px-3 py-2 font-medium">
+                                    {{
+                                        form.material_unit === 'class_day'
+                                            ? '每日耗材費（元）'
+                                            : '教材年費（元）'
+                                    }}
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr
+                                v-for="course in selectedCourses"
+                                :key="`material-${course.id}`"
+                                class="border-t"
+                            >
+                                <td class="px-3 py-2 font-medium">
+                                    {{ course.name }}
+                                </td>
+                                <td class="px-3 py-2">
+                                    <Input
+                                        :id="`material-${course.id}`"
+                                        v-model.number="
+                                            form.course_material_fees[course.id]
+                                        "
+                                        type="number"
+                                        min="0"
+                                        class="h-9"
+                                    />
+                                    <InputError
+                                        :message="
+                                            (
+                                                form.errors as Record<
+                                                    string,
+                                                    string | undefined
+                                                >
+                                            )[
+                                                `course_material_fees.${course.id}`
+                                            ]
+                                        "
+                                    />
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
 
                 <label class="flex items-center gap-2 text-sm">

@@ -107,7 +107,9 @@ final class EnrollmentPricing
 
             $list = (int) ($plan?->list_price ?? 0);
             $qSingle = (int) ($plan?->quarter_single_price ?? $plan?->quarter_price ?? $list);
-            $material = (int) ($plan?->material_fee ?? 0);
+            $material = $plan !== null
+                ? $plan->materialFeeForCourse((int) $course->id)
+                : 0;
             $materialUnit = (string) ($plan?->material_unit ?? 'term');
 
             $allSchedules = WeekdayDates::normalizeSchedules($course->schedules);

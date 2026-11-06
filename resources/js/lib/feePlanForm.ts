@@ -89,8 +89,11 @@ export type FeePlanFormData = {
     double_monthly: number | '';
     /** 按月／按季：三科每月價 */
     triple_monthly: number | '';
+    /** 方案預設／相容舊欄位；實際以 course_material_fees 為準 */
     material_fee: number;
     material_unit: 'term' | 'subject' | 'class_day';
+    /** 各科教材費；key=course_id */
+    course_material_fees: Record<number, number | ''>;
     sort_order: number;
     is_active: boolean;
     /** period＝期別月價；annual_package＝年繳固定方案 */
@@ -353,8 +356,36 @@ export function feePlanPayload(data: FeePlanFormData) {
               })),
         quarter_single_price: null,
         quarter_double_price: null,
-        material_fee: Number(data.material_fee || 0),
+        material_fee: (() => {
+            const firstId = data.course_ids[0];
+            const firstRaw =
+                firstId === undefined
+                    ? undefined
+                    : (data.course_material_fees[firstId] ??
+                      data.course_material_fees[Number(firstId)]);
+            const n =
+                firstRaw === '' ||
+                firstRaw === undefined ||
+                firstRaw === null
+                    ? Number(data.material_fee || 0)
+                    : Number(firstRaw);
+
+            return Number.isNaN(n) ? 0 : Math.max(0, n);
+        })(),
         material_unit: data.material_unit,
+        course_material_fees: Object.fromEntries(
+            data.course_ids.map((id) => {
+                const raw =
+                    data.course_material_fees[id] ??
+                    data.course_material_fees[Number(id)];
+                const n =
+                    raw === '' || raw === undefined || raw === null
+                        ? Number(data.material_fee || 0)
+                        : Number(raw);
+
+                return [id, Number.isNaN(n) ? 0 : Math.max(0, n)];
+            }),
+        ),
         sort_order: Number(data.sort_order || 0),
         is_active: data.is_active,
         bundles: bundles.map((bundle) => ({

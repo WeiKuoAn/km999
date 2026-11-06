@@ -544,11 +544,15 @@ class StudentPaymentController extends Controller
             'course_ids.*' => ['integer', 'exists:courses,id'],
             'pay_cycle' => ['nullable', 'string', 'in:monthly,quarterly,annual'],
             'as_of' => ['nullable', 'date'],
+            'start_date' => ['nullable', 'date'],
+            'embed' => ['nullable', 'boolean'],
+            'saved' => ['nullable', 'boolean'],
             'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
             'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
             'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'return_grade' => ['nullable', 'integer', 'exists:grade_levels,id'],
         ]);
+        $embed = $request->boolean('embed');
 
         $studentPayload = null;
         $edit = null;
@@ -584,7 +588,9 @@ class StudentPaymentController extends Controller
                 'academic_year_name' => $student->academicYear?->name,
             ];
             $hasPriorPayments = BillingRenewal::hasPriorPayments($student);
-            $suggestedStartDate = BillingRenewal::suggestedStartDate($student);
+            $suggestedStartDate = ! empty($validated['start_date'])
+                ? (string) $validated['start_date']
+                : BillingRenewal::suggestedStartDate($student);
             $enrolledCourseIds = PromotionCourses::intendedOrSnapshotCourseIds($student);
 
             $subjectIdSet = collect($subjects)->pluck('id')->map(fn ($id) => (int) $id)->all();
@@ -665,6 +671,8 @@ class StudentPaymentController extends Controller
 
         return Inertia::render('StudentPayments/Create', [
             'edit' => $edit,
+            'embed' => $embed,
+            'embed_saved' => $request->boolean('saved'),
             'grade_levels' => GradeLevel::query()
                 ->where('is_active', true)
                 ->orderBy('sort_order')
@@ -1270,10 +1278,12 @@ class StudentPaymentController extends Controller
             'edit_from' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_to'],
             'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
             'return_grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'embed' => ['nullable', 'boolean'],
             'course_months' => ['nullable', 'array'],
             'course_months.*' => ['array', 'min:1'],
             'course_months.*.*' => ['string', 'regex:/^\d{4}-\d{1,2}$/'],
         ]);
+        $embed = $request->boolean('embed');
 
         $edit = null;
         if (! empty($validated['edit_from']) && ! empty($validated['edit_to'])) {
@@ -1519,6 +1529,14 @@ class StudentPaymentController extends Controller
         };
         if (is_string($receiptNo) && $receiptNo !== '') {
             $message .= '單據編號：'.$receiptNo;
+        }
+
+        if ($embed) {
+            return to_route('student-payments.create', [
+                'student_id' => $student->id,
+                'embed' => 1,
+                'saved' => 1,
+            ])->with('success', $message);
         }
 
         if ($edit === null && ! empty($validated['return_grade_level_id'])) {

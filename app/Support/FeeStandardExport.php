@@ -25,7 +25,14 @@ final class FeeStandardExport
      *   title:string,
      *   deadline_label:?string,
      *   footer_note:string,
-     *   items:list<array{label:string, detail:?string}>
+     *   items:list<array{
+     *     kind:string,
+     *     label:string,
+     *     detail:?string,
+     *     heading_color:?string,
+     *     table_headers:?list<string>,
+     *     table_rows:?list<list<string>>
+     *   }>
      * }>
      */
     public static function buildPages(
@@ -41,12 +48,7 @@ final class FeeStandardExport
         }
 
         $items = $template->items
-            ->map(fn ($item): array => [
-                'label' => (string) $item->label,
-                'detail' => $item->detail !== null && trim((string) $item->detail) !== ''
-                    ? (string) $item->detail
-                    : null,
-            ])
+            ->map(fn ($item): array => $item->toExportArray())
             ->values()
             ->all();
 

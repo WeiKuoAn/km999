@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import FeeStandardTemplateFields from '@/components/fee-standards/FeeStandardTemplateFields.vue';
-import type { FeeStandardFormData } from '@/components/fee-standards/FeeStandardTemplateFields.vue';
 import { Button } from '@/components/ui/button';
+import {
+    emptyCheckItem,
+    emptyTableItem,
+    type FeeStandardFormData,
+} from '@/lib/feeStandardForm';
 
 const props = defineProps<{
     template: {
@@ -14,7 +18,15 @@ const props = defineProps<{
         footer_note: string;
         is_active: boolean;
         sort_order: number;
-        items: Array<{ label: string; detail: string; sort_order: number }>;
+        items: Array<{
+            kind?: 'check' | 'table';
+            label: string;
+            heading_color?: string;
+            detail: string;
+            table_headers?: string[];
+            table_rows?: string[][];
+            sort_order: number;
+        }>;
     };
     academicYears: Array<{ id: number; year_code: string; name: string }>;
     gradeLevels: Array<{ id: number; name: string }>;
@@ -33,12 +45,41 @@ const form = useForm<FeeStandardFormData>({
     sort_order: props.template.sort_order,
     items:
         props.template.items.length > 0
-            ? props.template.items.map((item) => ({
-                  label: item.label,
-                  detail: item.detail ?? '',
-                  sort_order: item.sort_order,
-              }))
-            : [{ label: '', detail: '', sort_order: 0 }],
+            ? props.template.items.map((item, i) => {
+                  if (item.kind === 'table') {
+                      const base = emptyTableItem(item.sort_order ?? i);
+                      const headers =
+                          item.table_headers && item.table_headers.length >= 2
+                              ? [...item.table_headers]
+                              : base.table_headers;
+                      const rows =
+                          item.table_rows && item.table_rows.length > 0
+                              ? item.table_rows.map((row) => {
+                                    const cells = [...row];
+                                    while (cells.length < headers.length) {
+                                        cells.push('');
+                                    }
+                                    return cells.slice(0, headers.length);
+                                })
+                              : [Array.from({ length: headers.length }, () => '')];
+                      return {
+                          ...base,
+                          label: item.label,
+                          heading_color:
+                              item.heading_color || base.heading_color,
+                          table_headers: headers,
+                          table_rows: rows,
+                          sort_order: item.sort_order ?? i,
+                      };
+                  }
+                  return {
+                      ...emptyCheckItem(item.sort_order ?? i),
+                      label: item.label,
+                      detail: item.detail ?? '',
+                      sort_order: item.sort_order ?? i,
+                  };
+              })
+            : [emptyCheckItem(0)],
 });
 
 defineOptions({
@@ -60,8 +101,14 @@ const submit = () => {
                     : Number(data.academic_year_id),
             grade_level_id: Number(data.grade_level_id),
             items: data.items.map((item, i) => ({
+                kind: item.kind === 'table' ? 'table' : 'check',
                 label: item.label,
-                detail: item.detail,
+                heading_color:
+                    item.kind === 'table' ? item.heading_color || null : null,
+                detail: item.kind === 'table' ? null : item.detail,
+                table_headers:
+                    item.kind === 'table' ? item.table_headers : null,
+                table_rows: item.kind === 'table' ? item.table_rows : null,
                 sort_order: i,
             })),
         }))

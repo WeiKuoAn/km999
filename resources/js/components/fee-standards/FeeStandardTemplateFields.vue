@@ -1,27 +1,19 @@
 <script setup lang="ts">
 /* eslint-disable vue/no-mutating-props -- form 是父頁 Inertia useForm */
 import type { InertiaForm } from '@inertiajs/vue3';
-import { Plus, Trash2 } from 'lucide-vue-next';
+import { Plus, Table2, Trash2 } from 'lucide-vue-next';
 import FeeStandardPreview from '@/components/fee-standards/FeeStandardPreview.vue';
 import InputError from '@/components/InputError.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-
-export type FeeStandardFormData = {
-    academic_year_id: string;
-    grade_level_id: string;
-    title: string;
-    deadline_label: string;
-    footer_note: string;
-    is_active: boolean;
-    sort_order: number;
-    items: Array<{
-        label: string;
-        detail: string;
-        sort_order: number;
-    }>;
-};
+import {
+    FEE_STANDARD_HEADING_COLORS,
+    emptyCheckItem,
+    emptyTableItem,
+    type FeeStandardFormData,
+    type FeeStandardFormItem,
+} from '@/lib/feeStandardForm';
 
 defineProps<{
     form: InertiaForm<FeeStandardFormData>;
@@ -30,12 +22,40 @@ defineProps<{
     defaultFooter: string;
 }>();
 
-const addItem = (form: InertiaForm<FeeStandardFormData>) => {
-    form.items.push({
-        label: '',
-        detail: '',
-        sort_order: form.items.length,
-    });
+const addCheckItem = (form: InertiaForm<FeeStandardFormData>) => {
+    form.items.push(emptyCheckItem(form.items.length));
+};
+
+const addTableItem = (form: InertiaForm<FeeStandardFormData>) => {
+    form.items.push(emptyTableItem(form.items.length));
+};
+
+const addTableRow = (item: FeeStandardFormItem) => {
+    const cols = Math.max(2, item.table_headers.length || 3);
+    item.table_rows.push(Array.from({ length: cols }, () => ''));
+};
+
+const removeTableRow = (item: FeeStandardFormItem, rowIndex: number) => {
+    if (item.table_rows.length <= 1) {
+        return;
+    }
+    item.table_rows.splice(rowIndex, 1);
+};
+
+const addTableColumn = (item: FeeStandardFormItem) => {
+    if (item.table_headers.length >= 6) {
+        return;
+    }
+    item.table_headers.push('');
+    item.table_rows.forEach((row) => row.push(''));
+};
+
+const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
+    if (item.table_headers.length <= 2) {
+        return;
+    }
+    item.table_headers.splice(colIndex, 1);
+    item.table_rows.forEach((row) => row.splice(colIndex, 1));
 };
 </script>
 
@@ -48,7 +68,7 @@ const addItem = (form: InertiaForm<FeeStandardFormData>) => {
                 <div class="border-b pb-3">
                     <h2 class="text-sm font-semibold">基本資料</h2>
                     <p class="mt-0.5 text-xs text-muted-foreground">
-                        依學年／年級建立一張家長勾選用收費標準單。
+                        依學年／年級建立一張家長勾選用收費標準單；也可插入黃表頭收費表格。
                     </p>
                 </div>
 
@@ -157,21 +177,31 @@ const addItem = (form: InertiaForm<FeeStandardFormData>) => {
                     class="flex flex-wrap items-start justify-between gap-2 border-b pb-3"
                 >
                     <div>
-                        <h2 class="text-sm font-semibold">勾選項目</h2>
+                        <h2 class="text-sm font-semibold">內容區塊</h2>
                         <p class="mt-0.5 text-xs text-muted-foreground">
-                            主列為項目名稱；副列可寫金額公式（純文字）。PDF
-                            會印空白 □ 給家長勾選。
+                            勾選項目會印 □；表格會印黃表頭三欄（可增刪欄列），可混用。
                         </p>
                     </div>
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        @click="addItem(form)"
-                    >
-                        <Plus class="size-4" />
-                        新增項目
-                    </Button>
+                    <div class="flex flex-wrap gap-2">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            @click="addCheckItem(form)"
+                        >
+                            <Plus class="size-4" />
+                            新增勾選
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            @click="addTableItem(form)"
+                        >
+                            <Table2 class="size-4" />
+                            新增表格
+                        </Button>
+                    </div>
                 </div>
 
                 <div
@@ -181,7 +211,11 @@ const addItem = (form: InertiaForm<FeeStandardFormData>) => {
                 >
                     <div class="flex items-center justify-between gap-2">
                         <p class="text-xs font-medium text-muted-foreground">
-                            項目 {{ i + 1 }}
+                            {{
+                                item.kind === 'table'
+                                    ? `表格 ${i + 1}`
+                                    : `勾選 ${i + 1}`
+                            }}
                         </p>
                         <Button
                             type="button"
@@ -195,14 +229,141 @@ const addItem = (form: InertiaForm<FeeStandardFormData>) => {
                             刪除
                         </Button>
                     </div>
-                    <div class="grid gap-1.5">
-                        <Label :for="`item-label-${i}`">主列</Label>
-                        <Input
-                            :id="`item-label-${i}`"
-                            v-model="item.label"
-                            placeholder="例：理化科研班首期 7-10 月優惠"
-                            required
-                        />
+
+                    <template v-if="item.kind === 'table'">
+                        <div class="grid gap-3 sm:grid-cols-[1fr_auto]">
+                            <div class="grid gap-1.5">
+                                <Label :for="`item-label-${i}`"
+                                    >區塊標題</Label
+                                >
+                                <Input
+                                    :id="`item-label-${i}`"
+                                    v-model="item.label"
+                                    placeholder="例：英文+數學雙科"
+                                    required
+                                />
+                                <InputError
+                                    :message="
+                                        (
+                                            form.errors as Record<
+                                                string,
+                                                string | undefined
+                                            >
+                                        )[`items.${i}.label`]
+                                    "
+                                />
+                            </div>
+                            <div class="grid gap-1.5">
+                                <Label :for="`item-color-${i}`">標題顏色</Label>
+                                <select
+                                    :id="`item-color-${i}`"
+                                    v-model="item.heading_color"
+                                    class="h-9 rounded-md border px-3"
+                                >
+                                    <option
+                                        v-for="c in FEE_STANDARD_HEADING_COLORS"
+                                        :key="c.value"
+                                        :value="c.value"
+                                    >
+                                        {{ c.label }}
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto rounded-md border bg-white">
+                            <table class="w-full min-w-[28rem] text-sm">
+                                <thead>
+                                    <tr class="bg-[#ffe566]">
+                                        <th
+                                            v-for="(header, ci) in item.table_headers"
+                                            :key="`h-${i}-${ci}`"
+                                            class="border p-1.5 align-top"
+                                        >
+                                            <div class="space-y-1">
+                                                <Input
+                                                    v-model="
+                                                        item.table_headers[ci]
+                                                    "
+                                                    class="h-8 bg-white/80 text-center text-xs"
+                                                    :placeholder="`欄 ${ci + 1}`"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    class="text-[11px] text-muted-foreground hover:text-destructive disabled:opacity-40"
+                                                    :disabled="
+                                                        item.table_headers
+                                                            .length <= 2
+                                                    "
+                                                    @click="
+                                                        removeTableColumn(
+                                                            item,
+                                                            ci,
+                                                        )
+                                                    "
+                                                >
+                                                    刪欄
+                                                </button>
+                                            </div>
+                                        </th>
+                                        <th
+                                            class="w-16 border p-1.5 text-center text-xs font-normal text-muted-foreground"
+                                        >
+                                            列
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="(row, ri) in item.table_rows"
+                                        :key="`r-${i}-${ri}`"
+                                    >
+                                        <td
+                                            v-for="(_cell, ci) in item.table_headers"
+                                            :key="`c-${i}-${ri}-${ci}`"
+                                            class="border p-1"
+                                        >
+                                            <Input
+                                                v-model="row[ci]"
+                                                class="h-8 text-xs"
+                                                placeholder="內容"
+                                            />
+                                        </td>
+                                        <td class="border p-1 text-center">
+                                            <button
+                                                type="button"
+                                                class="text-[11px] text-muted-foreground hover:text-destructive disabled:opacity-40"
+                                                :disabled="
+                                                    item.table_rows.length <= 1
+                                                "
+                                                @click="removeTableRow(item, ri)"
+                                            >
+                                                刪
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                @click="addTableRow(item)"
+                            >
+                                新增一列
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                :disabled="item.table_headers.length >= 6"
+                                @click="addTableColumn(item)"
+                            >
+                                新增一欄
+                            </Button>
+                        </div>
                         <InputError
                             :message="
                                 (
@@ -210,20 +371,48 @@ const addItem = (form: InertiaForm<FeeStandardFormData>) => {
                                         string,
                                         string | undefined
                                     >
-                                )[`items.${i}.label`]
+                                )[`items.${i}.table_rows`] ||
+                                (
+                                    form.errors as Record<
+                                        string,
+                                        string | undefined
+                                    >
+                                )[`items.${i}.table_headers`]
                             "
                         />
-                    </div>
-                    <div class="grid gap-1.5">
-                        <Label :for="`item-detail-${i}`">副列（選填）</Label>
-                        <textarea
-                            :id="`item-detail-${i}`"
-                            v-model="item.detail"
-                            rows="2"
-                            class="min-h-[3.5rem] w-full rounded-md border px-3 py-2 text-sm"
-                            placeholder="例：訂金 500 元(已繳) + 學費 12000 元 (含教材) = 11500 元"
-                        />
-                    </div>
+                    </template>
+
+                    <template v-else>
+                        <div class="grid gap-1.5">
+                            <Label :for="`item-label-${i}`">主列</Label>
+                            <Input
+                                :id="`item-label-${i}`"
+                                v-model="item.label"
+                                placeholder="例：理化科研班首期 7-10 月優惠"
+                                required
+                            />
+                            <InputError
+                                :message="
+                                    (
+                                        form.errors as Record<
+                                            string,
+                                            string | undefined
+                                        >
+                                    )[`items.${i}.label`]
+                                "
+                            />
+                        </div>
+                        <div class="grid gap-1.5">
+                            <Label :for="`item-detail-${i}`">副列（選填）</Label>
+                            <textarea
+                                :id="`item-detail-${i}`"
+                                v-model="item.detail"
+                                rows="2"
+                                class="min-h-[3.5rem] w-full rounded-md border px-3 py-2 text-sm"
+                                placeholder="例：訂金 500 元(已繳) + 學費 12000 元 (含教材) = 11500 元"
+                            />
+                        </div>
+                    </template>
                 </div>
                 <InputError
                     :message="
@@ -234,7 +423,6 @@ const addItem = (form: InertiaForm<FeeStandardFormData>) => {
             </section>
         </div>
 
-        <!-- 右：即時預覽（寬螢幕黏在上方） -->
         <aside
             class="space-y-2 xl:sticky xl:top-20 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
         >

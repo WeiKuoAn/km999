@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { Head, Link, router } from '@inertiajs/vue3';
 import { FileDown, LoaderCircle } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
@@ -107,8 +114,68 @@ const detailHref = (row: Row) => {
     if (row.pay_cycle) {
         params.set('pay_cycle', row.pay_cycle);
     }
+    const start = `${row.start_year}-${String(row.start_month).padStart(2, '0')}-01`;
+    params.set('start_date', start);
     return `/student-payments/create?${params.toString()}`;
 };
+
+const editOpen = ref(false);
+const editRow = ref<Row | null>(null);
+const editIframeKey = ref(0);
+const editFlash = ref('');
+
+const editUrl = computed(() => {
+    const row = editRow.value;
+    if (!row) {
+        return '';
+    }
+    const params = new URLSearchParams();
+    params.set('student_id', String(row.student_id));
+    params.set('embed', '1');
+    for (const id of row.course_ids ?? []) {
+        params.append('course_ids[]', String(id));
+    }
+    if (row.pay_cycle) {
+        params.set('pay_cycle', row.pay_cycle);
+    }
+    params.set(
+        'start_date',
+        `${row.start_year}-${String(row.start_month).padStart(2, '0')}-01`,
+    );
+    return `/student-payments/create?${params.toString()}`;
+});
+
+const openEdit = (row: Row) => {
+    editRow.value = row;
+    editFlash.value = '';
+    editIframeKey.value += 1;
+    editOpen.value = true;
+};
+
+const closeEdit = () => {
+    editOpen.value = false;
+    editRow.value = null;
+};
+
+const onEmbedMessage = (event: MessageEvent) => {
+    if (event.origin !== window.location.origin) {
+        return;
+    }
+    const data = event.data as {
+        type?: string;
+        message?: string;
+    } | null;
+    if (!data || data.type !== 'km999:student-payment-saved') {
+        return;
+    }
+    editFlash.value = data.message || '已確認收款';
+    closeEdit();
+    router.reload({ preserveScroll: true });
+};
+
+onMounted(() => {
+    window.addEventListener('message', onEmbedMessage);
+});
 
 const filterParams = () => ({
     q: q.value.trim() || undefined,
@@ -247,6 +314,7 @@ const startNoticesExport = async () => {
 
 onBeforeUnmount(() => {
     clearNoticesPoll();
+    window.removeEventListener('message', onEmbedMessage);
 });
 
 defineOptions({
@@ -414,6 +482,13 @@ defineOptions({
                                     >繳費條</a
                                 >
                             </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                @click="openEdit(row)"
+                            >
+                                編輯
+                            </Button>
                             <Button variant="outline" size="sm" as-child>
                                 <Link :href="detailHref(row)">確認收款</Link>
                             </Button>
@@ -489,6 +564,13 @@ defineOptions({
                                             繳費條 PDF
                                         </a>
                                     </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        @click="openEdit(row)"
+                                    >
+                                        編輯
+                                    </Button>
                                     <Button size="sm" as-child>
                                         <Link :href="detailHref(row)"
                                             >確認收款</Link
@@ -511,5 +593,41 @@ defineOptions({
 
             <ListPagination :links="rows.links" class="mt-4" />
         </template>
+
+        <div
+            v-if="editFlash"
+            class="fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-md border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800 shadow"
+        >
+            {{ editFlash }}
+        </div>
+
+        <Dialog :open="editOpen" @update:open="(v) => !v && closeEdit()">
+            <DialogContent
+                class="flex h-[min(94vh,920px)] w-[min(96vw,1180px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+            >
+                <DialogHeader class="border-b px-4 py-3 text-left">
+                    <DialogTitle>
+                        編輯收款
+                        <span
+                            v-if="editRow"
+                            class="ml-2 text-sm font-normal text-muted-foreground"
+                        >
+                            {{ editRow.student_code ?? '' }}
+                            {{ editRow.student_name }}
+                        </span>
+                    </DialogTitle>
+                    <DialogDescription>
+                        可調整科目、繳別、月份與教材；右側試算會即時更新，確認後儲存即完成收款。
+                    </DialogDescription>
+                </DialogHeader>
+                <iframe
+                    v-if="editOpen && editUrl"
+                    :key="editIframeKey"
+                    :src="editUrl"
+                    title="編輯收款"
+                    class="min-h-0 w-full flex-1 border-0 bg-background"
+                />
+            </DialogContent>
+        </Dialog>
     </div>
 </template>

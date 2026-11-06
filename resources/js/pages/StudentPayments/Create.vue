@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import InputError from '@/components/InputError.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { Button } from '@/components/ui/button';
@@ -104,6 +104,8 @@ type GradeStudent = {
 
 const props = defineProps<{
     edit?: EditContext | null;
+    embed?: boolean;
+    embed_saved?: boolean;
     grade_levels?: Array<{ id: number; name: string }>;
     grade_filter?: number | null;
     grade_students?: GradeStudent[];
@@ -1289,6 +1291,8 @@ watch(startDate, (value, oldValue) => {
                 as_of: value,
                 course_ids: selected.value,
                 pay_cycle: payCycle.value,
+                start_date: startDate.value || undefined,
+                ...(isEmbed.value ? { embed: 1 } : {}),
                 ...(props.edit
                     ? { edit_from: props.edit.from, edit_to: props.edit.to }
                     : {}),
@@ -1314,6 +1318,8 @@ watch(selectedMonthKeys, () => {
     syncDefaultMaterialChecks();
 });
 
+const isEmbed = computed(() => !!props.embed);
+
 const form = useForm({
     course_ids: [] as number[],
     pay_cycle: 'quarterly' as 'monthly' | 'quarterly' | 'annual',
@@ -1332,6 +1338,7 @@ const form = useForm({
     edit_from: props.edit?.from ?? null,
     edit_to: props.edit?.to ?? null,
     return_grade_level_id: props.return_grade_level_id ?? null,
+    embed: !!props.embed,
     course_months: {} as Record<number, string[]>,
 });
 
@@ -2210,12 +2217,42 @@ const submit = () => {
               selected.value.map((id) => [id, courseMonthKeys.value[id] ?? []]),
           )
         : {};
+    form.embed = isEmbed.value;
     form.post(`/student-payments/${props.student.id}/quote`, {
         preserveScroll: true,
     });
 };
 
+const notifyEmbedParentSaved = () => {
+    if (!isEmbed.value || typeof window === 'undefined') {
+        return;
+    }
+    if (window.parent === window) {
+        return;
+    }
+    window.parent.postMessage(
+        {
+            type: 'km999:student-payment-saved',
+            student_id: props.student?.id ?? null,
+            message:
+                (page.props.flash as { success?: string } | undefined)?.success ??
+                '已確認收款',
+        },
+        window.location.origin,
+    );
+};
+
+onMounted(() => {
+    if (isEmbed.value) {
+        document.body.classList.add('payment-embed');
+    }
+    if (props.embed_saved) {
+        notifyEmbedParentSaved();
+    }
+});
+
 onBeforeUnmount(() => {
+    document.body.classList.remove('payment-embed');
     if (timer) {
         clearTimeout(timer);
     }
@@ -2240,8 +2277,11 @@ defineOptions({
 <template>
     <Head :title="isEditMode ? '編輯收款' : '新增收款'" />
 
-    <div class="page-shell w-full text-base [&_.text-xs]:text-sm [&_.text-sm]:text-base">
-        <div class="mb-2">
+    <div
+        class="page-shell w-full text-base [&_.text-xs]:text-sm [&_.text-sm]:text-base"
+        :class="isEmbed ? 'px-3 py-3 sm:px-4' : ''"
+    >
+        <div v-if="!isEmbed" class="mb-2">
             <Link
                 :href="editBackHref"
                 class="text-base text-primary underline-offset-4 hover:underline"
@@ -2257,11 +2297,19 @@ defineOptions({
         </div>
 
         <PageHeader
-            :title="isEditMode ? `編輯收款｜${editContext?.period_label}` : '新增收款／報名計價'"
+            :title="
+                isEmbed
+                    ? `編輯收款｜${student ? `${student.student_code ?? ''} ${student.name}`.trim() : ''}`
+                    : isEditMode
+                      ? `編輯收款｜${editContext?.period_label}`
+                      : '新增收款／報名計價'
+            "
             :description="
-                isEditMode
-                    ? '可重新選擇科目、繳別、月份、教材與優惠；儲存後會取代原本這一期的收款紀錄（收款日與收款人保留）。'
-                    : '選擇學生、科目與帳期月份後，右側試算確認金額即可收款。'
+                isEmbed
+                    ? '調整科目、繳別、月份、教材與優惠後，右側試算會即時更新；確認後儲存。'
+                    : isEditMode
+                      ? '可重新選擇科目、繳別、月份、教材與優惠；儲存後會取代原本這一期的收款紀錄（收款日與收款人保留）。'
+                      : '選擇學生、科目與帳期月份後，右側試算確認金額即可收款。'
             "
         />
 
