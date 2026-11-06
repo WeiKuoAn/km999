@@ -84,7 +84,7 @@ const deleteCourse = (row: CourseRow) => {
     <div class="page-shell flex h-full flex-1 flex-col gap-6 overflow-x-auto">
         <PageHeader
             :title="`${student.name} · 課程與行事曆`"
-            description="依收款帳期顯示進行中課程；停修只取消未繳，已繳紀錄仍留在繳費明細。下方為該生課程週行事曆。"
+            description="有收款紀錄的科目都會列出（各科繳費期別可不相同）；停修只取消未繳，已繳仍留在繳費明細。下方為該生課程週行事曆。"
         >
             <template #actions>
                 <Button variant="outline" as-child>

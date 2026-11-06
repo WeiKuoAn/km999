@@ -541,10 +541,8 @@ class StudentController extends Controller
         $student->loadMissing('gradeLevel:id,name');
         $gradeName = $student->gradeLevel?->name;
 
-        $today = Carbon::today();
-        $currentKey = ((int) $today->year) * 12 + (int) $today->month;
-
-        // 進行中課程：有未繳，或帳期含本月（含已繳當期）；已停修者不列入
+        // 進行中課程：有未取消的收款帳期即顯示（各科繳費期別可不相同）；
+        // 已停修者不列入。勿要求「帳期含本月」，否則先繳完前期的科會從列表消失。
         $droppedCourseIds = [];
         if (Schema::hasTable('student_course_drops')) {
             $droppedCourseIds = StudentCourseDrop::query()
@@ -559,10 +557,6 @@ class StudentController extends Controller
             ->where('status', '!=', 'cancelled')
             ->whereNotNull('course_id')
             ->when($droppedCourseIds !== [], fn ($q) => $q->whereNotIn('course_id', $droppedCourseIds))
-            ->where(function ($query) use ($currentKey): void {
-                $query->where('status', 'unpaid')
-                    ->orWhereRaw('(billing_year * 12 + billing_month) >= ?', [$currentKey]);
-            })
             ->distinct()
             ->pluck('course_id')
             ->map(fn ($id) => (int) $id)

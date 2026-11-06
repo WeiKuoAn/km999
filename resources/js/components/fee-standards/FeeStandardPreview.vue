@@ -22,20 +22,28 @@ const displayFooter = computed(() => {
     return note !== '' ? note : props.defaultFooter;
 });
 
-const displayItems = computed(() =>
-    props.items.filter((item) => {
-        if (item.kind === 'table') {
-            return (
-                item.label.trim() !== '' ||
+const displayChecks = computed(() =>
+    props.items.filter(
+        (item) =>
+            item.kind !== 'table' &&
+            (item.label.trim() !== '' || item.detail.trim() !== ''),
+    ),
+);
+
+const displayTables = computed(() =>
+    props.items.filter(
+        (item) =>
+            item.kind === 'table' &&
+            (item.label.trim() !== '' ||
                 item.table_headers.some((h) => h.trim() !== '') ||
                 item.table_rows.some((row) =>
                     row.some((cell) => (cell ?? '').trim() !== ''),
-                )
-            );
-        }
+                )),
+    ),
+);
 
-        return item.label.trim() !== '' || item.detail.trim() !== '';
-    }),
+const isEmpty = computed(
+    () => displayChecks.value.length === 0 && displayTables.value.length === 0,
 );
 
 const labelWithColon = (label: string): string => {
@@ -69,71 +77,77 @@ const labelWithColon = (label: string): string => {
             同學
         </p>
 
-        <div v-if="displayItems.length === 0" class="mb-6 text-sm text-neutral-500">
-            請在左側新增勾選項目或表格，預覽會即時顯示。
+        <div v-if="isEmpty" class="mb-6 text-sm text-neutral-500">
+            請在左側分別新增勾選項目或收費表格，預覽會即時顯示。
         </div>
 
-        <template v-for="(item, i) in displayItems" :key="i">
-            <div v-if="item.kind === 'table'" class="mb-5">
-                <p
-                    v-if="item.label.trim()"
-                    class="mb-2 text-[15px] tracking-wide sm:text-base"
-                    :style="{
-                        color: item.heading_color || '#1d4ed8',
-                    }"
-                >
-                    {{ item.label.trim() }}
+        <div
+            v-for="(item, i) in displayChecks"
+            :key="`check-${i}`"
+            class="mb-5 flex gap-2"
+        >
+            <span
+                class="mt-0.5 shrink-0 select-none text-lg leading-none text-neutral-800"
+                aria-hidden="true"
+                >□</span
+            >
+            <div class="min-w-0 flex-1">
+                <p class="text-[15px] leading-snug sm:text-base">
+                    {{ labelWithColon(item.label) }}
                 </p>
-                <table
-                    class="w-full border-collapse text-center text-[12px] sm:text-[13px]"
+                <p
+                    v-if="item.detail.trim()"
+                    class="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-neutral-700 sm:text-[15px]"
                 >
-                    <thead>
-                        <tr class="bg-[#ffe566]">
-                            <th
-                                v-for="(header, ci) in item.table_headers"
-                                :key="`ph-${i}-${ci}`"
-                                class="border border-neutral-700 px-2 py-1.5 font-medium"
-                            >
-                                {{ header.trim() || `欄${ci + 1}` }}
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr
-                            v-for="(row, ri) in item.table_rows"
-                            :key="`pr-${i}-${ri}`"
-                        >
-                            <td
-                                v-for="(_h, ci) in item.table_headers"
-                                :key="`pc-${i}-${ri}-${ci}`"
-                                class="border border-neutral-700 px-2 py-1.5"
-                            >
-                                {{ (row[ci] ?? '').trim() || '　' }}
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
+                    {{ item.detail.trim() }}
+                </p>
             </div>
+        </div>
 
-            <div v-else class="mb-5 flex gap-2">
-                <span
-                    class="mt-0.5 shrink-0 select-none text-lg leading-none text-neutral-800"
-                    aria-hidden="true"
-                    >□</span
-                >
-                <div class="min-w-0 flex-1">
-                    <p class="text-[15px] leading-snug sm:text-base">
-                        {{ labelWithColon(item.label) }}
-                    </p>
-                    <p
-                        v-if="item.detail.trim()"
-                        class="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-neutral-700 sm:text-[15px]"
+        <div
+            v-for="(item, i) in displayTables"
+            :key="`table-${i}`"
+            class="mb-5"
+        >
+            <p
+                v-if="item.label.trim()"
+                class="mb-2 text-[15px] tracking-wide sm:text-base"
+                :style="{
+                    color: item.heading_color || '#1d4ed8',
+                }"
+            >
+                {{ item.label.trim() }}
+            </p>
+            <table
+                class="w-full border-collapse text-center text-[12px] sm:text-[13px]"
+            >
+                <thead>
+                    <tr class="bg-[#ffe566]">
+                        <th
+                            v-for="(header, ci) in item.table_headers"
+                            :key="`ph-${i}-${ci}`"
+                            class="border border-neutral-700 px-2 py-1.5 font-medium"
+                        >
+                            {{ header.trim() || `欄${ci + 1}` }}
+                        </th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr
+                        v-for="(row, ri) in item.table_rows"
+                        :key="`pr-${i}-${ri}`"
                     >
-                        {{ item.detail.trim() }}
-                    </p>
-                </div>
-            </div>
-        </template>
+                        <td
+                            v-for="(_h, ci) in item.table_headers"
+                            :key="`pc-${i}-${ri}-${ci}`"
+                            class="border border-neutral-700 px-2 py-1.5"
+                        >
+                            {{ (row[ci] ?? '').trim() || '　' }}
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
 
         <p class="mt-8 text-base sm:text-lg">
             合計：

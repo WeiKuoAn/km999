@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /* eslint-disable vue/no-mutating-props -- form 是父頁 Inertia useForm */
 import type { InertiaForm } from '@inertiajs/vue3';
+import { computed } from 'vue';
 import { Plus, Table2, Trash2 } from 'lucide-vue-next';
 import FeeStandardPreview from '@/components/fee-standards/FeeStandardPreview.vue';
 import InputError from '@/components/InputError.vue';
@@ -11,24 +12,62 @@ import {
     FEE_STANDARD_HEADING_COLORS,
     emptyCheckItem,
     emptyTableItem,
+    mergeFeeStandardItems,
     type FeeStandardFormData,
     type FeeStandardFormItem,
 } from '@/lib/feeStandardForm';
 
-defineProps<{
+const props = defineProps<{
     form: InertiaForm<FeeStandardFormData>;
     academicYears: Array<{ id: number; year_code: string; name: string }>;
     gradeLevels: Array<{ id: number; name: string }>;
     defaultFooter: string;
 }>();
 
-const addCheckItem = (form: InertiaForm<FeeStandardFormData>) => {
-    form.items.push(emptyCheckItem(form.items.length));
+const previewItems = computed(() => mergeFeeStandardItems(props.form));
+
+const fieldError = (path: string): string | undefined =>
+    (props.form.errors as Record<string, string | undefined>)[path];
+
+/** 存檔後 items 為「勾選在前、表格在後」，對回錯誤索引 */
+const checkError = (index: number, suffix: string): string | undefined =>
+    fieldError(`items.${index}.${suffix}`);
+
+const tableError = (index: number, suffix: string): string | undefined =>
+    fieldError(`items.${props.form.check_items.length + index}.${suffix}`);
+
+const addCheckItem = () => {
+    props.form.check_items.push(emptyCheckItem(props.form.check_items.length));
 };
 
-const addTableItem = (form: InertiaForm<FeeStandardFormData>) => {
-    form.items.push(emptyTableItem(form.items.length));
+const addTableItem = () => {
+    props.form.tables.push(emptyTableItem(props.form.tables.length));
 };
+
+const removeCheckItem = (index: number) => {
+    if (props.form.check_items.length <= 1 && props.form.tables.length === 0) {
+        return;
+    }
+    props.form.check_items.splice(index, 1);
+};
+
+const removeTableItem = (index: number) => {
+    if (props.form.tables.length <= 1 && props.form.check_items.length === 0) {
+        return;
+    }
+    // 若沒有勾選、只剩最後一個表格，刪掉後補一個空勾選以免整單空白
+    props.form.tables.splice(index, 1);
+    if (props.form.check_items.length === 0 && props.form.tables.length === 0) {
+        props.form.check_items.push(emptyCheckItem(0));
+    }
+};
+
+const canRemoveCheck = computed(
+    () =>
+        props.form.check_items.length > 1 || props.form.tables.length > 0,
+);
+
+const canRemoveTable = computed(() => props.form.tables.length > 0);
 
 const addTableRow = (item: FeeStandardFormItem) => {
     const cols = Math.max(2, item.table_headers.length || 3);
@@ -68,7 +107,7 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                 <div class="border-b pb-3">
                     <h2 class="text-sm font-semibold">基本資料</h2>
                     <p class="mt-0.5 text-xs text-muted-foreground">
-                        依學年／年級建立一張家長勾選用收費標準單；也可插入黃表頭收費表格。
+                        依學年／年級建立收費標準單；勾選項目與表格分開設定。
                     </p>
                 </div>
 
@@ -172,254 +211,258 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                 </label>
             </section>
 
+            <!-- ① 勾選項目 -->
             <section class="space-y-4 rounded-xl border p-4 sm:p-5">
                 <div
                     class="flex flex-wrap items-start justify-between gap-2 border-b pb-3"
                 >
                     <div>
-                        <h2 class="text-sm font-semibold">內容區塊</h2>
+                        <h2 class="text-sm font-semibold">勾選項目</h2>
                         <p class="mt-0.5 text-xs text-muted-foreground">
-                            勾選項目會印 □；表格會印黃表頭三欄（可增刪欄列），可混用。
+                            主列為項目名稱；副列可寫金額公式。PDF 會印空白
+                            □ 給家長勾選。
                         </p>
                     </div>
-                    <div class="flex flex-wrap gap-2">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            @click="addCheckItem(form)"
-                        >
-                            <Plus class="size-4" />
-                            新增勾選
-                        </Button>
-                        <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            @click="addTableItem(form)"
-                        >
-                            <Table2 class="size-4" />
-                            新增表格
-                        </Button>
-                    </div>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        @click="addCheckItem"
+                    >
+                        <Plus class="size-4" />
+                        新增勾選
+                    </Button>
                 </div>
 
                 <div
-                    v-for="(item, i) in form.items"
-                    :key="i"
+                    v-if="form.check_items.length === 0"
+                    class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground"
+                >
+                    目前沒有勾選項目（可只使用下方表格）。
+                </div>
+
+                <div
+                    v-for="(item, i) in form.check_items"
+                    :key="`check-${i}`"
                     class="space-y-2 rounded-md border bg-muted/30 p-3"
                 >
                     <div class="flex items-center justify-between gap-2">
                         <p class="text-xs font-medium text-muted-foreground">
-                            {{
-                                item.kind === 'table'
-                                    ? `表格 ${i + 1}`
-                                    : `勾選 ${i + 1}`
-                            }}
+                            勾選 {{ i + 1 }}
                         </p>
                         <Button
                             type="button"
                             variant="ghost"
                             size="sm"
                             class="text-destructive"
-                            :disabled="form.items.length <= 1"
-                            @click="form.items.splice(i, 1)"
+                            :disabled="!canRemoveCheck"
+                            @click="removeCheckItem(i)"
+                        >
+                            <Trash2 class="size-4" />
+                            刪除
+                        </Button>
+                    </div>
+                    <div class="grid gap-1.5">
+                        <Label :for="`check-label-${i}`">主列</Label>
+                        <Input
+                            :id="`check-label-${i}`"
+                            v-model="item.label"
+                            placeholder="例：理化科研班首期 7-10 月優惠"
+                            required
+                        />
+                        <InputError :message="checkError(i, 'label')" />
+                    </div>
+                    <div class="grid gap-1.5">
+                        <Label :for="`check-detail-${i}`">副列（選填）</Label>
+                        <textarea
+                            :id="`check-detail-${i}`"
+                            v-model="item.detail"
+                            rows="2"
+                            class="min-h-[3.5rem] w-full rounded-md border px-3 py-2 text-sm"
+                            placeholder="例：訂金 500 元(已繳) + 學費 12000 元 (含教材) = 11500 元"
+                        />
+                    </div>
+                </div>
+            </section>
+
+            <!-- ② 收費表格 -->
+            <section class="space-y-4 rounded-xl border p-4 sm:p-5">
+                <div
+                    class="flex flex-wrap items-start justify-between gap-2 border-b pb-3"
+                >
+                    <div>
+                        <h2 class="text-sm font-semibold">收費表格</h2>
+                        <p class="mt-0.5 text-xs text-muted-foreground">
+                            獨立於勾選項目；印出黃表頭表格（可增刪欄列）。預覽／PDF
+                            會排在勾選項目之後。
+                        </p>
+                    </div>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        @click="addTableItem"
+                    >
+                        <Table2 class="size-4" />
+                        新增表格
+                    </Button>
+                </div>
+
+                <div
+                    v-if="form.tables.length === 0"
+                    class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground"
+                >
+                    尚未新增表格。需要如「英數雙科」那類表格式收費時再新增。
+                </div>
+
+                <div
+                    v-for="(item, i) in form.tables"
+                    :key="`table-${i}`"
+                    class="space-y-2 rounded-md border bg-muted/30 p-3"
+                >
+                    <div class="flex items-center justify-between gap-2">
+                        <p class="text-xs font-medium text-muted-foreground">
+                            表格 {{ i + 1 }}
+                        </p>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            class="text-destructive"
+                            :disabled="!canRemoveTable"
+                            @click="removeTableItem(i)"
                         >
                             <Trash2 class="size-4" />
                             刪除
                         </Button>
                     </div>
 
-                    <template v-if="item.kind === 'table'">
-                        <div class="grid gap-3 sm:grid-cols-[1fr_auto]">
-                            <div class="grid gap-1.5">
-                                <Label :for="`item-label-${i}`"
-                                    >區塊標題</Label
-                                >
-                                <Input
-                                    :id="`item-label-${i}`"
-                                    v-model="item.label"
-                                    placeholder="例：英文+數學雙科"
-                                    required
-                                />
-                                <InputError
-                                    :message="
-                                        (
-                                            form.errors as Record<
-                                                string,
-                                                string | undefined
-                                            >
-                                        )[`items.${i}.label`]
-                                    "
-                                />
-                            </div>
-                            <div class="grid gap-1.5">
-                                <Label :for="`item-color-${i}`">標題顏色</Label>
-                                <select
-                                    :id="`item-color-${i}`"
-                                    v-model="item.heading_color"
-                                    class="h-9 rounded-md border px-3"
-                                >
-                                    <option
-                                        v-for="c in FEE_STANDARD_HEADING_COLORS"
-                                        :key="c.value"
-                                        :value="c.value"
-                                    >
-                                        {{ c.label }}
-                                    </option>
-                                </select>
-                            </div>
+                    <div class="grid gap-3 sm:grid-cols-[1fr_auto]">
+                        <div class="grid gap-1.5">
+                            <Label :for="`table-label-${i}`">區塊標題</Label>
+                            <Input
+                                :id="`table-label-${i}`"
+                                v-model="item.label"
+                                placeholder="例：英文+數學雙科"
+                                required
+                            />
+                            <InputError :message="tableError(i, 'label')" />
                         </div>
+                        <div class="grid gap-1.5">
+                            <Label :for="`table-color-${i}`">標題顏色</Label>
+                            <select
+                                :id="`table-color-${i}`"
+                                v-model="item.heading_color"
+                                class="h-9 rounded-md border px-3"
+                            >
+                                <option
+                                    v-for="c in FEE_STANDARD_HEADING_COLORS"
+                                    :key="c.value"
+                                    :value="c.value"
+                                >
+                                    {{ c.label }}
+                                </option>
+                            </select>
+                        </div>
+                    </div>
 
-                        <div class="overflow-x-auto rounded-md border bg-white">
-                            <table class="w-full min-w-[28rem] text-sm">
-                                <thead>
-                                    <tr class="bg-[#ffe566]">
-                                        <th
-                                            v-for="(header, ci) in item.table_headers"
-                                            :key="`h-${i}-${ci}`"
-                                            class="border p-1.5 align-top"
-                                        >
-                                            <div class="space-y-1">
-                                                <Input
-                                                    v-model="
-                                                        item.table_headers[ci]
-                                                    "
-                                                    class="h-8 bg-white/80 text-center text-xs"
-                                                    :placeholder="`欄 ${ci + 1}`"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    class="text-[11px] text-muted-foreground hover:text-destructive disabled:opacity-40"
-                                                    :disabled="
-                                                        item.table_headers
-                                                            .length <= 2
-                                                    "
-                                                    @click="
-                                                        removeTableColumn(
-                                                            item,
-                                                            ci,
-                                                        )
-                                                    "
-                                                >
-                                                    刪欄
-                                                </button>
-                                            </div>
-                                        </th>
-                                        <th
-                                            class="w-16 border p-1.5 text-center text-xs font-normal text-muted-foreground"
-                                        >
-                                            列
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr
-                                        v-for="(row, ri) in item.table_rows"
-                                        :key="`r-${i}-${ri}`"
+                    <div class="overflow-x-auto rounded-md border bg-white">
+                        <table class="w-full min-w-[28rem] text-sm">
+                            <thead>
+                                <tr class="bg-[#ffe566]">
+                                    <th
+                                        v-for="(header, ci) in item.table_headers"
+                                        :key="`h-${i}-${ci}`"
+                                        class="border p-1.5 align-top"
                                     >
-                                        <td
-                                            v-for="(_cell, ci) in item.table_headers"
-                                            :key="`c-${i}-${ri}-${ci}`"
-                                            class="border p-1"
-                                        >
+                                        <div class="space-y-1">
                                             <Input
-                                                v-model="row[ci]"
-                                                class="h-8 text-xs"
-                                                placeholder="內容"
+                                                v-model="item.table_headers[ci]"
+                                                class="h-8 bg-white/80 text-center text-xs"
+                                                :placeholder="`欄 ${ci + 1}`"
                                             />
-                                        </td>
-                                        <td class="border p-1 text-center">
                                             <button
                                                 type="button"
                                                 class="text-[11px] text-muted-foreground hover:text-destructive disabled:opacity-40"
                                                 :disabled="
-                                                    item.table_rows.length <= 1
+                                                    item.table_headers.length <=
+                                                    2
                                                 "
-                                                @click="removeTableRow(item, ri)"
+                                                @click="
+                                                    removeTableColumn(item, ci)
+                                                "
                                             >
-                                                刪
+                                                刪欄
                                             </button>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <div class="flex flex-wrap gap-2">
-                            <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                @click="addTableRow(item)"
-                            >
-                                新增一列
-                            </Button>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                :disabled="item.table_headers.length >= 6"
-                                @click="addTableColumn(item)"
-                            >
-                                新增一欄
-                            </Button>
-                        </div>
-                        <InputError
-                            :message="
-                                (
-                                    form.errors as Record<
-                                        string,
-                                        string | undefined
+                                        </div>
+                                    </th>
+                                    <th
+                                        class="w-16 border p-1.5 text-center text-xs font-normal text-muted-foreground"
                                     >
-                                )[`items.${i}.table_rows`] ||
-                                (
-                                    form.errors as Record<
-                                        string,
-                                        string | undefined
+                                        列
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="(row, ri) in item.table_rows"
+                                    :key="`r-${i}-${ri}`"
+                                >
+                                    <td
+                                        v-for="(_cell, ci) in item.table_headers"
+                                        :key="`c-${i}-${ri}-${ci}`"
+                                        class="border p-1"
                                     >
-                                )[`items.${i}.table_headers`]
-                            "
-                        />
-                    </template>
-
-                    <template v-else>
-                        <div class="grid gap-1.5">
-                            <Label :for="`item-label-${i}`">主列</Label>
-                            <Input
-                                :id="`item-label-${i}`"
-                                v-model="item.label"
-                                placeholder="例：理化科研班首期 7-10 月優惠"
-                                required
-                            />
-                            <InputError
-                                :message="
-                                    (
-                                        form.errors as Record<
-                                            string,
-                                            string | undefined
+                                        <Input
+                                            v-model="row[ci]"
+                                            class="h-8 text-xs"
+                                            placeholder="內容"
+                                        />
+                                    </td>
+                                    <td class="border p-1 text-center">
+                                        <button
+                                            type="button"
+                                            class="text-[11px] text-muted-foreground hover:text-destructive disabled:opacity-40"
+                                            :disabled="
+                                                item.table_rows.length <= 1
+                                            "
+                                            @click="removeTableRow(item, ri)"
                                         >
-                                    )[`items.${i}.label`]
-                                "
-                            />
-                        </div>
-                        <div class="grid gap-1.5">
-                            <Label :for="`item-detail-${i}`">副列（選填）</Label>
-                            <textarea
-                                :id="`item-detail-${i}`"
-                                v-model="item.detail"
-                                rows="2"
-                                class="min-h-[3.5rem] w-full rounded-md border px-3 py-2 text-sm"
-                                placeholder="例：訂金 500 元(已繳) + 學費 12000 元 (含教材) = 11500 元"
-                            />
-                        </div>
-                    </template>
+                                            刪
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            @click="addTableRow(item)"
+                        >
+                            新增一列
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            :disabled="item.table_headers.length >= 6"
+                            @click="addTableColumn(item)"
+                        >
+                            新增一欄
+                        </Button>
+                    </div>
+                    <InputError
+                        :message="
+                            tableError(i, 'table_rows') ||
+                            tableError(i, 'table_headers')
+                        "
+                    />
                 </div>
-                <InputError
-                    :message="
-                        (form.errors as Record<string, string | undefined>)
-                            .items
-                    "
-                />
+
+                <InputError :message="fieldError('items')" />
             </section>
         </div>
 
@@ -438,7 +481,7 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                     :deadline-label="form.deadline_label"
                     :footer-note="form.footer_note"
                     :default-footer="defaultFooter"
-                    :items="form.items"
+                    :items="previewItems"
                 />
             </div>
         </aside>

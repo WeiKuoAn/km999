@@ -4,6 +4,7 @@ import FeeStandardTemplateFields from '@/components/fee-standards/FeeStandardTem
 import { Button } from '@/components/ui/button';
 import {
     emptyCheckItem,
+    feeStandardItemsPayload,
     type FeeStandardFormData,
 } from '@/lib/feeStandardForm';
 
@@ -24,7 +25,8 @@ const form = useForm<FeeStandardFormData>({
     footer_note: props.defaultFooter,
     is_active: true,
     sort_order: 0,
-    items: [emptyCheckItem(0)],
+    check_items: [emptyCheckItem(0)],
+    tables: [],
 });
 
 defineOptions({
@@ -39,23 +41,17 @@ defineOptions({
 const submit = () => {
     form
         .transform((data) => ({
-            ...data,
             academic_year_id:
                 data.academic_year_id === ''
                     ? null
                     : Number(data.academic_year_id),
             grade_level_id: Number(data.grade_level_id),
-            items: data.items.map((item, i) => ({
-                kind: item.kind === 'table' ? 'table' : 'check',
-                label: item.label,
-                heading_color:
-                    item.kind === 'table' ? item.heading_color || null : null,
-                detail: item.kind === 'table' ? null : item.detail,
-                table_headers:
-                    item.kind === 'table' ? item.table_headers : null,
-                table_rows: item.kind === 'table' ? item.table_rows : null,
-                sort_order: i,
-            })),
+            title: data.title,
+            deadline_label: data.deadline_label,
+            footer_note: data.footer_note,
+            is_active: data.is_active,
+            sort_order: data.sort_order,
+            items: feeStandardItemsPayload(data),
         }))
         .post('/fee-standard-templates');
 };

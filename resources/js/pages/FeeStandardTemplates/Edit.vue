@@ -3,8 +3,8 @@ import { Head, Link, useForm } from '@inertiajs/vue3';
 import FeeStandardTemplateFields from '@/components/fee-standards/FeeStandardTemplateFields.vue';
 import { Button } from '@/components/ui/button';
 import {
-    emptyCheckItem,
-    emptyTableItem,
+    feeStandardItemsPayload,
+    splitFeeStandardItems,
     type FeeStandardFormData,
 } from '@/lib/feeStandardForm';
 
@@ -33,6 +33,8 @@ const props = defineProps<{
     defaultFooter: string;
 }>();
 
+const split = splitFeeStandardItems(props.template.items);
+
 const form = useForm<FeeStandardFormData>({
     academic_year_id: props.template.academic_year_id
         ? String(props.template.academic_year_id)
@@ -43,43 +45,8 @@ const form = useForm<FeeStandardFormData>({
     footer_note: props.template.footer_note ?? '',
     is_active: props.template.is_active,
     sort_order: props.template.sort_order,
-    items:
-        props.template.items.length > 0
-            ? props.template.items.map((item, i) => {
-                  if (item.kind === 'table') {
-                      const base = emptyTableItem(item.sort_order ?? i);
-                      const headers =
-                          item.table_headers && item.table_headers.length >= 2
-                              ? [...item.table_headers]
-                              : base.table_headers;
-                      const rows =
-                          item.table_rows && item.table_rows.length > 0
-                              ? item.table_rows.map((row) => {
-                                    const cells = [...row];
-                                    while (cells.length < headers.length) {
-                                        cells.push('');
-                                    }
-                                    return cells.slice(0, headers.length);
-                                })
-                              : [Array.from({ length: headers.length }, () => '')];
-                      return {
-                          ...base,
-                          label: item.label,
-                          heading_color:
-                              item.heading_color || base.heading_color,
-                          table_headers: headers,
-                          table_rows: rows,
-                          sort_order: item.sort_order ?? i,
-                      };
-                  }
-                  return {
-                      ...emptyCheckItem(item.sort_order ?? i),
-                      label: item.label,
-                      detail: item.detail ?? '',
-                      sort_order: item.sort_order ?? i,
-                  };
-              })
-            : [emptyCheckItem(0)],
+    check_items: split.check_items,
+    tables: split.tables,
 });
 
 defineOptions({
@@ -94,23 +61,17 @@ defineOptions({
 const submit = () => {
     form
         .transform((data) => ({
-            ...data,
             academic_year_id:
                 data.academic_year_id === ''
                     ? null
                     : Number(data.academic_year_id),
             grade_level_id: Number(data.grade_level_id),
-            items: data.items.map((item, i) => ({
-                kind: item.kind === 'table' ? 'table' : 'check',
-                label: item.label,
-                heading_color:
-                    item.kind === 'table' ? item.heading_color || null : null,
-                detail: item.kind === 'table' ? null : item.detail,
-                table_headers:
-                    item.kind === 'table' ? item.table_headers : null,
-                table_rows: item.kind === 'table' ? item.table_rows : null,
-                sort_order: i,
-            })),
+            title: data.title,
+            deadline_label: data.deadline_label,
+            footer_note: data.footer_note,
+            is_active: data.is_active,
+            sort_order: data.sort_order,
+            items: feeStandardItemsPayload(data),
         }))
         .put(`/fee-standard-templates/${props.template.id}`);
 };

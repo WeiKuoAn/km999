@@ -47,9 +47,15 @@ final class FeeStandardExport
             return [];
         }
 
+        // 勾選項目在前、表格在後（與編輯畫面兩區塊一致）
         $items = $template->items
-            ->map(fn ($item): array => $item->toExportArray())
+            ->sortBy(fn ($item): array => [
+                $item->isTable() ? 1 : 0,
+                (int) $item->sort_order,
+                (int) $item->id,
+            ])
             ->values()
+            ->map(fn ($item): array => $item->toExportArray())
             ->all();
 
         $title = (string) $template->title;
