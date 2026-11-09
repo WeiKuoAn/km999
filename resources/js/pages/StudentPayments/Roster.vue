@@ -329,7 +329,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="繳費名單"
-            description="先選年級，帳期會依「已繳下一期實際起始月」列出；選好即自動產生名單。"
+            description="先選年級，帳期會依「已繳下一期實際起始月」列出；選好即自動產生名單。短期課（有設定開課期間）為一次性，不會進入續期名單。"
         >
             <template #actions>
                 <Button variant="outline" as-child :disabled="!canPreview || !previewed">

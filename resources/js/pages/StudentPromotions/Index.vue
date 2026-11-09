@@ -28,6 +28,15 @@ type YearOption = {
     is_current: boolean;
 };
 type TargetSubject = { id: number; name: string; category: string | null };
+type AnnualPackage = {
+    fee_plan_id: number;
+    label: string;
+    total: number;
+    monthly_total: number;
+    start_month: number;
+    end_month: number;
+    ready: boolean;
+};
 type PromotionLog = {
     id: number;
     created_at: string | null;
@@ -70,6 +79,8 @@ const props = defineProps<{
     preview: PreviewRow[];
     target_subjects?: TargetSubject[];
     logs?: PromotionLog[];
+    needs_annual_dialog?: boolean;
+    annual_packages?: AnnualPackage[];
     filters: {
         from_grade_level_id: string;
         to_grade_level_id: string;
@@ -257,12 +268,50 @@ const form = useForm({
         student_id: number;
         course_ids: number[];
     }>,
+    annual_selections: [] as Array<{
+        student_id: number;
+        fee_plan_id: number | null;
+        note: string;
+    }>,
 });
 
 const individualOpen = ref(false);
 const individualRow = ref<PreviewRow | null>(null);
 const individualCourseIds = ref<number[]>([]);
 const individualError = ref('');
+
+const annualOpen = ref(false);
+const annualMode = ref<'batch' | 'individual'>('batch');
+const annualRows = ref<PreviewRow[]>([]);
+const annualSelections = reactive<
+    Record<number, { fee_plan_id: string; note: string }>
+>({});
+
+const needsAnnualDialog = computed(() => Boolean(props.needs_annual_dialog));
+const annualPackages = computed(() => props.annual_packages ?? []);
+
+const packageOptionLabel = (pack: AnnualPackage) =>
+    `${pack.label}（$${pack.total.toLocaleString()}｜${pack.start_month}–${pack.end_month}月）`;
+
+const initAnnualSelections = (rows: PreviewRow[]) => {
+    for (const key of Object.keys(annualSelections)) {
+        delete annualSelections[Number(key)];
+    }
+    for (const row of rows) {
+        annualSelections[row.id] = { fee_plan_id: '', note: '' };
+    }
+};
+
+const buildAnnualPayload = (rows: PreviewRow[]) =>
+    rows.map((row) => {
+        const sel = annualSelections[row.id] ?? { fee_plan_id: '', note: '' };
+        const raw = sel.fee_plan_id;
+        return {
+            student_id: row.id,
+            fee_plan_id: raw === '' ? null : Number(raw),
+            note: (sel.note ?? '').trim(),
+        };
+    });
 
 const openIndividual = (row: PreviewRow) => {
     if (!fromGrade.value || !toTarget.value) {
@@ -290,6 +339,97 @@ const toggleIndividualCourse = (courseId: number) => {
     }
 };
 
+const postPromotion = (opts: {
+    studentIds: number[];
+    graduate: boolean;
+    courseSelections: Array<{ student_id: number; course_ids: number[] }>;
+    annualSelections: Array<{
+        student_id: number;
+        fee_plan_id: number | null;
+        note: string;
+    }>;
+    onSuccess?: () => void;
+    onError?: (errors: Record<string, string>) => void;
+}) => {
+    form.from_grade_level_id = fromGrade.value;
+    form.to_grade_level_id = opts.graduate ? null : toTarget.value;
+    form.graduate = opts.graduate;
+    form.from_academic_year_id = fromYear.value || null;
+    form.status = status.value;
+    form.student_ids = opts.studentIds;
+    form.course_selections = opts.courseSelections;
+    form.annual_selections = opts.annualSelections;
+    form.post('/student-promotions', {
+        preserveScroll: true,
+        onSuccess: opts.onSuccess,
+        onError: (errors) => opts.onError?.(errors as Record<string, string>),
+    });
+};
+
+const openAnnualDialog = (mode: 'batch' | 'individual', rows: PreviewRow[]) => {
+    annualMode.value = mode;
+    annualRows.value = rows;
+    initAnnualSelections(rows);
+    annualOpen.value = true;
+};
+
+const confirmAnnualSubmit = () => {
+    const rows = annualRows.value;
+    if (rows.length === 0) {
+        return;
+    }
+
+    const annualPayload = buildAnnualPayload(rows);
+
+    if (annualMode.value === 'individual') {
+        const row = rows[0];
+        if (!row) {
+            return;
+        }
+        postPromotion({
+            studentIds: [row.id],
+            graduate: false,
+            courseSelections: [
+                {
+                    student_id: row.id,
+                    course_ids: [...individualCourseIds.value],
+                },
+            ],
+            annualSelections: annualPayload,
+            onSuccess: () => {
+                annualOpen.value = false;
+                individualOpen.value = false;
+                individualRow.value = null;
+            },
+            onError: (errors) => {
+                const key = `course_selections.${row.id}`;
+                individualError.value =
+                    errors[key] ??
+                    errors[`annual_selections.${row.id}`] ??
+                    errors.student_ids ??
+                    '轉檔失敗，請再試一次。';
+                annualOpen.value = false;
+            },
+        });
+        return;
+    }
+
+    postPromotion({
+        studentIds: rows.map((r) => r.id),
+        graduate: false,
+        courseSelections: selectedManualRows.value
+            .filter((row) => rows.some((r) => r.id === row.id))
+            .map((row) => ({
+                student_id: row.id,
+                course_ids: manualCourses[row.id] ?? [],
+            })),
+        annualSelections: annualPayload,
+        onSuccess: () => {
+            annualOpen.value = false;
+        },
+    });
+};
+
 const submitIndividual = () => {
     const row = individualRow.value;
     if (!row || !fromGrade.value || !toTarget.value) {
@@ -299,6 +439,11 @@ const submitIndividual = () => {
     const graduate = isGraduate() || row.action === 'graduate';
     if (!graduate && individualCourseIds.value.length === 0) {
         individualError.value = `請選擇${toGradeOption.value?.name ?? '新年級'}要修的課程（可保留原有科目並加選新科目）。`;
+        return;
+    }
+
+    if (!graduate && needsAnnualDialog.value) {
+        openAnnualDialog('individual', [row]);
         return;
     }
 
@@ -314,22 +459,18 @@ const submitIndividual = () => {
         return;
     }
 
-    form.from_grade_level_id = fromGrade.value;
-    form.to_grade_level_id = graduate ? null : toTarget.value;
-    form.graduate = graduate;
-    form.from_academic_year_id = fromYear.value || null;
-    form.status = status.value;
-    form.student_ids = [row.id];
-    form.course_selections = graduate
-        ? []
-        : [
-              {
-                  student_id: row.id,
-                  course_ids: [...individualCourseIds.value],
-              },
-          ];
-    form.post('/student-promotions', {
-        preserveScroll: true,
+    postPromotion({
+        studentIds: [row.id],
+        graduate,
+        courseSelections: graduate
+            ? []
+            : [
+                  {
+                      student_id: row.id,
+                      course_ids: [...individualCourseIds.value],
+                  },
+              ],
+        annualSelections: [],
         onSuccess: () => {
             individualOpen.value = false;
             individualRow.value = null;
@@ -337,8 +478,8 @@ const submitIndividual = () => {
         onError: (errors) => {
             const key = `course_selections.${row.id}`;
             individualError.value =
-                (errors as Record<string, string>)[key] ??
-                (errors as Record<string, string>).student_ids ??
+                errors[key] ??
+                errors.student_ids ??
                 '轉檔失敗，請再試一次。';
         },
     });
@@ -372,6 +513,15 @@ const submit = () => {
         }
     }
 
+    const selectedRows = props.preview.filter((r) =>
+        selectedIds.value.includes(r.id),
+    );
+
+    if (!isGraduate() && needsAnnualDialog.value) {
+        openAnnualDialog('batch', selectedRows);
+        return;
+    }
+
     const fromName = fromGradeOption.value?.name ?? '';
     const toName = isGraduate()
         ? '已畢業'
@@ -385,17 +535,15 @@ const submit = () => {
         return;
     }
 
-    form.from_grade_level_id = fromGrade.value;
-    form.to_grade_level_id = isGraduate() ? null : toTarget.value;
-    form.graduate = isGraduate();
-    form.from_academic_year_id = fromYear.value || null;
-    form.status = status.value;
-    form.student_ids = selectedIds.value;
-    form.course_selections = selectedManualRows.value.map((row) => ({
-        student_id: row.id,
-        course_ids: manualCourses[row.id] ?? [],
-    }));
-    form.post('/student-promotions', { preserveScroll: true });
+    postPromotion({
+        studentIds: selectedIds.value,
+        graduate: isGraduate(),
+        courseSelections: selectedManualRows.value.map((row) => ({
+            student_id: row.id,
+            course_ids: manualCourses[row.id] ?? [],
+        })),
+        annualSelections: [],
+    });
 };
 
 defineOptions({
@@ -410,7 +558,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="學生轉檔"
-            description="批次轉檔：科目不變可自動帶課；科目有變請勾選後於上方選課。右側「個別轉檔」可為單人調整課程（例：國一英文＋數學，升國二加選國文）。國三轉已畢業。"
+            description="批次轉檔：科目不變可自動帶課；科目有變請勾選後於上方選課。國二升國三時會跳出視窗登記年繳意向。右側「個別轉檔」可為單人調整課程。國三轉已畢業。"
         />
 
         <div
@@ -807,7 +955,112 @@ defineOptions({
                         :disabled="form.processing"
                         @click="submitIndividual"
                     >
-                        確認個別轉檔
+                        {{
+                            needsAnnualDialog
+                                ? '下一步：登記年繳'
+                                : '確認個別轉檔'
+                        }}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+
+        <Dialog
+            :open="annualOpen"
+            @update:open="
+                (v) => {
+                    annualOpen = v;
+                    if (!v) annualRows = [];
+                }
+            "
+        >
+            <DialogContent class="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+                <DialogHeader>
+                    <DialogTitle>國二 → 國三：登記年繳</DialogTitle>
+                    <DialogDescription>
+                        先記下每位學生是否走年繳方案（只登記意向，不會立刻開帳）。之後在「新增收款」再正式套用。
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div
+                    v-if="annualPackages.length === 0"
+                    class="rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-amber-900"
+                >
+                    尚無可用的國三年繳方案。請先至收費設定新增「年繳方案」，或全部選「不年繳」後繼續轉檔。
+                </div>
+
+                <div class="space-y-3">
+                    <div
+                        v-for="row in annualRows"
+                        :key="`annual-${row.id}`"
+                        class="rounded-lg border border-border bg-card p-3"
+                    >
+                        <div
+                            class="mb-2 flex flex-wrap items-baseline justify-between gap-2"
+                        >
+                            <p class="text-sm font-medium">
+                                {{ row.name }}
+                                <span
+                                    class="font-mono text-xs text-muted-foreground"
+                                >
+                                    {{ row.student_code }} →
+                                    {{ row.new_student_code ?? '—' }}
+                                </span>
+                            </p>
+                        </div>
+                        <div class="grid gap-2 sm:grid-cols-2">
+                            <div class="grid gap-1">
+                                <Label :for="`annual-plan-${row.id}`"
+                                    >年繳方案</Label
+                                >
+                                <select
+                                    :id="`annual-plan-${row.id}`"
+                                    v-model="
+                                        annualSelections[row.id].fee_plan_id
+                                    "
+                                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                                >
+                                    <option value="">不年繳</option>
+                                    <option
+                                        v-for="pack in annualPackages"
+                                        :key="pack.fee_plan_id"
+                                        :value="String(pack.fee_plan_id)"
+                                    >
+                                        {{ packageOptionLabel(pack) }}
+                                    </option>
+                                </select>
+                            </div>
+                            <div class="grid gap-1">
+                                <Label :for="`annual-note-${row.id}`"
+                                    >備註（選填）</Label
+                                >
+                                <input
+                                    :id="`annual-note-${row.id}`"
+                                    v-model="annualSelections[row.id].note"
+                                    type="text"
+                                    maxlength="500"
+                                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                                    placeholder="例：家長已確認全科年繳"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <DialogFooter class="gap-2 sm:gap-0">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        @click="annualOpen = false"
+                    >
+                        返回
+                    </Button>
+                    <Button
+                        type="button"
+                        :disabled="form.processing || annualRows.length === 0"
+                        @click="confirmAnnualSubmit"
+                    >
+                        確認轉檔並登記年繳
                     </Button>
                 </DialogFooter>
             </DialogContent>

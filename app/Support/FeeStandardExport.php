@@ -47,10 +47,10 @@ final class FeeStandardExport
             return [];
         }
 
-        // 勾選項目在前、表格在後（與編輯畫面兩區塊一致）
+        // 表格在前、勾選項目在後（與編輯畫面兩區塊一致）
         $items = $template->items
             ->sortBy(fn ($item): array => [
-                $item->isTable() ? 1 : 0,
+                $item->isTable() ? 0 : 1,
                 (int) $item->sort_order,
                 (int) $item->id,
             ])

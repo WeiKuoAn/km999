@@ -214,7 +214,7 @@ defineOptions({
             <div class="space-y-2 rounded-lg border p-4">
                 <Label class="text-base font-medium">短期開課期間</Label>
                 <p class="text-xs text-muted-foreground">
-                    選填。夏令營等短期課請設定「上課日起～結束日」；空白則視為長期課（不限日期）。
+                    選填。夏令營等短期課請設定「上課日起～結束日」；空白則視為長期課（不限日期）。短期課為一次性收費，繳完不會再出現在繳費名單。
                 </p>
                 <div class="grid gap-2 sm:grid-cols-2">
                     <div class="grid gap-2">

@@ -53,17 +53,17 @@ defineOptions({
     layout: {
         breadcrumbs: [
             { title: '學生收款', href: '/student-payments' },
-            { title: '調整收據／收款日', href: '#' },
+            { title: '收據輸入', href: '#' },
         ],
     },
 });
 </script>
 
 <template>
-    <Head title="調整收據／收款日" />
+    <Head title="收據輸入" />
     <div class="page-shell mx-auto w-full max-w-2xl">
         <PageHeader
-            :title="`調整收據／收款日｜${student.name}`"
+            :title="`收據輸入｜${student.name}`"
             description="已收款金額已鎖定。收費設定之後怎麼改，都不會改到這筆帳單；此頁只能改收據與收款日。"
         >
             <template #actions>

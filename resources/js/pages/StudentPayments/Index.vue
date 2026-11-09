@@ -239,7 +239,7 @@ defineOptions({
                             size="sm"
                             as-child
                         >
-                            <Link :href="receiptHref(row)">調整收據</Link>
+                            <Link :href="receiptHref(row)">收據輸入</Link>
                         </Button>
                         <Button
                             variant="outline"
@@ -324,7 +324,7 @@ defineOptions({
                                     :href="receiptHref(row)"
                                     class="text-primary underline-offset-4 hover:underline"
                                 >
-                                    調整收據
+                                    收據輸入
                                 </Link>
                                 <button
                                     type="button"

@@ -9,7 +9,8 @@ use Illuminate\Support\Facades\Schema;
 
 /**
  * 教材半年制：1–6＝H1、7–12＝H2。
- * 自動加收條件：帳期有勾該年 1 月（收 H1）或 7 月（收 H2）；已收過該半年則鎖定。
+ * 只在帳期勾選該年 1 月（收 H1）或 7 月（收 H2）時加收；其他月份不收。
+ * 已收過該半年則鎖定。
  */
 final class MaterialHalfYear
 {

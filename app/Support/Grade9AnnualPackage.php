@@ -36,33 +36,47 @@ final class Grade9AnnualPackage
     }
 
     /**
+     * @param  bool  $filterByYear  true＝只取「未指定學年」或指定學年；false＝不限學年（轉檔預覽未選學年時）
      * @return list<FeePlan>
      */
-    public static function packagePlansForStudent(Student $student): array
-    {
+    public static function packagePlansForGrade(
+        ?int $gradeLevelId,
+        ?int $academicYearId = null,
+        bool $filterByYear = true,
+    ): array {
         return FeePlan::query()
             ->with('courses:id,name')
             ->where('is_active', true)
             ->where('plan_kind', 'annual_package')
-            ->where(function ($builder) use ($student): void {
-                $builder->whereNull('grade_level_id')
-                    ->orWhere('grade_level_id', $student->grade_level_id);
-            })
-            ->where(function ($builder) use ($student): void {
-                $builder->whereNull('academic_year_id');
-                if ($student->academic_year_id !== null) {
-                    $builder->orWhere('academic_year_id', $student->academic_year_id);
+            ->where(function ($builder) use ($gradeLevelId): void {
+                $builder->whereNull('grade_level_id');
+                if ($gradeLevelId !== null) {
+                    $builder->orWhere('grade_level_id', $gradeLevelId);
                 }
             })
-            ->orderByRaw(
-                'CASE WHEN grade_level_id = ? THEN 0 ELSE 1 END',
-                [$student->grade_level_id]
+            ->when(
+                $filterByYear,
+                function ($q) use ($academicYearId): void {
+                    $q->where(function ($builder) use ($academicYearId): void {
+                        $builder->whereNull('academic_year_id');
+                        if ($academicYearId !== null) {
+                            $builder->orWhere('academic_year_id', $academicYearId);
+                        }
+                    });
+                }
             )
             ->when(
-                $student->academic_year_id !== null,
+                $gradeLevelId !== null,
+                fn ($q) => $q->orderByRaw(
+                    'CASE WHEN grade_level_id = ? THEN 0 ELSE 1 END',
+                    [$gradeLevelId]
+                )
+            )
+            ->when(
+                $academicYearId !== null,
                 fn ($q) => $q->orderByRaw(
                     'CASE WHEN academic_year_id = ? THEN 0 ELSE 1 END',
-                    [$student->academic_year_id]
+                    [$academicYearId]
                 )
             )
             ->orderBy('sort_order')
@@ -72,6 +86,19 @@ final class Grade9AnnualPackage
     }
 
     /**
+     * @return list<FeePlan>
+     */
+    public static function packagePlansForStudent(Student $student): array
+    {
+        return self::packagePlansForGrade(
+            $student->grade_level_id !== null ? (int) $student->grade_level_id : null,
+            $student->academic_year_id !== null ? (int) $student->academic_year_id : null,
+            true,
+        );
+    }
+
+    /**
+     * @param  list<FeePlan>  $plans
      * @return list<array{
      *   code:string,
      *   label:string,
@@ -85,10 +112,10 @@ final class Grade9AnnualPackage
      *   fee_plan_id:int
      * }>
      */
-    public static function packagesForStudent(Student $student): array
+    public static function serializePackages(array $plans): array
     {
         $out = [];
-        foreach (self::packagePlansForStudent($student) as $plan) {
+        foreach ($plans as $plan) {
             $ids = $plan->courses->pluck('id')->map(fn ($id) => (int) $id)->unique()->sort()->values()->all();
             $total = max(1, (int) ($plan->package_total ?? 0));
             $monthCount = max(1, CustomBillingPeriod::monthCount(
@@ -110,6 +137,49 @@ final class Grade9AnnualPackage
         }
 
         return $out;
+    }
+
+    /**
+     * @return list<array{
+     *   code:string,
+     *   label:string,
+     *   total:int,
+     *   monthly_total:int,
+     *   required_course_ids:list<int>,
+     *   required_count:int,
+     *   ready:bool,
+     *   start_month:int,
+     *   end_month:int,
+     *   fee_plan_id:int
+     * }>
+     */
+    public static function packagesForGrade(
+        ?int $gradeLevelId,
+        ?int $academicYearId = null,
+        bool $filterByYear = true,
+    ): array {
+        return self::serializePackages(
+            self::packagePlansForGrade($gradeLevelId, $academicYearId, $filterByYear)
+        );
+    }
+
+    /**
+     * @return list<array{
+     *   code:string,
+     *   label:string,
+     *   total:int,
+     *   monthly_total:int,
+     *   required_course_ids:list<int>,
+     *   required_count:int,
+     *   ready:bool,
+     *   start_month:int,
+     *   end_month:int,
+     *   fee_plan_id:int
+     * }>
+     */
+    public static function packagesForStudent(Student $student): array
+    {
+        return self::serializePackages(self::packagePlansForStudent($student));
     }
 
     /**

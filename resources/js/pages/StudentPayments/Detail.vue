@@ -214,7 +214,7 @@ defineOptions({
                         <Link :href="editHref">編輯</Link>
                     </Button>
                     <Button v-if="receiptHref" variant="outline" as-child>
-                        <Link :href="receiptHref">調整收據</Link>
+                        <Link :href="receiptHref">收據輸入</Link>
                     </Button>
                     <Button
                         v-if="renewal?.available"

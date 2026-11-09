@@ -67,4 +67,17 @@ class Student extends Model
     {
         return $this->hasMany(Reconciliation::class);
     }
+
+    public function annualIntents(): HasMany
+    {
+        return $this->hasMany(StudentAnnualIntent::class);
+    }
+
+    public function plannedAnnualIntent(): ?StudentAnnualIntent
+    {
+        return $this->annualIntents()
+            ->planned()
+            ->orderByDesc('id')
+            ->first();
+    }
 }

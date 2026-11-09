@@ -94,20 +94,23 @@ class FeeDiscount extends Model
         return sprintf('%s（折讓 %s）', $this->name, number_format($this->value));
     }
 
-    /** 依學費＋教材小計計算應折讓金額（整元、不超過小計） */
-    public function computeAllowance(int $subtotal): int
+    /**
+     * 依「學費」小計計算應折讓金額（整元、不超過學費）。
+     * 教材／耗材不參與折扣，呼叫端請傳 tuition_total。
+     */
+    public function computeAllowance(int $tuitionTotal): int
     {
-        $subtotal = max(0, $subtotal);
-        if ($subtotal <= 0 || $this->value <= 0) {
+        $tuitionTotal = max(0, $tuitionTotal);
+        if ($tuitionTotal <= 0 || $this->value <= 0) {
             return 0;
         }
 
         if ($this->type === self::TYPE_PERCENT) {
             $pct = min(100, max(0, $this->value));
 
-            return (int) min($subtotal, round($subtotal * $pct / 100));
+            return (int) min($tuitionTotal, round($tuitionTotal * $pct / 100));
         }
 
-        return (int) min($subtotal, $this->value);
+        return (int) min($tuitionTotal, $this->value);
     }
 }

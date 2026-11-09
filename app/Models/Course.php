@@ -37,6 +37,12 @@ class Course extends Model
         return $this->start_date === null && $this->end_date === null;
     }
 
+    /** 有設定短期開課期間＝一次性短期課（不進繳費續期名單） */
+    public function isShortTerm(): bool
+    {
+        return ! $this->dateRangeUnrestricted();
+    }
+
     /**
      * @return array{
      *   start_date:?string,

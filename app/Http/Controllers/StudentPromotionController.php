@@ -3,9 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\AcademicYear;
+use App\Models\FeePlan;
 use App\Models\GradeLevel;
 use App\Models\Student;
+use App\Models\StudentAnnualIntent;
 use App\Models\StudentPromotionLog;
+use App\Support\Grade9AnnualPackage;
 use App\Support\PromotionCourses;
 use App\Support\StudentCodeGenerator;
 use Illuminate\Http\RedirectResponse;
@@ -170,12 +173,31 @@ class StudentPromotionController extends Controller
             ])
             ->all();
 
+        $needsAnnualDialog = ! $graduate
+            && $fromGrade !== null
+            && $toGrade !== null
+            && $this->isGrade8($fromGrade)
+            && $this->isGrade9($toGrade);
+
+        $annualPackages = $needsAnnualDialog
+            ? array_values(array_filter(
+                Grade9AnnualPackage::packagesForGrade(
+                    $toGrade->id,
+                    $fromYearId,
+                    $fromYearId !== null,
+                ),
+                fn (array $p): bool => (bool) ($p['ready'] ?? false)
+            ))
+            : [];
+
         return Inertia::render('StudentPromotions/Index', [
             'grades' => $grades,
             'years' => $years,
             'preview' => $preview,
             'target_subjects' => $targetSubjects,
             'logs' => $this->recentLogs(),
+            'needs_annual_dialog' => $needsAnnualDialog,
+            'annual_packages' => $annualPackages,
             'filters' => [
                 'from_grade_level_id' => $fromGradeId === null ? '' : (string) $fromGradeId,
                 'to_grade_level_id' => $graduate ? '' : ($toGradeId === null ? '' : (string) $toGradeId),
@@ -200,6 +222,10 @@ class StudentPromotionController extends Controller
             'course_selections.*.student_id' => ['required', 'integer', 'exists:students,id'],
             'course_selections.*.course_ids' => ['nullable', 'array'],
             'course_selections.*.course_ids.*' => ['integer', 'exists:courses,id'],
+            'annual_selections' => ['nullable', 'array'],
+            'annual_selections.*.student_id' => ['required', 'integer', 'exists:students,id'],
+            'annual_selections.*.fee_plan_id' => ['nullable', 'integer', 'exists:fee_plans,id'],
+            'annual_selections.*.note' => ['nullable', 'string', 'max:500'],
         ]);
 
         $graduate = (bool) ($validated['graduate'] ?? false);
@@ -220,6 +246,50 @@ class StudentPromotionController extends Controller
         $toGrade = null;
         if (! $graduate) {
             $toGrade = GradeLevel::query()->findOrFail((int) $validated['to_grade_level_id']);
+        }
+
+        $needsAnnual = ! $graduate
+            && $toGrade !== null
+            && $this->isGrade8($fromGrade)
+            && $this->isGrade9($toGrade);
+
+        /** @var array<int, array{fee_plan_id:?int, note:?string}> $annualMap */
+        $annualMap = [];
+        if ($needsAnnual) {
+            $allowedPlanIds = array_fill_keys(
+                array_map(
+                    fn (array $p): int => (int) $p['fee_plan_id'],
+                    array_filter(
+                        Grade9AnnualPackage::packagesForGrade($toGrade->id, null, false),
+                        fn (array $p): bool => (bool) ($p['ready'] ?? false)
+                    )
+                ),
+                true
+            );
+            foreach ($validated['annual_selections'] ?? [] as $row) {
+                $sid = (int) ($row['student_id'] ?? 0);
+                if (! in_array($sid, $studentIds, true)) {
+                    continue;
+                }
+                $planId = isset($row['fee_plan_id']) && $row['fee_plan_id'] !== '' && $row['fee_plan_id'] !== null
+                    ? (int) $row['fee_plan_id']
+                    : null;
+                if ($planId !== null && ! isset($allowedPlanIds[$planId])) {
+                    throw ValidationException::withMessages([
+                        'annual_selections.'.$sid => '所選年繳方案不適用國三。',
+                    ]);
+                }
+                $note = isset($row['note']) ? trim((string) $row['note']) : null;
+                $annualMap[$sid] = [
+                    'fee_plan_id' => $planId,
+                    'note' => $note === '' ? null : $note,
+                ];
+            }
+            foreach ($studentIds as $sid) {
+                if (! array_key_exists($sid, $annualMap)) {
+                    $annualMap[$sid] = ['fee_plan_id' => null, 'note' => null];
+                }
+            }
         }
 
         $students = Student::query()
@@ -290,6 +360,8 @@ class StudentPromotionController extends Controller
             $toGrade,
             $graduate,
             $selectionMap,
+            $annualMap,
+            $needsAnnual,
             $actorId,
             &$count,
             &$autoCount,
@@ -359,6 +431,12 @@ class StudentPromotionController extends Controller
                     $courseNote = '科目有變，手動選課';
                 }
 
+                $annualNote = null;
+                if ($needsAnnual && array_key_exists($sid, $annualMap)) {
+                    $annualNote = $this->annualNoteLabel($annualMap[$sid]['fee_plan_id'] ?? null);
+                    $courseNote = trim($courseNote.'；'.$annualNote);
+                }
+
                 $oldCode = $student->student_code;
                 $oldStatus = $student->status;
                 $newCode = StudentCodeGenerator::rebuildKeepingSequence(
@@ -378,7 +456,7 @@ class StudentPromotionController extends Controller
 
                 PromotionCourses::applyAfterPromote($student->fresh(), $courseIds, $previousIds);
 
-                $this->writePromotionLog([
+                $log = $this->writePromotionLog([
                     'student_id' => $student->id,
                     'action' => 'promote',
                     'from_grade_level_id' => $fromGrade->id,
@@ -395,6 +473,15 @@ class StudentPromotionController extends Controller
                     'performed_by_user_id' => $actorId,
                     'note' => $courseNote,
                 ]);
+
+                if ($needsAnnual && array_key_exists($sid, $annualMap)) {
+                    $this->upsertAnnualIntent(
+                        $student->id,
+                        $annualMap[$sid],
+                        $actorId,
+                        $log?->id,
+                    );
+                }
                 $count++;
             }
         });
@@ -424,13 +511,76 @@ class StudentPromotionController extends Controller
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function writePromotionLog(array $payload): void
+    private function writePromotionLog(array $payload): ?StudentPromotionLog
     {
         if (! Schema::hasTable('student_promotion_logs')) {
+            return null;
+        }
+
+        return StudentPromotionLog::query()->create($payload);
+    }
+
+    /**
+     * @param  array{fee_plan_id:?int, note:?string}  $selection
+     */
+    private function upsertAnnualIntent(
+        int $studentId,
+        array $selection,
+        ?int $actorId,
+        ?int $promotionLogId,
+    ): void {
+        if (! Schema::hasTable('student_annual_intents')) {
             return;
         }
 
-        StudentPromotionLog::query()->create($payload);
+        $planId = $selection['fee_plan_id'] ?? null;
+        $label = null;
+        $total = null;
+        if ($planId !== null) {
+            $plan = FeePlan::query()->find($planId);
+            if ($plan !== null) {
+                $label = $plan->group_name;
+                $total = (int) ($plan->package_total ?? 0);
+            }
+        }
+
+        $existing = StudentAnnualIntent::query()
+            ->where('student_id', $studentId)
+            ->planned()
+            ->orderByDesc('id')
+            ->first();
+
+        $payload = [
+            'fee_plan_id' => $planId,
+            'package_label' => $planId === null ? null : ($label ?? '年繳方案'),
+            'package_total' => $planId === null ? null : $total,
+            'status' => StudentAnnualIntent::STATUS_PLANNED,
+            'note' => $selection['note'] ?? null,
+            'recorded_by_user_id' => $actorId,
+            'student_promotion_log_id' => $promotionLogId,
+        ];
+
+        if ($existing !== null) {
+            $existing->update($payload);
+
+            return;
+        }
+
+        StudentAnnualIntent::query()->create([
+            'student_id' => $studentId,
+            ...$payload,
+        ]);
+    }
+
+    private function annualNoteLabel(?int $feePlanId): string
+    {
+        if ($feePlanId === null) {
+            return '年繳：不年繳';
+        }
+
+        $plan = FeePlan::query()->find($feePlanId);
+
+        return '年繳：'.($plan?->group_name ?? '方案#'.$feePlanId);
     }
 
     /**
@@ -476,6 +626,16 @@ class StudentPromotionController extends Controller
     }
 
     private function isGraduationGrade(GradeLevel $grade): bool
+    {
+        return $this->isGrade9($grade);
+    }
+
+    private function isGrade8(GradeLevel $grade): bool
+    {
+        return $grade->name === '國二' || (int) $grade->code === 8;
+    }
+
+    private function isGrade9(GradeLevel $grade): bool
     {
         return $grade->name === '國三' || (int) $grade->code === 9;
     }

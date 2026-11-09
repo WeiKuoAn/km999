@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /* eslint-disable vue/no-mutating-props -- form 是父頁 Inertia useForm */
 import type { InertiaForm } from '@inertiajs/vue3';
-import { computed } from 'vue';
-import { Plus, Table2, Trash2 } from 'lucide-vue-next';
+import { computed, ref } from 'vue';
+import { GripVertical, Plus, Table2, Trash2 } from 'lucide-vue-next';
 import FeeStandardPreview from '@/components/fee-standards/FeeStandardPreview.vue';
 import InputError from '@/components/InputError.vue';
 import { Button } from '@/components/ui/button';
@@ -29,12 +29,12 @@ const previewItems = computed(() => mergeFeeStandardItems(props.form));
 const fieldError = (path: string): string | undefined =>
     (props.form.errors as Record<string, string | undefined>)[path];
 
-/** 存檔後 items 為「勾選在前、表格在後」，對回錯誤索引 */
-const checkError = (index: number, suffix: string): string | undefined =>
+/** 存檔後 items 為「表格在前、勾選在後」，對回錯誤索引 */
+const tableError = (index: number, suffix: string): string | undefined =>
     fieldError(`items.${index}.${suffix}`);
 
-const tableError = (index: number, suffix: string): string | undefined =>
-    fieldError(`items.${props.form.check_items.length + index}.${suffix}`);
+const checkError = (index: number, suffix: string): string | undefined =>
+    fieldError(`items.${props.form.tables.length + index}.${suffix}`);
 
 const addCheckItem = () => {
     props.form.check_items.push(emptyCheckItem(props.form.check_items.length));
@@ -68,6 +68,65 @@ const canRemoveCheck = computed(
 );
 
 const canRemoveTable = computed(() => props.form.tables.length > 0);
+
+const checkDragFrom = ref<number | null>(null);
+const checkDragOver = ref<number | null>(null);
+
+const renumberCheckItems = () => {
+    props.form.check_items.forEach((item, i) => {
+        item.sort_order = i;
+    });
+};
+
+const onCheckDragStart = (event: DragEvent, index: number) => {
+    checkDragFrom.value = index;
+    checkDragOver.value = index;
+    if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(index));
+        const handle = event.currentTarget as HTMLElement | null;
+        const card = handle?.closest('[data-check-card]') as HTMLElement | null;
+        if (card) {
+            event.dataTransfer.setDragImage(card, 28, 24);
+        }
+    }
+};
+
+const onCheckDragOver = (event: DragEvent, index: number) => {
+    event.preventDefault();
+    if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'move';
+    }
+    if (checkDragFrom.value === null) {
+        return;
+    }
+    checkDragOver.value = index;
+};
+
+const onCheckDrop = (event: DragEvent, toIndex: number) => {
+    event.preventDefault();
+    const fromIndex = checkDragFrom.value;
+    checkDragFrom.value = null;
+    checkDragOver.value = null;
+    if (fromIndex === null || fromIndex === toIndex) {
+        return;
+    }
+    const list = props.form.check_items;
+    const [moved] = list.splice(fromIndex, 1);
+    if (!moved) {
+        return;
+    }
+    list.splice(toIndex, 0, moved);
+    renumberCheckItems();
+};
+
+const onCheckDragEnd = () => {
+    checkDragFrom.value = null;
+    checkDragOver.value = null;
+};
+
+const checkItemKey = (item: FeeStandardFormItem, index: number) =>
+    item.uid ?? `check-${index}`;
 
 const addTableRow = (item: FeeStandardFormItem) => {
     const cols = Math.max(2, item.table_headers.length || 3);
@@ -211,81 +270,7 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                 </label>
             </section>
 
-            <!-- ① 勾選項目 -->
-            <section class="space-y-4 rounded-xl border p-4 sm:p-5">
-                <div
-                    class="flex flex-wrap items-start justify-between gap-2 border-b pb-3"
-                >
-                    <div>
-                        <h2 class="text-sm font-semibold">勾選項目</h2>
-                        <p class="mt-0.5 text-xs text-muted-foreground">
-                            主列為項目名稱；副列可寫金額公式。PDF 會印空白
-                            □ 給家長勾選。
-                        </p>
-                    </div>
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        @click="addCheckItem"
-                    >
-                        <Plus class="size-4" />
-                        新增勾選
-                    </Button>
-                </div>
-
-                <div
-                    v-if="form.check_items.length === 0"
-                    class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground"
-                >
-                    目前沒有勾選項目（可只使用下方表格）。
-                </div>
-
-                <div
-                    v-for="(item, i) in form.check_items"
-                    :key="`check-${i}`"
-                    class="space-y-2 rounded-md border bg-muted/30 p-3"
-                >
-                    <div class="flex items-center justify-between gap-2">
-                        <p class="text-xs font-medium text-muted-foreground">
-                            勾選 {{ i + 1 }}
-                        </p>
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            class="text-destructive"
-                            :disabled="!canRemoveCheck"
-                            @click="removeCheckItem(i)"
-                        >
-                            <Trash2 class="size-4" />
-                            刪除
-                        </Button>
-                    </div>
-                    <div class="grid gap-1.5">
-                        <Label :for="`check-label-${i}`">主列</Label>
-                        <Input
-                            :id="`check-label-${i}`"
-                            v-model="item.label"
-                            placeholder="例：理化科研班首期 7-10 月優惠"
-                            required
-                        />
-                        <InputError :message="checkError(i, 'label')" />
-                    </div>
-                    <div class="grid gap-1.5">
-                        <Label :for="`check-detail-${i}`">副列（選填）</Label>
-                        <textarea
-                            :id="`check-detail-${i}`"
-                            v-model="item.detail"
-                            rows="2"
-                            class="min-h-[3.5rem] w-full rounded-md border px-3 py-2 text-sm"
-                            placeholder="例：訂金 500 元(已繳) + 學費 12000 元 (含教材) = 11500 元"
-                        />
-                    </div>
-                </div>
-            </section>
-
-            <!-- ② 收費表格 -->
+            <!-- ① 收費表格（在上） -->
             <section class="space-y-4 rounded-xl border p-4 sm:p-5">
                 <div
                     class="flex flex-wrap items-start justify-between gap-2 border-b pb-3"
@@ -293,8 +278,8 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                     <div>
                         <h2 class="text-sm font-semibold">收費表格</h2>
                         <p class="mt-0.5 text-xs text-muted-foreground">
-                            獨立於勾選項目；印出黃表頭表格（可增刪欄列）。預覽／PDF
-                            會排在勾選項目之後。
+                            印出黃表頭表格（可增刪欄列）。預覽／PDF
+                            排在勾選項目之上。
                         </p>
                     </div>
                     <Button
@@ -463,6 +448,111 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                 </div>
 
                 <InputError :message="fieldError('items')" />
+            </section>
+
+            <!-- ② 勾選項目（在下） -->
+            <section class="space-y-4 rounded-xl border p-4 sm:p-5">
+                <div
+                    class="flex flex-wrap items-start justify-between gap-2 border-b pb-3"
+                >
+                    <div>
+                        <h2 class="text-sm font-semibold">勾選項目</h2>
+                        <p class="mt-0.5 text-xs text-muted-foreground">
+                            主列為項目名稱；副列可寫金額公式。左側
+                            <span class="inline-flex align-middle"
+                                ><GripVertical class="size-3.5"
+                            /></span>
+                            可拖曳調整順序；PDF 印空白 □；排在表格之下。
+                        </p>
+                    </div>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        @click="addCheckItem"
+                    >
+                        <Plus class="size-4" />
+                        新增勾選
+                    </Button>
+                </div>
+
+                <div
+                    v-if="form.check_items.length === 0"
+                    class="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground"
+                >
+                    目前沒有勾選項目（可只使用上方表格）。
+                </div>
+
+                <div class="space-y-3">
+                    <div
+                        v-for="(item, i) in form.check_items"
+                        :key="checkItemKey(item, i)"
+                        data-check-card
+                        class="relative space-y-2 rounded-md border bg-muted/30 p-3 transition-[box-shadow,opacity,border-color]"
+                        :class="{
+                            'opacity-60 ring-2 ring-primary/40':
+                                checkDragFrom === i,
+                            'border-primary border-dashed bg-primary/5':
+                                checkDragOver === i && checkDragFrom !== i,
+                        }"
+                        @dragover="onCheckDragOver($event, i)"
+                        @drop="onCheckDrop($event, i)"
+                    >
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="flex min-w-0 items-center gap-1.5">
+                                <button
+                                    type="button"
+                                    class="inline-flex size-8 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+                                    draggable="true"
+                                    title="拖曳排序"
+                                    aria-label="拖曳排序"
+                                    @dragstart="onCheckDragStart($event, i)"
+                                    @dragend="onCheckDragEnd"
+                                >
+                                    <GripVertical class="size-4" />
+                                </button>
+                                <p
+                                    class="text-xs font-medium text-muted-foreground"
+                                >
+                                    勾選 {{ i + 1 }}
+                                </p>
+                            </div>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                class="text-destructive"
+                                :disabled="!canRemoveCheck"
+                                @click="removeCheckItem(i)"
+                            >
+                                <Trash2 class="size-4" />
+                                刪除
+                            </Button>
+                        </div>
+                        <div class="grid gap-1.5">
+                            <Label :for="`check-label-${i}`">主列</Label>
+                            <Input
+                                :id="`check-label-${i}`"
+                                v-model="item.label"
+                                placeholder="例：理化科研班首期 7-10 月優惠"
+                                required
+                            />
+                            <InputError :message="checkError(i, 'label')" />
+                        </div>
+                        <div class="grid gap-1.5">
+                            <Label :for="`check-detail-${i}`"
+                                >副列（選填）</Label
+                            >
+                            <textarea
+                                :id="`check-detail-${i}`"
+                                v-model="item.detail"
+                                rows="2"
+                                class="min-h-[3.5rem] w-full rounded-md border px-3 py-2 text-sm"
+                                placeholder="例：訂金 500 元(已繳) + 學費 12000 元 (含教材) = 11500 元"
+                            />
+                        </div>
+                    </div>
+                </div>
             </section>
         </div>
 

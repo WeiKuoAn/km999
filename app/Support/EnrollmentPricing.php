@@ -1092,7 +1092,8 @@ final class EnrollmentPricing
     }
 
     /**
-     * 半年教材（可同時收多段、金額可手動），合計掛在帳期第一個月。
+     * 半年教材（可同時收多段、金額可手動）；金額只掛在 1 月（H1）或 7 月（H2）。
+     * 帳期未勾該閘道月則略過該段（其他月份不收教材）。
      *
      * @param  array{material:int, name?:string}  $subject
      * @param  list<array{y:int,m:int}>  $months
@@ -1111,26 +1112,29 @@ final class EnrollmentPricing
         $total = 0;
         $parts = [];
         $byMonth = [];
-        $first = $months[0];
         foreach ($charges as $charge) {
             $amount = (int) ($charge['amount'] ?? 0);
             if ($amount <= 0) {
                 continue;
             }
-            $total += $amount;
             $year = (int) $charge['period_year'];
             $half = (string) $charge['period_half'];
-            $parts[] = sprintf('%s %s', self::halfYearLabel($year, $half), number_format($amount));
+            $gateMonth = $half === 'H1' ? 1 : 7;
 
-            // 掛在帳期中第一個落在該半年的月份；帳期不含該半年則掛第一個月
-            $target = $first;
+            $target = null;
             foreach ($months as $month) {
-                [$my, $mh] = self::halfYearOf((int) $month['y'], (int) $month['m']);
-                if ($my === $year && $mh === $half) {
+                if ((int) $month['y'] === $year && (int) $month['m'] === $gateMonth) {
                     $target = $month;
                     break;
                 }
             }
+            // 沒有勾 1／7 月 → 該半年不收
+            if ($target === null) {
+                continue;
+            }
+
+            $total += $amount;
+            $parts[] = sprintf('%s %s', self::halfYearLabel($year, $half), number_format($amount));
             $key = ((int) $target['y']).'-'.((int) $target['m']);
             $byMonth[$key] = ['amount' => ($byMonth[$key]['amount'] ?? 0) + $amount, 'days' => 0];
         }
@@ -1141,7 +1145,7 @@ final class EnrollmentPricing
 
         $annual = (int) ($subject['material'] ?? 0);
         $note = sprintf(
-            '教材 %s（年費 %s，半年收取）',
+            '教材 %s（年費 %s，1／7 月收取）',
             implode('＋', $parts),
             number_format($annual)
         );

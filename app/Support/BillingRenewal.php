@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\Course;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\StudentCourseDrop;
@@ -18,6 +19,53 @@ final class BillingRenewal
             'annual' => 12,
             default => 3,
         };
+    }
+
+    /**
+     * 短期課 course_id（有設定開課起迄日）：一次性收費，不進續期／繳費名單。
+     *
+     * @return list<int>
+     */
+    public static function shortTermCourseIds(?array $onlyIds = null): array
+    {
+        $query = Course::query()
+            ->where(function ($builder): void {
+                $builder->whereNotNull('start_date')->orWhereNotNull('end_date');
+            });
+
+        if ($onlyIds !== null) {
+            $ids = array_values(array_unique(array_map('intval', $onlyIds)));
+            if ($ids === []) {
+                return [];
+            }
+            $query->whereIn('id', $ids);
+        }
+
+        return $query->pluck('id')->map(fn ($id) => (int) $id)->all();
+    }
+
+    /**
+     * 排除短期課：一次性收費，不進續期／繳費名單。
+     *
+     * @param  list<int>  $courseIds
+     * @return list<int>
+     */
+    public static function filterRenewableCourseIds(array $courseIds): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $courseIds)));
+        if ($ids === []) {
+            return [];
+        }
+
+        $shortIds = self::shortTermCourseIds($ids);
+        if ($shortIds === []) {
+            return $ids;
+        }
+
+        return array_values(array_filter(
+            $ids,
+            fn (int $id): bool => ! in_array($id, $shortIds, true)
+        ));
     }
 
     public static function payCycleLabel(string $payCycle): string
@@ -83,9 +131,16 @@ final class BillingRenewal
      */
     public static function lastBillingSnapshot(Student $student): ?array
     {
-        $latest = Reconciliation::query()
+        $shortIds = self::shortTermCourseIds();
+
+        $latestQuery = Reconciliation::query()
             ->where('student_id', $student->id)
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('course_id');
+        if ($shortIds !== []) {
+            $latestQuery->whereNotIn('course_id', $shortIds);
+        }
+        $latest = $latestQuery
             ->orderByDesc('billing_year')
             ->orderByDesc('billing_month')
             ->first(['billing_year', 'billing_month', 'pay_cycle']);
@@ -97,14 +152,17 @@ final class BillingRenewal
         $endYear = (int) $latest->billing_year;
         $endMonth = (int) $latest->billing_month;
 
-        $payCycle = Reconciliation::query()
+        $payCycleQuery = Reconciliation::query()
             ->where('student_id', $student->id)
             ->where('billing_year', $endYear)
             ->where('billing_month', $endMonth)
             ->where('status', '!=', 'cancelled')
             ->whereNotNull('pay_cycle')
-            ->where('pay_cycle', '!=', '')
-            ->value('pay_cycle');
+            ->where('pay_cycle', '!=', '');
+        if ($shortIds !== []) {
+            $payCycleQuery->whereNotIn('course_id', $shortIds);
+        }
+        $payCycle = $payCycleQuery->value('pay_cycle');
 
         $payCycle = is_string($payCycle) && in_array($payCycle, ['monthly', 'quarterly', 'annual'], true)
             ? $payCycle
@@ -116,11 +174,15 @@ final class BillingRenewal
         $startKey = ((int) $windowStart->year) * 12 + (int) $windowStart->month;
         $endKey = $endYear * 12 + $endMonth;
 
-        $courseIds = Reconciliation::query()
+        $courseIdsQuery = Reconciliation::query()
             ->where('student_id', $student->id)
             ->where('status', '!=', 'cancelled')
             ->whereNotNull('course_id')
-            ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey])
+            ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey]);
+        if ($shortIds !== []) {
+            $courseIdsQuery->whereNotIn('course_id', $shortIds);
+        }
+        $courseIds = $courseIdsQuery
             ->distinct()
             ->orderBy('course_id')
             ->pluck('course_id')
@@ -141,7 +203,7 @@ final class BillingRenewal
     }
 
     /**
-     * 續期用：最近一輪「已繳」快照（與繳費名單一致），科目已排除停修。
+     * 續期用：最近一輪「已繳」快照（與繳費名單一致），科目已排除停修與短期課。
      *
      * @return array{
      *   end_year:int,
@@ -152,9 +214,16 @@ final class BillingRenewal
      */
     public static function lastPaidRenewalSnapshot(Student $student): ?array
     {
-        $latest = Reconciliation::query()
+        $shortIds = self::shortTermCourseIds();
+
+        $latestQuery = Reconciliation::query()
             ->where('student_id', $student->id)
             ->where('status', 'paid')
+            ->whereNotNull('course_id');
+        if ($shortIds !== []) {
+            $latestQuery->whereNotIn('course_id', $shortIds);
+        }
+        $latest = $latestQuery
             ->orderByDesc('billing_year')
             ->orderByDesc('billing_month')
             ->first(['billing_year', 'billing_month', 'pay_cycle']);
@@ -166,14 +235,17 @@ final class BillingRenewal
         $endYear = (int) $latest->billing_year;
         $endMonth = (int) $latest->billing_month;
 
-        $payCycle = Reconciliation::query()
+        $payCycleQuery = Reconciliation::query()
             ->where('student_id', $student->id)
             ->where('billing_year', $endYear)
             ->where('billing_month', $endMonth)
             ->where('status', 'paid')
             ->whereNotNull('pay_cycle')
-            ->where('pay_cycle', '!=', '')
-            ->value('pay_cycle');
+            ->where('pay_cycle', '!=', '');
+        if ($shortIds !== []) {
+            $payCycleQuery->whereNotIn('course_id', $shortIds);
+        }
+        $payCycle = $payCycleQuery->value('pay_cycle');
 
         $payCycle = is_string($payCycle) && in_array($payCycle, ['monthly', 'quarterly', 'annual'], true)
             ? $payCycle
@@ -185,11 +257,15 @@ final class BillingRenewal
         $startKey = ((int) $windowStart->year) * 12 + (int) $windowStart->month;
         $endKey = $endYear * 12 + $endMonth;
 
-        $courseIds = Reconciliation::query()
+        $courseIdsQuery = Reconciliation::query()
             ->where('student_id', $student->id)
             ->where('status', 'paid')
             ->whereNotNull('course_id')
-            ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey])
+            ->whereRaw('(billing_year * 12 + billing_month) between ? and ?', [$startKey, $endKey]);
+        if ($shortIds !== []) {
+            $courseIdsQuery->whereNotIn('course_id', $shortIds);
+        }
+        $courseIds = $courseIdsQuery
             ->distinct()
             ->orderBy('course_id')
             ->pluck('course_id')

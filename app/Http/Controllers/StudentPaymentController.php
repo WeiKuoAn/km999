@@ -718,6 +718,11 @@ class StudentPaymentController extends Controller
             'grade9_package' => isset($student)
                 ? Grade9AnnualPackage::metaForStudent($student)
                 : null,
+            'annual_intent' => isset($student)
+                ? (($intent = $student->plannedAnnualIntent()) !== null
+                    ? $intent->toPayload()
+                    : null)
+                : null,
         ]);
     }
 
@@ -1327,10 +1332,26 @@ class StudentPaymentController extends Controller
             if (! isset($courseIdSet[$cid])) {
                 continue;
             }
+            $periodYear = (int) $row['period_year'];
+            $periodHalf = (string) $row['period_half'];
+            $gateMonth = $periodHalf === 'H1' ? 1 : 7;
+            // 僅帳期含 1 月（上半年）或 7 月（下半年）才收；其他月份略過
+            $monthKeys = $courseMonths[$cid] ?? [];
+            $hasGate = false;
+            foreach ($monthKeys as $key) {
+                [$y, $m] = array_map('intval', explode('-', (string) $key));
+                if ($y === $periodYear && $m === $gateMonth) {
+                    $hasGate = true;
+                    break;
+                }
+            }
+            if ($monthKeys !== [] && ! $hasGate) {
+                continue;
+            }
             $materialHalfCharges[] = [
                 'course_id' => $cid,
-                'period_year' => (int) $row['period_year'],
-                'period_half' => (string) $row['period_half'],
+                'period_year' => $periodYear,
+                'period_half' => $periodHalf,
                 'amount' => (int) $row['amount'],
             ];
         }
@@ -1435,11 +1456,14 @@ class StudentPaymentController extends Controller
             return back()->withErrors(['sessions' => '請至少選擇一個上課日。']);
         }
 
-        $subtotal = (int) $quote['tuition_total'] + (int) $quote['material_total'];
+        $tuitionTotal = (int) $quote['tuition_total'];
+        $materialTotal = (int) $quote['material_total'];
+        $subtotal = $tuitionTotal + $materialTotal;
+        // 優惠只折學費，不套用教材／耗材
         $allowance = $feeDiscount !== null
-            ? $feeDiscount->computeAllowance($subtotal)
+            ? $feeDiscount->computeAllowance($tuitionTotal)
             : (int) ($validated['allowance'] ?? 0);
-        $allowance = min($subtotal, max(0, $allowance));
+        $allowance = min($tuitionTotal, max(0, $allowance));
         $quote['grand_total'] = max(0, $subtotal - $allowance);
 
         $overlapQuery = Reconciliation::query()

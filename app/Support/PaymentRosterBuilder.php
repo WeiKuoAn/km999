@@ -244,10 +244,20 @@ final class PaymentRosterBuilder
                     $courseMonths
                 );
             }
-            $isSplit = count(array_unique(array_map(
-                fn (array $courseMonths): int => (int) $courseMonths[0]['y'] * 12 + (int) $courseMonths[0]['m'],
+            // 各科月份集合是否不同（起月相同但結束不同也算）
+            $monthSetKeys = array_map(
+                function (array $courseMonths): string {
+                    $keys = array_map(
+                        fn (array $month): string => ((int) $month['y']).'-'.((int) $month['m']),
+                        $courseMonths
+                    );
+                    sort($keys);
+
+                    return implode(',', $keys);
+                },
                 $monthsByCourse
-            ))) > 1;
+            );
+            $monthsDifferByCourse = count(array_unique(array_values($monthSetKeys))) > 1;
 
             // 下一期已繳 → 不列入
             $conflict = false;
@@ -297,6 +307,7 @@ final class PaymentRosterBuilder
                     continue;
                 }
                 $materialCharges = MaterialHalfYear::autoChargesForCourseMonths($student, $filteredCourseMonths, $subjectsById);
+                // 一律帶各科月份：起月相同但結束不同時，不可用聯集月份灌到每一科
                 $quote = EnrollmentPricing::quote(
                     $student,
                     $courseIds,
@@ -306,7 +317,7 @@ final class PaymentRosterBuilder
                     $startDate,
                     [],
                     $materialCharges,
-                    $isSplit ? $filteredCourseMonths : null,
+                    $filteredCourseMonths,
                 );
                 $fee = (int) ($quote['grand_total'] ?? 0);
                 if ($fee <= 0 || ($quote['lines'] ?? []) === []) {
@@ -323,10 +334,9 @@ final class PaymentRosterBuilder
             }
 
             $subjects = self::subjectLabels($courseIds, $subjectLabelMap);
-            $periodLabel = $isSplit
+            $periodLabel = $monthsDifferByCourse
                 ? self::splitPeriodLabel($monthsByCourse, $subjectLabelMap)
                 : self::periodLabel($startYear, $startMonth, $endYear, $endMonth);
-
             $rows[] = [
                 'student_id' => $student->id,
                 'student_code' => $student->student_code,
@@ -674,6 +684,8 @@ final class PaymentRosterBuilder
             $courseIds = $intended !== []
                 ? array_values(array_unique(array_map('intval', $intended)))
                 : $snapshot['course_ids'];
+            // 短期課一次性收費，不進續期名單
+            $courseIds = BillingRenewal::filterRenewableCourseIds($courseIds);
             if ($courseIds === []) {
                 continue;
             }

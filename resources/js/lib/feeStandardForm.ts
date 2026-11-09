@@ -1,5 +1,11 @@
 export type FeeStandardItemKind = 'check' | 'table';
 
+let feeStandardUidSeq = 0;
+
+/** 前端拖曳／列表用穩定鍵（不送後端） */
+export const nextFeeStandardUid = (): string =>
+    `fs-${Date.now().toString(36)}-${++feeStandardUidSeq}`;
+
 export type FeeStandardFormItem = {
     kind: FeeStandardItemKind;
     label: string;
@@ -8,6 +14,8 @@ export type FeeStandardFormItem = {
     table_headers: string[];
     table_rows: string[][];
     sort_order: number;
+    /** 僅前端：拖曳重排用 */
+    uid?: string;
 };
 
 export type FeeStandardFormData = {
@@ -32,6 +40,7 @@ export const emptyCheckItem = (sortOrder = 0): FeeStandardFormItem => ({
     table_headers: [],
     table_rows: [],
     sort_order: sortOrder,
+    uid: nextFeeStandardUid(),
 });
 
 export const emptyTableItem = (sortOrder = 0): FeeStandardFormItem => ({
@@ -42,21 +51,22 @@ export const emptyTableItem = (sortOrder = 0): FeeStandardFormItem => ({
     table_headers: ['繳費月份', '收費標準', '教材費/學期'],
     table_rows: [['', '', '']],
     sort_order: sortOrder,
+    uid: nextFeeStandardUid(),
 });
 
-/** 存檔／預覽：勾選在前、表格在後 */
+/** 存檔／預覽：表格在前、勾選在後 */
 export const mergeFeeStandardItems = (
     data: Pick<FeeStandardFormData, 'check_items' | 'tables'>,
 ): FeeStandardFormItem[] => [
-    ...data.check_items.map((item, i) => ({
-        ...item,
-        kind: 'check' as const,
-        sort_order: i,
-    })),
     ...data.tables.map((item, i) => ({
         ...item,
         kind: 'table' as const,
-        sort_order: data.check_items.length + i,
+        sort_order: i,
+    })),
+    ...data.check_items.map((item, i) => ({
+        ...item,
+        kind: 'check' as const,
+        sort_order: data.tables.length + i,
     })),
 ];
 

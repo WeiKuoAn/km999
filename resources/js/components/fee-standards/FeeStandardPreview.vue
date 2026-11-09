@@ -82,29 +82,6 @@ const labelWithColon = (label: string): string => {
         </div>
 
         <div
-            v-for="(item, i) in displayChecks"
-            :key="`check-${i}`"
-            class="mb-5 flex gap-2"
-        >
-            <span
-                class="mt-0.5 shrink-0 select-none text-lg leading-none text-neutral-800"
-                aria-hidden="true"
-                >□</span
-            >
-            <div class="min-w-0 flex-1">
-                <p class="text-[15px] leading-snug sm:text-base">
-                    {{ labelWithColon(item.label) }}
-                </p>
-                <p
-                    v-if="item.detail.trim()"
-                    class="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-neutral-700 sm:text-[15px]"
-                >
-                    {{ item.detail.trim() }}
-                </p>
-            </div>
-        </div>
-
-        <div
             v-for="(item, i) in displayTables"
             :key="`table-${i}`"
             class="mb-5"
@@ -147,6 +124,29 @@ const labelWithColon = (label: string): string => {
                     </tr>
                 </tbody>
             </table>
+        </div>
+
+        <div
+            v-for="(item, i) in displayChecks"
+            :key="`check-${i}`"
+            class="mb-5 flex gap-2"
+        >
+            <span
+                class="mt-0.5 shrink-0 select-none text-lg leading-none text-neutral-800"
+                aria-hidden="true"
+                >□</span
+            >
+            <div class="min-w-0 flex-1">
+                <p class="text-[15px] leading-snug sm:text-base">
+                    {{ labelWithColon(item.label) }}
+                </p>
+                <p
+                    v-if="item.detail.trim()"
+                    class="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-neutral-700 sm:text-[15px]"
+                >
+                    {{ item.detail.trim() }}
+                </p>
+            </div>
         </div>
 
         <p class="mt-8 text-base sm:text-lg">

@@ -165,6 +165,13 @@ const props = defineProps<{
         months_label: string;
         reason: string | null;
     } | null;
+    annual_intent?: {
+        fee_plan_id: number | null;
+        package_label: string | null;
+        package_total: number | null;
+        note: string | null;
+        is_annual: boolean;
+    } | null;
 }>();
 
 const page = usePage();
@@ -335,14 +342,18 @@ const courseYearMonths = (courseId: number) =>
               .map(([y, m]) => ({ y, m }))
         : selectedYearMonths.value;
 
-/** 僅當帳期有勾該半年的 1 月（H1）或 7 月（H2）才預設加收教材 */
-const isHalfSuggested = (period: HalfPeriod, courseId: number) => {
+/** 該半年是否已勾閘道月：H1＝1 月、H2＝7 月（其他月份不收教材） */
+const hasMaterialGateMonth = (period: HalfPeriod, courseId: number) => {
     const gateMonth = period.half === 'H1' ? 1 : 7;
 
     return courseYearMonths(courseId).some(
         ({ y, m }) => y === period.year && m === gateMonth,
     );
 };
+
+/** 僅當帳期有勾該半年的 1 月（H1）或 7 月（H2）才預設加收教材 */
+const isHalfSuggested = (period: HalfPeriod, courseId: number) =>
+    hasMaterialGateMonth(period, courseId);
 
 /** 教材年費 ÷ 2；1–6、7–12 各收一次（需打勾） */
 const semiAnnualMaterialFee = (annualOrTermFee: number) =>
@@ -382,11 +393,15 @@ const syncDefaultMaterialChecks = () => {
             const status = materialStatusByKey.value.get(key);
             const locked = !!(status && !status.can_charge);
             const prev = nextHalf[key];
+            const gateOk = hasMaterialGateMonth(period, id);
+            // 沒勾 1／7 月一律不收；有閘道月才自動勾（編輯／手動可改）
             const checked = locked
                 ? false
-                : props.edit || materialManualKeys.value.has(key)
-                  ? !!prev?.checked
-                  : isHalfSuggested(period, id);
+                : !gateOk
+                  ? false
+                  : props.edit || materialManualKeys.value.has(key)
+                    ? !!prev?.checked
+                    : true;
 
             if (checked && !prev?.checked) {
                 autoAdded = true;
@@ -441,6 +456,7 @@ const sessionMonthSpan = computed(() => {
 });
 
 const grade9Package = computed(() => props.grade9_package ?? null);
+const annualIntent = computed(() => props.annual_intent ?? null);
 
 const grade9Packages = computed(
     () =>
@@ -1708,15 +1724,15 @@ const courseHalfAmount = (courseId: number) => {
     );
 };
 
-/** 半年教材掛在帳期中第一個落在該半年的月份；帳期不含該半年則掛第一個月（與後端一致） */
+/** 半年教材只掛在 1 月（H1）或 7 月（H2）；帳期沒勾該月則不掛 */
 const halfTargetMonth = (period: HalfPeriod, courseId: number) => {
+    const gateMonth = period.half === 'H1' ? 1 : 7;
     const months = courseBillingMonths(courseId);
 
     return (
         months.find(
-            ({ y, m }) =>
-                y === period.year && (m <= 6 ? 'H1' : 'H2') === period.half,
-        ) ?? months[0]
+            ({ y, m }) => y === period.year && m === gateMonth,
+        ) ?? null
     );
 };
 
@@ -1736,7 +1752,7 @@ return 0;
     return courseHalfAmount(s.id);
 };
 
-/** 半年教材掛在對應月份（1 月／7 月或帳期首月）；耗材仍按月 */
+/** 半年教材只計入 1／7 月；耗材仍按月 */
 const lineMaterialForMonth = (s: Subject, y: number, m: number) => {
     if (!s.material || !chargeMaterialMaster.value) {
 return 0;
@@ -1827,6 +1843,8 @@ const materialTermCourses = computed(() => {
             const key = halfKey(id, year, half);
             const status = materialStatusByKey.value.get(key);
             const st = halfState(id, year, half);
+            const gateOk = hasMaterialGateMonth({ year, half }, id);
+            const locked = !!(status && !status.can_charge);
 
             return {
                 half,
@@ -1836,9 +1854,15 @@ const materialTermCourses = computed(() => {
                 periodLabel:
                     status?.period_label ??
                     `${year}${half === 'H1' ? '上半年' : '下半年'}`,
-                locked: !!(status && !status.can_charge),
-                note: status?.note ?? null,
-                checked: st.checked && !(status && !status.can_charge),
+                locked,
+                gateMissing: !gateOk,
+                note: !gateOk
+                    ? half === 'H1'
+                        ? '需勾選 1 月才可收'
+                        : '需勾選 7 月才可收'
+                    : (status?.note ?? null),
+                checked:
+                    gateOk && st.checked && !locked,
                 amount: st.amount > 0 ? st.amount : (status?.amount ?? semi),
             };
         });
@@ -2025,10 +2049,18 @@ const monthBreakdown = computed((): MonthBreakdownRow[] => {
     });
 });
 
+/** 折讓上限＝學費（教材不折） */
+const effectiveAllowance = computed(() =>
+    Math.min(
+        tuitionTotal.value,
+        Math.max(0, Number(allowance.value || 0)),
+    ),
+);
+
 const grandTotal = computed(() =>
     Math.max(
         0,
-        tuitionTotal.value + materialTotal.value - Number(allowance.value || 0),
+        tuitionTotal.value + materialTotal.value - effectiveAllowance.value,
     ),
 );
 
@@ -2038,23 +2070,24 @@ const selectedDiscount = computed(() =>
     feeDiscounts.value.find((d) => d.id === selectedDiscountId.value) ?? null,
 );
 
+/** 優惠只套用學費，不含教材／耗材 */
 const computeDiscountAllowance = (discount: {
     type: 'amount' | 'percent';
     value: number;
 }) => {
-    const subtotal = tuitionTotal.value + materialTotal.value;
+    const tuition = tuitionTotal.value;
 
-    if (subtotal <= 0 || discount.value <= 0) {
+    if (tuition <= 0 || discount.value <= 0) {
         return 0;
     }
 
     if (discount.type === 'percent') {
         const pct = Math.min(100, Math.max(0, discount.value));
 
-        return Math.min(subtotal, Math.round((subtotal * pct) / 100));
+        return Math.min(tuition, Math.round((tuition * pct) / 100));
     }
 
-    return Math.min(subtotal, discount.value);
+    return Math.min(tuition, discount.value);
 };
 
 const applySelectedDiscount = () => {
@@ -2250,7 +2283,12 @@ const submit = () => {
 
         for (const course of materialTermCourses.value) {
             for (const half of course.halves) {
-                if (!half.checked || half.locked || half.amount <= 0) {
+                if (
+                    !half.checked ||
+                    half.locked ||
+                    half.gateMissing ||
+                    half.amount <= 0
+                ) {
                     continue;
                 }
 
@@ -2663,6 +2701,32 @@ defineOptions({
                             <p class="text-sm font-medium text-emerald-950">
                                 年繳方案（收費設定）
                             </p>
+                            <p
+                                v-if="annualIntent"
+                                class="mt-1 rounded-md border border-emerald-200/80 bg-white/70 px-2.5 py-1.5 text-sm text-emerald-950"
+                            >
+                                轉檔已登記：{{
+                                    annualIntent.is_annual
+                                        ? (annualIntent.package_label ??
+                                          '年繳方案')
+                                        : '不年繳'
+                                }}
+                                <template
+                                    v-if="
+                                        annualIntent.is_annual &&
+                                        annualIntent.package_total
+                                    "
+                                >
+                                    （${{
+                                        annualIntent.package_total.toLocaleString()
+                                    }}）
+                                </template>
+                                <span
+                                    v-if="annualIntent.note"
+                                    class="block text-xs text-emerald-900/80"
+                                    >{{ annualIntent.note }}</span
+                                >
+                            </p>
                             <p class="mt-1 text-sm text-emerald-900/85">
                                 來自收費設定的「年繳方案」。年繳、起算月＝方案起始月、科目剛好符合時套用總額（含教材）。
                             </p>
@@ -2884,7 +2948,7 @@ defineOptions({
                                     <span
                                         class="mt-0.5 block text-sm text-amber-900/80"
                                     >
-                                        帳期有勾 1 月或 7 月才自動帶入該半年教材；也可手動勾選，金額預設年費一半。
+                                        僅在帳期勾選 1 月或 7 月時自動收取該半年教材（金額＝年費一半）；其他月份不收。
                                     </span>
                                 </span>
                             </label>
@@ -2928,7 +2992,8 @@ defineOptions({
                                             <label
                                                 class="inline-flex min-w-[7rem] cursor-pointer items-center gap-2 text-sm"
                                                 :class="
-                                                    half.locked
+                                                    half.locked ||
+                                                    half.gateMissing
                                                         ? 'cursor-not-allowed'
                                                         : ''
                                                 "
@@ -2937,7 +3002,10 @@ defineOptions({
                                                     type="checkbox"
                                                     class="size-3.5 accent-[var(--brand-green)]"
                                                     :checked="half.checked"
-                                                    :disabled="half.locked"
+                                                    :disabled="
+                                                        half.locked ||
+                                                        half.gateMissing
+                                                    "
                                                     @change="
                                                         onHalfCheckedChange(
                                                             course.id,
@@ -2952,6 +3020,11 @@ defineOptions({
                                                 }}
                                                 月
                                             </label>
+                                            <span
+                                                v-if="half.note"
+                                                class="text-xs text-muted-foreground"
+                                                >{{ half.note }}</span
+                                            >
                                             <Input
                                                 type="number"
                                                 min="0"
@@ -3124,46 +3197,48 @@ defineOptions({
                                             </div>
                                             <ul
                                                 v-if="row.courses.length"
-                                                class="mt-1.5 space-y-1 border-t border-dashed border-sidebar-border/50 pt-1.5 text-sm"
+                                                class="mt-1.5 space-y-1.5 border-t border-dashed border-sidebar-border/50 pt-1.5 text-sm"
                                             >
                                                 <li
                                                     v-for="course in row.courses"
                                                     :key="`${row.y}-${row.m}-${course.id}`"
-                                                    class="flex items-baseline justify-between gap-2"
+                                                    class="space-y-0.5"
                                                 >
-                                                    <span
-                                                        class="min-w-0 truncate text-foreground"
-                                                        >{{ course.name }}</span
+                                                    <div
+                                                        class="flex items-baseline justify-between gap-2"
                                                     >
-                                                    <span
-                                                        class="shrink-0 tabular-nums text-muted-foreground"
-                                                    >
-                                                        {{
-                                                            course.subtotal.toLocaleString()
-                                                        }}
                                                         <span
-                                                            v-if="
-                                                                course.material >
-                                                                0
-                                                            "
-                                                            class="text-xs"
+                                                            class="min-w-0 truncate text-foreground"
+                                                            >{{
+                                                                course.name
+                                                            }}</span
                                                         >
-                                                            （含教材
+                                                        <span
+                                                            class="shrink-0 tabular-nums font-medium text-foreground"
+                                                        >
+                                                            {{
+                                                                course.subtotal.toLocaleString()
+                                                            }}
+                                                        </span>
+                                                    </div>
+                                                    <div
+                                                        class="flex flex-wrap justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground"
+                                                    >
+                                                        <span
+                                                            >學費
+                                                            {{
+                                                                course.tuition.toLocaleString()
+                                                            }}</span
+                                                        >
+                                                        <span
+                                                            >教材
                                                             {{
                                                                 course.material.toLocaleString()
-                                                            }}）
-                                                        </span>
-                                                    </span>
+                                                            }}</span
+                                                        >
+                                                    </div>
                                                 </li>
                                             </ul>
-                                            <p
-                                                v-if="row.materialHalfHint"
-                                                class="mt-1 text-sm text-muted-foreground"
-                                            >
-                                                教材：{{
-                                                    row.materialHalfHint
-                                                }}（半年一次）
-                                            </p>
                                         </li>
                                     </ul>
                                 </dd>
@@ -3245,7 +3320,13 @@ defineOptions({
                                     v-if="selectedDiscount"
                                     class="text-xs text-muted-foreground"
                                 >
-                                    已套用「{{ selectedDiscount.label }}」
+                                    已套用「{{ selectedDiscount.label }}」（只折學費，不含教材）
+                                </p>
+                                <p
+                                    v-else
+                                    class="text-xs text-muted-foreground"
+                                >
+                                    優惠折扣只套用學費，不含教材／耗材。
                                 </p>
                             </div>
                             <div class="grid gap-1.5 border-t pt-2">
