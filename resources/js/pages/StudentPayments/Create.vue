@@ -122,6 +122,8 @@ const props = defineProps<{
     /** 從繳費名單帶入，確認收款應對齊此金額 */
     roster_fee?: number | null;
     roster_period?: { start_year: number; start_month: number } | null;
+    /** 名單編輯模式：可改科目／月份，存回名單不開帳 */
+    roster_edit?: boolean;
     bundles?: Array<{
         id: number;
         name: string;
@@ -1375,6 +1377,7 @@ watch(selectedMonthKeys, () => {
 });
 
 const isEmbed = computed(() => !!props.embed);
+const isRosterEdit = computed(() => !!props.roster_edit);
 
 const form = useForm({
     course_ids: [] as number[],
@@ -2080,8 +2083,11 @@ const rosterFee = computed(() =>
         : null,
 );
 
-/** 從繳費名單進來：自動用折讓對齊名單金額（不疊加優惠方案） */
+/** 從繳費名單「確認收款」進來：自動用折讓對齊名單金額（編輯名單模式不鎖死） */
 const syncAllowanceToRosterFee = () => {
+    if (isRosterEdit.value) {
+        return;
+    }
     const target = rosterFee.value;
     if (target === null || selectedDiscountId.value !== null) {
         return;
@@ -2098,7 +2104,7 @@ const syncAllowanceToRosterFee = () => {
 };
 
 watch(
-    [rosterFee, tuitionTotal, materialTotal, selectedDiscountId],
+    [rosterFee, tuitionTotal, materialTotal, selectedDiscountId, isRosterEdit],
     () => {
         syncAllowanceToRosterFee();
     },
@@ -2354,12 +2360,57 @@ const submit = () => {
           )
         : {};
     form.embed = isEmbed.value;
+
+    // 名單編輯：存回繳費名單，不開帳；成功後通知父視窗關閉並重整名單
+    if (isRosterEdit.value && props.roster_period) {
+        const months = billingMonths.value;
+        const last = months[months.length - 1] ?? null;
+        const monthMap =
+            Object.keys(form.course_months).length > 0
+                ? form.course_months
+                : Object.fromEntries(
+                      selected.value.map((id) => [
+                          id,
+                          months.map((m) => `${m.y}-${m.m}`),
+                      ]),
+                  );
+
+        router.post(
+            '/payment-lists/fee-override',
+            {
+                student_id: props.student.id,
+                start_year: props.roster_period.start_year,
+                start_month: props.roster_period.start_month,
+                end_year: last?.y ?? props.roster_period.start_year,
+                end_month: last?.m ?? props.roster_period.start_month,
+                fee: grandTotal.value,
+                original_fee: rosterFee.value ?? grandTotal.value,
+                allowance: Number(allowance.value || 0),
+                note: '',
+                pay_cycle: payCycle.value,
+                course_ids: [...selected.value],
+                course_months: monthMap,
+                material_half_charges: form.material_half_charges,
+                embed: 1,
+                period_start: `${props.roster_period.start_year}-${String(props.roster_period.start_month).padStart(2, '0')}`,
+            },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    notifyEmbedParentSaved('已儲存到繳費名單');
+                },
+            },
+        );
+
+        return;
+    }
+
     form.post(`/student-payments/${props.student.id}/quote`, {
         preserveScroll: true,
     });
 };
 
-const notifyEmbedParentSaved = () => {
+const notifyEmbedParentSaved = (fallbackMessage?: string) => {
     if (!isEmbed.value || typeof window === 'undefined') {
         return;
     }
@@ -2372,11 +2423,17 @@ const notifyEmbedParentSaved = () => {
             student_id: props.student?.id ?? null,
             message:
                 (page.props.flash as { success?: string } | undefined)?.success ??
-                '已確認收款',
+                fallbackMessage ??
+                (isRosterEdit.value ? '已儲存到繳費名單' : '已確認收款'),
         },
         window.location.origin,
     );
 };
+
+// embed 模式儘早藏側欄，避免 iframe 先閃出完整 App 殼
+if (typeof document !== 'undefined' && props.embed) {
+    document.body.classList.add('payment-embed');
+}
 
 onMounted(() => {
     if (isEmbed.value) {
@@ -2411,7 +2468,11 @@ defineOptions({
 </script>
 
 <template>
-    <Head :title="isEditMode ? '編輯收款' : '新增收款'" />
+    <Head
+        :title="
+            isRosterEdit ? '編輯名單' : isEditMode ? '編輯收款' : '新增收款'
+        "
+    />
 
     <div
         class="page-shell w-full text-base [&_.text-xs]:text-sm [&_.text-sm]:text-base"
@@ -3427,10 +3488,22 @@ defineOptions({
                             @click="submit"
                         >
                             {{ isEditMode ? '儲存修改' : '確認收款' }}
+                            {{
+                                isEditMode
+                                    ? '儲存修改'
+                                    : isRosterEdit
+                                      ? '儲存到名單'
+                                      : '確認收款'
+                            }}
                         </Button>
                         <InputError class="mt-2" :message="form.errors.sessions" />
-                        <p class="mt-2 text-sm text-muted-foreground">
-                            產生後即視為已收款，可至
+                        <p
+                            v-if="isRosterEdit"
+                            class="mt-2 text-sm text-muted-foreground"
+                        >
+                            只更新繳費名單／繳費條（科目、月份、金額），不會確認收款。
+                        </p>
+                        <p v-else class="mt-2 text-sm text-muted-foreground">
                             <Link
                                 :href="`/student-payments/${student.id}`"
                                 class="underline"

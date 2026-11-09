@@ -28,6 +28,7 @@ use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -246,7 +247,7 @@ class StudentPaymentController extends Controller
     }
 
     /**
-     * 調整繳費名單顯示金額（不開帳／不確認收款）。
+     * 調整繳費名單（科目／月份／金額），不開帳、不確認收款。
      */
     public function storeRosterOverride(Request $request): RedirectResponse
     {
@@ -258,13 +259,48 @@ class StudentPaymentController extends Controller
             'end_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'fee' => ['required', 'integer', 'min:0'],
             'original_fee' => ['nullable', 'integer', 'min:0'],
+            'allowance' => ['nullable', 'integer', 'min:0'],
             'note' => ['nullable', 'string', 'max:500'],
+            'pay_cycle' => ['nullable', 'string', 'in:monthly,quarterly,annual'],
+            'course_ids' => ['nullable', 'array'],
+            'course_ids.*' => ['integer', 'exists:courses,id'],
+            'course_months' => ['nullable', 'array'],
+            'course_months.*' => ['array'],
+            'course_months.*.*' => ['string', 'regex:/^\d{4}-\d{1,2}$/'],
+            'material_half_charges' => ['nullable', 'array'],
+            'material_half_charges.*.course_id' => ['required_with:material_half_charges', 'integer'],
+            'material_half_charges.*.period_year' => ['required_with:material_half_charges', 'integer'],
+            'material_half_charges.*.period_half' => ['required_with:material_half_charges', 'string'],
+            'material_half_charges.*.amount' => ['required_with:material_half_charges', 'integer', 'min:0'],
             'q' => ['nullable', 'string', 'max:255'],
             'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2})$/'],
+            'embed' => ['nullable', 'boolean'],
         ]);
 
         $note = isset($validated['note']) ? trim((string) $validated['note']) : null;
+        $courseIds = array_values(array_unique(array_map('intval', $validated['course_ids'] ?? [])));
+        $courseMonths = [];
+        foreach ($validated['course_months'] ?? [] as $cid => $keys) {
+            $courseMonths[(string) (int) $cid] = array_values(array_unique(array_map('strval', $keys)));
+        }
+
+        // 若有月份資料，用月份推算結束年月
+        $endYear = isset($validated['end_year']) ? (int) $validated['end_year'] : null;
+        $endMonth = isset($validated['end_month']) ? (int) $validated['end_month'] : null;
+        $allMonthKeys = [];
+        foreach ($courseMonths as $keys) {
+            foreach ($keys as $key) {
+                $allMonthKeys[] = $key;
+            }
+        }
+        if ($allMonthKeys !== []) {
+            sort($allMonthKeys, SORT_STRING);
+            $last = $allMonthKeys[array_key_last($allMonthKeys)];
+            [$ey, $em] = array_map('intval', explode('-', $last));
+            $endYear = $ey;
+            $endMonth = $em;
+        }
 
         PaymentRosterOverride::query()->updateOrCreate(
             [
@@ -273,22 +309,48 @@ class StudentPaymentController extends Controller
                 'start_month' => (int) $validated['start_month'],
             ],
             [
-                'end_year' => isset($validated['end_year']) ? (int) $validated['end_year'] : null,
-                'end_month' => isset($validated['end_month']) ? (int) $validated['end_month'] : null,
+                'end_year' => $endYear,
+                'end_month' => $endMonth,
+                'course_ids' => $courseIds === [] ? null : $courseIds,
+                'course_months' => $courseMonths === [] ? null : $courseMonths,
+                'pay_cycle' => $validated['pay_cycle'] ?? null,
+                'material_half_charges' => $validated['material_half_charges'] ?? null,
                 'fee' => (int) $validated['fee'],
                 'original_fee' => isset($validated['original_fee'])
                     ? (int) $validated['original_fee']
                     : null,
+                'allowance' => (int) ($validated['allowance'] ?? 0),
                 'note' => $note === '' ? null : $note,
                 'updated_by_user_id' => auth()->id(),
             ]
         );
 
-        return to_route('payment-lists.index', array_filter([
+        $params = array_filter([
             'q' => $validated['q'] ?? null,
             'grade_level_id' => $validated['grade_level_id'] ?? null,
             'period_start' => $validated['period_start'] ?? null,
-        ], fn ($v) => $v !== null && $v !== ''))->with('success', '已更新名單金額（尚未收款）。');
+        ], fn ($v) => $v !== null && $v !== '');
+
+        if ($request->boolean('embed')) {
+            return to_route('student-payments.create', [
+                'student_id' => (int) $validated['student_id'],
+                'embed' => 1,
+                'roster_edit' => 1,
+                'saved' => 1,
+                'start_date' => sprintf(
+                    '%04d-%02d-01',
+                    (int) $validated['start_year'],
+                    (int) $validated['start_month']
+                ),
+                'roster_start_year' => (int) $validated['start_year'],
+                'roster_start_month' => (int) $validated['start_month'],
+                'pay_cycle' => $validated['pay_cycle'] ?? null,
+                'course_ids' => $courseIds,
+            ])->with('success', '已儲存到繳費名單（尚未收款）。');
+        }
+
+        return to_route('payment-lists.index', $params)
+            ->with('success', '已儲存到繳費名單（尚未收款）。');
     }
 
     /** 清除繳費名單手動金額，恢復試算 */
@@ -626,8 +688,10 @@ class StudentPaymentController extends Controller
             'roster_fee' => ['nullable', 'integer', 'min:0'],
             'roster_start_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'roster_start_month' => ['nullable', 'integer', 'min:1', 'max:12'],
+            'roster_edit' => ['nullable', 'boolean'],
         ]);
         $embed = $request->boolean('embed');
+        $rosterEdit = $request->boolean('roster_edit');
 
         $studentPayload = null;
         $edit = null;
@@ -722,6 +786,38 @@ class StudentPaymentController extends Controller
                     $suggestedStartDate = $plan['start_date'];
                 }
             }
+
+            // 從名單進來（編輯或確認收款）：若已有覆寫，帶入科目／月份／金額
+            if (
+                isset($validated['roster_start_year'], $validated['roster_start_month'])
+                && Schema::hasTable('payment_roster_overrides')
+            ) {
+                $existingOverride = PaymentRosterOverride::query()
+                    ->where('student_id', $student->id)
+                    ->where('start_year', (int) $validated['roster_start_year'])
+                    ->where('start_month', (int) $validated['roster_start_month'])
+                    ->first();
+                if ($existingOverride !== null) {
+                    if (is_array($existingOverride->course_ids) && $existingOverride->course_ids !== []) {
+                        $suggestedCourseIds = array_values(array_filter(
+                            array_map('intval', $existingOverride->course_ids),
+                            fn (int $id) => in_array($id, $subjectIdSet, true)
+                        ));
+                    }
+                    if (is_array($existingOverride->course_months) && $existingOverride->course_months !== []) {
+                        $suggestedCourseMonths = [];
+                        foreach ($existingOverride->course_months as $cid => $keys) {
+                            $suggestedCourseMonths[(int) $cid] = array_values(array_map('strval', (array) $keys));
+                        }
+                    }
+                    if (is_string($existingOverride->pay_cycle) && $existingOverride->pay_cycle !== '') {
+                        $suggestedPayCycle = $existingOverride->pay_cycle;
+                    }
+                    if ($existingOverride->fee !== null && empty($validated['roster_fee'])) {
+                        $validated['roster_fee'] = (int) $existingOverride->fee;
+                    }
+                }
+            }
         }
 
         $materialStatus = [];
@@ -776,6 +872,7 @@ class StudentPaymentController extends Controller
                     'start_month' => (int) $validated['roster_start_month'],
                 ]
                 : null,
+            'roster_edit' => $rosterEdit,
             'bundles' => $bundles,
             'material_status' => $materialStatus,
             'fee_discounts' => isset($student)

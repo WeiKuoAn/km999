@@ -129,6 +129,50 @@ test('roster override changes displayed fee without creating payment', function 
         ->and((string) $adjusted['note'])->toContain('兄弟優惠');
 });
 
+test('roster override course months update notice study period', function () {
+    ['grade' => $grade, 'math' => $math, 'student' => $student] = rosterOverrideCtx();
+
+    $row = collect(PaymentRosterBuilder::build('', null, '2026-10', (int) $grade->id))
+        ->firstWhere('student_id', $student->id);
+    expect($row)->not->toBeNull();
+
+    $startY = (int) $row['start_year'];
+    $startM = (int) $row['start_month'];
+    $cid = (string) $math->id;
+
+    PaymentRosterOverride::query()->create([
+        'student_id' => $student->id,
+        'start_year' => $startY,
+        'start_month' => $startM,
+        'end_year' => 2027,
+        'end_month' => 2,
+        'course_ids' => [(int) $math->id],
+        'course_months' => [
+            $cid => ['2026-12', '2027-1', '2027-2'],
+        ],
+        'fee' => 17100,
+        'original_fee' => (int) $row['fee'],
+    ]);
+
+    $adjusted = collect(PaymentRosterBuilder::build('', null, '2026-10', (int) $grade->id))
+        ->firstWhere('student_id', $student->id);
+
+    expect($adjusted)->not->toBeNull()
+        ->and((int) $adjusted['end_year'])->toBe(2027)
+        ->and((int) $adjusted['end_month'])->toBe(2)
+        ->and((int) $adjusted['notice']['start_year'])->toBe(2026)
+        ->and((int) $adjusted['notice']['start_month'])->toBe(12)
+        ->and((int) $adjusted['notice']['end_year'])->toBe(2027)
+        ->and((int) $adjusted['notice']['end_month'])->toBe(2);
+
+    // 確保 PDF normalize 會用到更新後年月
+    $ref = new ReflectionClass(\App\Support\PaymentNoticePdf::class);
+    $method = $ref->getMethod('normalizeNotice');
+    $method->setAccessible(true);
+    $normalized = $method->invoke(null, $adjusted['notice']);
+    expect((string) $normalized['period_label'])->toContain('2 月');
+});
+
 test('clear roster override restores estimate', function () {
     ['grade' => $grade, 'student' => $student] = rosterOverrideCtx();
     $admin = rosterOverrideAdmin();

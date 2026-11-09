@@ -391,7 +391,7 @@ final class PaymentRosterBuilder
     }
 
     /**
-     * 套用繳費名單手動調整金額（不開帳，只改顯示／繳費條）。
+     * 套用繳費名單手動調整（科目／月份／金額；不開帳，只改顯示／繳費條）。
      *
      * @param  list<array<string, mixed>>  $rows
      * @return list<array<string, mixed>>
@@ -440,16 +440,122 @@ final class PaymentRosterBuilder
             $row['fee_overridden'] = true;
             $row['fee_source'] = 'override';
             $row['override_note'] = $override->note;
+            $row['course_months'] = is_array($override->course_months) ? $override->course_months : null;
 
-            $mark = '金額已手動調整';
+            $courseIds = is_array($override->course_ids)
+                ? array_values(array_map('intval', $override->course_ids))
+                : [];
+            if ($courseIds !== []) {
+                $row['course_ids'] = $courseIds;
+                $subjects = self::subjectLabels($courseIds);
+                $row['subjects_label'] = $subjects === [] ? '—' : implode('、', $subjects);
+                $row['subject_marks'] = $subjects;
+            }
+
+            if (is_string($override->pay_cycle) && $override->pay_cycle !== '') {
+                $row['pay_cycle'] = $override->pay_cycle;
+                $row['pay_cycle_label'] = BillingRenewal::payCycleLabel($override->pay_cycle);
+            }
+
+            $monthsByCourse = [];
+            if (is_array($override->course_months)) {
+                foreach ($override->course_months as $cid => $keys) {
+                    $list = [];
+                    foreach ((array) $keys as $keyLabel) {
+                        if (! is_string($keyLabel) || ! preg_match('/^(\d{4})-(\d{1,2})$/', $keyLabel, $m)) {
+                            continue;
+                        }
+                        $list[] = ['y' => (int) $m[1], 'm' => (int) $m[2]];
+                    }
+                    if ($list !== []) {
+                        usort($list, fn (array $a, array $b): int => [$a['y'], $a['m']] <=> [$b['y'], $b['m']]);
+                        $monthsByCourse[(int) $cid] = $list;
+                    }
+                }
+            }
+
+            // 顯示用起始（篩選 key 仍用原本 start_year/month）
+            $noticeStartY = (int) $row['start_year'];
+            $noticeStartM = (int) $row['start_month'];
+
+            if ($monthsByCourse !== []) {
+                $flat = [];
+                foreach ($monthsByCourse as $list) {
+                    foreach ($list as $month) {
+                        $flat[] = $month;
+                    }
+                }
+                usort($flat, fn (array $a, array $b): int => [$a['y'], $a['m']] <=> [$b['y'], $b['m']]);
+                $first = $flat[0];
+                $last = $flat[array_key_last($flat)];
+                $row['end_year'] = (int) $last['y'];
+                $row['end_month'] = (int) $last['m'];
+                $noticeStartY = (int) $first['y'];
+                $noticeStartM = (int) $first['m'];
+                $labelById = self::subjectLabelMap($row['course_ids'] ?? []);
+                $monthSetKeys = array_map(
+                    function (array $courseMonths): string {
+                        $keys = array_map(
+                            fn (array $month): string => ((int) $month['y']).'-'.((int) $month['m']),
+                            $courseMonths
+                        );
+                        sort($keys);
+
+                        return implode(',', $keys);
+                    },
+                    $monthsByCourse
+                );
+                $monthsDiffer = count(array_unique(array_values($monthSetKeys))) > 1;
+                $periodLabel = $monthsDiffer
+                    ? self::splitPeriodLabel($monthsByCourse, $labelById)
+                    : self::periodLabel($noticeStartY, $noticeStartM, (int) $last['y'], (int) $last['m']);
+                $row['period_label'] = $periodLabel;
+                $subjects = $row['subject_marks'] ?? [];
+                $row['subjects_months'] = ($subjects === [] ? '—' : implode('、', $subjects)).'｜'.$periodLabel;
+            } elseif ($override->end_year !== null && $override->end_month !== null) {
+                $row['end_year'] = (int) $override->end_year;
+                $row['end_month'] = (int) $override->end_month;
+                $row['period_label'] = self::periodLabel(
+                    $noticeStartY,
+                    $noticeStartM,
+                    (int) $row['end_year'],
+                    (int) $row['end_month'],
+                );
+                $subjects = $row['subject_marks'] ?? [];
+                $row['subjects_months'] = ($subjects === [] ? '—' : implode('、', $subjects)).'｜'.$row['period_label'];
+            }
+
+            $mark = '名單已手動調整';
             if (is_string($override->note) && trim($override->note) !== '') {
                 $mark .= '：'.trim($override->note);
             }
             $existingNote = trim((string) ($row['note'] ?? ''));
+            // 去掉舊的「金額已手動調整」標記，改寫新標記
+            $existingNote = trim((string) preg_replace('/；?金額已手動調整(?:：[^；]*)?/u', '', $existingNote));
+            $existingNote = trim((string) preg_replace('/；?名單已手動調整(?:：[^；]*)?/u', '', $existingNote));
             $row['note'] = $existingNote === '' ? $mark : $existingNote.'；'.$mark;
 
             if (isset($row['notice']) && is_array($row['notice'])) {
                 $row['notice']['grand_total'] = $adjusted;
+                if (isset($row['subjects_label'])) {
+                    $row['notice']['subjects_label'] = $row['subjects_label'];
+                }
+                if (isset($row['period_label'])) {
+                    $row['notice']['period_label'] = $row['period_label'];
+                }
+                // 繳費條修業期間依 notice 年月組字；override 改月份後必須同步
+                if (isset($row['end_year'], $row['end_month'])) {
+                    $row['notice']['start_year'] = $noticeStartY;
+                    $row['notice']['start_month'] = $noticeStartM;
+                    $row['notice']['end_year'] = (int) $row['end_year'];
+                    $row['notice']['end_month'] = (int) $row['end_month'];
+                    $row['notice']['month_count'] = max(
+                        1,
+                        (($row['notice']['end_year'] - $noticeStartY) * 12)
+                            + ((int) $row['end_month'] - $noticeStartM)
+                            + 1
+                    );
+                }
             }
         }
         unset($row);

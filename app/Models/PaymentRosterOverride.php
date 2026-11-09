@@ -13,8 +13,13 @@ class PaymentRosterOverride extends Model
         'start_month',
         'end_year',
         'end_month',
+        'course_ids',
+        'course_months',
+        'pay_cycle',
+        'material_half_charges',
         'fee',
         'original_fee',
+        'allowance',
         'note',
         'updated_by_user_id',
     ];
@@ -26,8 +31,12 @@ class PaymentRosterOverride extends Model
             'start_month' => 'integer',
             'end_year' => 'integer',
             'end_month' => 'integer',
+            'course_ids' => 'array',
+            'course_months' => 'array',
+            'material_half_charges' => 'array',
             'fee' => 'integer',
             'original_fee' => 'integer',
+            'allowance' => 'integer',
         ];
     }
 
