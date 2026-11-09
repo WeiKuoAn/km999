@@ -7,6 +7,7 @@ use App\Models\Course;
 use App\Models\FeeDiscount;
 use App\Models\FeePlan;
 use App\Models\GradeLevel;
+use App\Models\PaymentRosterOverride;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\StudentMaterialPayment;
@@ -242,6 +243,77 @@ class StudentPaymentController extends Controller
                 'period_start' => $periodStart ?? '',
             ],
         ]);
+    }
+
+    /**
+     * 調整繳費名單顯示金額（不開帳／不確認收款）。
+     */
+    public function storeRosterOverride(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'student_id' => ['required', 'integer', 'exists:students,id'],
+            'start_year' => ['required', 'integer', 'min:2000', 'max:2100'],
+            'start_month' => ['required', 'integer', 'min:1', 'max:12'],
+            'end_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
+            'end_month' => ['nullable', 'integer', 'min:1', 'max:12'],
+            'fee' => ['required', 'integer', 'min:0'],
+            'original_fee' => ['nullable', 'integer', 'min:0'],
+            'note' => ['nullable', 'string', 'max:500'],
+            'q' => ['nullable', 'string', 'max:255'],
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2})$/'],
+        ]);
+
+        $note = isset($validated['note']) ? trim((string) $validated['note']) : null;
+
+        PaymentRosterOverride::query()->updateOrCreate(
+            [
+                'student_id' => (int) $validated['student_id'],
+                'start_year' => (int) $validated['start_year'],
+                'start_month' => (int) $validated['start_month'],
+            ],
+            [
+                'end_year' => isset($validated['end_year']) ? (int) $validated['end_year'] : null,
+                'end_month' => isset($validated['end_month']) ? (int) $validated['end_month'] : null,
+                'fee' => (int) $validated['fee'],
+                'original_fee' => isset($validated['original_fee'])
+                    ? (int) $validated['original_fee']
+                    : null,
+                'note' => $note === '' ? null : $note,
+                'updated_by_user_id' => auth()->id(),
+            ]
+        );
+
+        return to_route('payment-lists.index', array_filter([
+            'q' => $validated['q'] ?? null,
+            'grade_level_id' => $validated['grade_level_id'] ?? null,
+            'period_start' => $validated['period_start'] ?? null,
+        ], fn ($v) => $v !== null && $v !== ''))->with('success', '已更新名單金額（尚未收款）。');
+    }
+
+    /** 清除繳費名單手動金額，恢復試算 */
+    public function clearRosterOverride(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'student_id' => ['required', 'integer', 'exists:students,id'],
+            'start_year' => ['required', 'integer', 'min:2000', 'max:2100'],
+            'start_month' => ['required', 'integer', 'min:1', 'max:12'],
+            'q' => ['nullable', 'string', 'max:255'],
+            'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'period_start' => ['nullable', 'string', 'regex:/^(\d{4}-\d{1,2})$/'],
+        ]);
+
+        PaymentRosterOverride::query()
+            ->where('student_id', (int) $validated['student_id'])
+            ->where('start_year', (int) $validated['start_year'])
+            ->where('start_month', (int) $validated['start_month'])
+            ->delete();
+
+        return to_route('payment-lists.index', array_filter([
+            'q' => $validated['q'] ?? null,
+            'grade_level_id' => $validated['grade_level_id'] ?? null,
+            'period_start' => $validated['period_start'] ?? null,
+        ], fn ($v) => $v !== null && $v !== ''))->with('success', '已恢復試算金額。');
     }
 
     /** 繳費名單紙本 PDF（瀏覽器列印／另存 PDF） */
@@ -551,6 +623,9 @@ class StudentPaymentController extends Controller
             'edit_to' => ['nullable', 'regex:/^\d{4}-\d{1,2}$/', 'required_with:edit_from'],
             'grade_level_id' => ['nullable', 'integer', 'exists:grade_levels,id'],
             'return_grade' => ['nullable', 'integer', 'exists:grade_levels,id'],
+            'roster_fee' => ['nullable', 'integer', 'min:0'],
+            'roster_start_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
+            'roster_start_month' => ['nullable', 'integer', 'min:1', 'max:12'],
         ]);
         $embed = $request->boolean('embed');
 
@@ -692,6 +767,15 @@ class StudentPaymentController extends Controller
             'suggested_pay_cycle' => $suggestedPayCycle,
             'suggested_course_months' => $suggestedCourseMonths,
             'enrolled_course_ids' => $enrolledCourseIds,
+            'roster_fee' => isset($validated['roster_fee'])
+                ? (int) $validated['roster_fee']
+                : null,
+            'roster_period' => isset($validated['roster_start_year'], $validated['roster_start_month'])
+                ? [
+                    'start_year' => (int) $validated['roster_start_year'],
+                    'start_month' => (int) $validated['roster_start_month'],
+                ]
+                : null,
             'bundles' => $bundles,
             'material_status' => $materialStatus,
             'fee_discounts' => isset($student)

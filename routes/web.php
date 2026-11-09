@@ -79,6 +79,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('payment-lists/notices/exports', [StudentPaymentController::class, 'startRosterNoticeExport'])->name('payment-lists.notices-export.start');
         Route::get('payment-lists/notices/exports/{export}', [StudentPaymentController::class, 'rosterNoticeExportStatus'])->name('payment-lists.notices-export.status');
         Route::get('payment-lists/notices/exports/{export}/download', [StudentPaymentController::class, 'downloadRosterNoticeExport'])->name('payment-lists.notices-export.download');
+        Route::post('payment-lists/fee-override', [StudentPaymentController::class, 'storeRosterOverride'])->name('payment-lists.fee-override.store');
+        Route::delete('payment-lists/fee-override', [StudentPaymentController::class, 'clearRosterOverride'])->name('payment-lists.fee-override.destroy');
         Route::get('student-payments/create', [StudentPaymentController::class, 'create'])->name('student-payments.create');
         Route::get('student-payments/search', [StudentPaymentController::class, 'search'])->name('student-payments.search');
         Route::get('student-payments/{student}/quote', [StudentPaymentController::class, 'quote'])->name('student-payments.quote');

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Head, Link, router } from '@inertiajs/vue3';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import { FileDown, LoaderCircle } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
@@ -11,6 +11,7 @@ import {
     Dialog,
     DialogContent,
     DialogDescription,
+    DialogFooter,
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
@@ -34,6 +35,9 @@ type Row = {
     pay_cycle?: string | null;
     pay_cycle_label?: string | null;
     fee_source?: string;
+    fee_overridden?: boolean;
+    estimated_fee?: number;
+    override_note?: string | null;
     course_ids?: number[];
 };
 
@@ -116,39 +120,48 @@ const detailHref = (row: Row) => {
     }
     const start = `${row.start_year}-${String(row.start_month).padStart(2, '0')}-01`;
     params.set('start_date', start);
+    // 讓確認收款頁對齊名單金額（含手動調整）
+    params.set('roster_fee', String(row.fee));
+    params.set('roster_start_year', String(row.start_year));
+    params.set('roster_start_month', String(row.start_month));
     return `/student-payments/create?${params.toString()}`;
 };
 
+const page = usePage();
+const flashSuccess = computed(
+    () => (page.props.flash as { success?: string } | undefined)?.success,
+);
+
 const editOpen = ref(false);
 const editRow = ref<Row | null>(null);
-const editIframeKey = ref(0);
-const editFlash = ref('');
-
-const editUrl = computed(() => {
-    const row = editRow.value;
-    if (!row) {
-        return '';
-    }
-    const params = new URLSearchParams();
-    params.set('student_id', String(row.student_id));
-    params.set('embed', '1');
-    for (const id of row.course_ids ?? []) {
-        params.append('course_ids[]', String(id));
-    }
-    if (row.pay_cycle) {
-        params.set('pay_cycle', row.pay_cycle);
-    }
-    params.set(
-        'start_date',
-        `${row.start_year}-${String(row.start_month).padStart(2, '0')}-01`,
-    );
-    return `/student-payments/create?${params.toString()}`;
+const editForm = useForm({
+    student_id: 0,
+    start_year: 0,
+    start_month: 0,
+    end_year: null as number | null,
+    end_month: null as number | null,
+    fee: 0,
+    original_fee: 0,
+    note: '',
+    q: '',
+    grade_level_id: '' as string,
+    period_start: '' as string,
 });
 
 const openEdit = (row: Row) => {
     editRow.value = row;
-    editFlash.value = '';
-    editIframeKey.value += 1;
+    editForm.clearErrors();
+    editForm.student_id = row.student_id;
+    editForm.start_year = row.start_year;
+    editForm.start_month = row.start_month;
+    editForm.end_year = row.end_year;
+    editForm.end_month = row.end_month;
+    editForm.fee = row.fee;
+    editForm.original_fee = row.estimated_fee ?? row.fee;
+    editForm.note = row.override_note ?? '';
+    editForm.q = q.value.trim();
+    editForm.grade_level_id = gradeLevelId.value;
+    editForm.period_start = periodStart.value;
     editOpen.value = true;
 };
 
@@ -157,25 +170,19 @@ const closeEdit = () => {
     editRow.value = null;
 };
 
-const onEmbedMessage = (event: MessageEvent) => {
-    if (event.origin !== window.location.origin) {
-        return;
-    }
-    const data = event.data as {
-        type?: string;
-        message?: string;
-    } | null;
-    if (!data || data.type !== 'km999:student-payment-saved') {
-        return;
-    }
-    editFlash.value = data.message || '已確認收款';
-    closeEdit();
-    router.reload({ preserveScroll: true });
+const saveFeeOverride = () => {
+    editForm.post('/payment-lists/fee-override', {
+        preserveScroll: true,
+        onSuccess: () => closeEdit(),
+    });
 };
 
-onMounted(() => {
-    window.addEventListener('message', onEmbedMessage);
-});
+const clearFeeOverride = () => {
+    editForm.delete('/payment-lists/fee-override', {
+        preserveScroll: true,
+        onSuccess: () => closeEdit(),
+    });
+};
 
 const filterParams = () => ({
     q: q.value.trim() || undefined,
@@ -314,7 +321,6 @@ const startNoticesExport = async () => {
 
 onBeforeUnmount(() => {
     clearNoticesPoll();
-    window.removeEventListener('message', onEmbedMessage);
 });
 
 defineOptions({
@@ -463,9 +469,14 @@ defineOptions({
                     <MobileRecordField label="學號">{{
                         row.student_code ?? '—'
                     }}</MobileRecordField>
-                    <MobileRecordField label="費用">{{
-                        formatMoney(row.fee)
-                    }}</MobileRecordField>
+                    <MobileRecordField label="費用">
+                        {{ formatMoney(row.fee) }}
+                        <span
+                            v-if="row.fee_overridden"
+                            class="ml-1 text-xs text-amber-700"
+                            >已調整</span
+                        >
+                    </MobileRecordField>
                     <MobileRecordField label="繳別">{{
                         row.pay_cycle_label ?? '—'
                     }}</MobileRecordField>
@@ -548,6 +559,23 @@ defineOptions({
                                 class="px-3 py-2.5 text-right tabular-nums font-medium"
                             >
                                 {{ formatMoney(row.fee) }}
+                                <div
+                                    v-if="row.fee_overridden"
+                                    class="text-xs font-normal text-amber-700"
+                                >
+                                    已調整
+                                    <template
+                                        v-if="
+                                            row.estimated_fee != null &&
+                                            row.estimated_fee !== row.fee
+                                        "
+                                    >
+                                        （原
+                                        {{
+                                            formatMoney(row.estimated_fee)
+                                        }}）
+                                    </template>
+                                </div>
                             </td>
                             <td class="px-3 py-2.5 text-muted-foreground">
                                 {{ row.note || '—' }}
@@ -595,38 +623,101 @@ defineOptions({
         </template>
 
         <div
-            v-if="editFlash"
+            v-if="flashSuccess"
             class="fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-md border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800 shadow"
         >
-            {{ editFlash }}
+            {{ flashSuccess }}
         </div>
 
         <Dialog :open="editOpen" @update:open="(v) => !v && closeEdit()">
-            <DialogContent
-                class="flex h-[min(94vh,920px)] w-[min(96vw,1180px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
-            >
-                <DialogHeader class="border-b px-4 py-3 text-left">
+            <DialogContent class="sm:max-w-md">
+                <DialogHeader>
                     <DialogTitle>
-                        編輯收款
+                        調整名單金額
                         <span
                             v-if="editRow"
-                            class="ml-2 text-sm font-normal text-muted-foreground"
+                            class="mt-1 block text-sm font-normal text-muted-foreground"
                         >
                             {{ editRow.student_code ?? '' }}
                             {{ editRow.student_name }}
+                            · {{ editRow.period_label }}
                         </span>
                     </DialogTitle>
                     <DialogDescription>
-                        可調整科目、繳別、月份與教材；右側試算會即時更新，確認後儲存即完成收款。
+                        只改繳費名單／繳費條上的顯示金額，不會確認收款。真正收款請按「確認收款」。
                     </DialogDescription>
                 </DialogHeader>
-                <iframe
-                    v-if="editOpen && editUrl"
-                    :key="editIframeKey"
-                    :src="editUrl"
-                    title="編輯收款"
-                    class="min-h-0 w-full flex-1 border-0 bg-background"
-                />
+
+                <div v-if="editRow" class="space-y-3">
+                    <p class="text-sm text-muted-foreground">
+                        {{ editRow.subjects_label }}
+                        <span v-if="editRow.pay_cycle_label">
+                            · {{ editRow.pay_cycle_label }}
+                        </span>
+                    </p>
+                    <p
+                        v-if="editForm.original_fee !== editForm.fee"
+                        class="text-xs text-muted-foreground"
+                    >
+                        系統試算：{{ formatMoney(editForm.original_fee) }}
+                    </p>
+                    <div class="grid gap-1.5">
+                        <Label for="roster-fee">名單金額</Label>
+                        <Input
+                            id="roster-fee"
+                            v-model.number="editForm.fee"
+                            type="number"
+                            min="0"
+                            step="1"
+                            class="h-11 text-base tabular-nums"
+                        />
+                        <p
+                            v-if="editForm.errors.fee"
+                            class="text-xs text-destructive"
+                        >
+                            {{ editForm.errors.fee }}
+                        </p>
+                    </div>
+                    <div class="grid gap-1.5">
+                        <Label for="roster-fee-note">備註（選填）</Label>
+                        <Input
+                            id="roster-fee-note"
+                            v-model="editForm.note"
+                            type="text"
+                            maxlength="500"
+                            placeholder="例：兄弟優惠少收 500"
+                        />
+                    </div>
+                </div>
+
+                <DialogFooter class="gap-2 sm:justify-between">
+                    <Button
+                        v-if="editRow?.fee_overridden"
+                        type="button"
+                        variant="ghost"
+                        class="text-muted-foreground"
+                        :disabled="editForm.processing"
+                        @click="clearFeeOverride"
+                    >
+                        恢復試算
+                    </Button>
+                    <div class="flex flex-1 justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            @click="closeEdit"
+                        >
+                            取消
+                        </Button>
+                        <Button
+                            type="button"
+                            :disabled="editForm.processing"
+                            @click="saveFeeOverride"
+                        >
+                            儲存金額
+                        </Button>
+                    </div>
+                </DialogFooter>
             </DialogContent>
         </Dialog>
     </div>

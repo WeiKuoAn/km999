@@ -3,9 +3,11 @@
 namespace App\Support;
 
 use App\Models\Course;
+use App\Models\PaymentRosterOverride;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Schema;
 
 final class PaymentRosterBuilder
 {
@@ -379,11 +381,85 @@ final class PaymentRosterBuilder
                 <=> [$b['start_year'], $b['start_month'], $b['student_name']];
         });
 
+        $rows = self::applyFeeOverrides($rows);
+
         return [
             'rows' => $rows,
             'period_options' => $periodOptions,
             'selected_period' => $selectedPeriod,
         ];
+    }
+
+    /**
+     * 套用繳費名單手動調整金額（不開帳，只改顯示／繳費條）。
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    private static function applyFeeOverrides(array $rows): array
+    {
+        if ($rows === [] || ! Schema::hasTable('payment_roster_overrides')) {
+            return $rows;
+        }
+
+        $studentIds = array_values(array_unique(array_map(
+            fn (array $row): int => (int) $row['student_id'],
+            $rows
+        )));
+
+        $overrides = PaymentRosterOverride::query()
+            ->whereIn('student_id', $studentIds)
+            ->get()
+            ->keyBy(fn (PaymentRosterOverride $row): string => self::overrideKey(
+                (int) $row->student_id,
+                (int) $row->start_year,
+                (int) $row->start_month,
+            ));
+
+        if ($overrides->isEmpty()) {
+            return $rows;
+        }
+
+        foreach ($rows as &$row) {
+            $key = self::overrideKey(
+                (int) $row['student_id'],
+                (int) $row['start_year'],
+                (int) $row['start_month'],
+            );
+            $override = $overrides->get($key);
+            if ($override === null) {
+                $row['fee_overridden'] = false;
+                $row['estimated_fee'] = (int) $row['fee'];
+                continue;
+            }
+
+            $estimated = (int) $row['fee'];
+            $adjusted = max(0, (int) $override->fee);
+            $row['estimated_fee'] = $estimated;
+            $row['fee'] = $adjusted;
+            $row['fee_overridden'] = true;
+            $row['fee_source'] = 'override';
+            $row['override_note'] = $override->note;
+
+            $mark = '金額已手動調整';
+            if (is_string($override->note) && trim($override->note) !== '') {
+                $mark .= '：'.trim($override->note);
+            }
+            $existingNote = trim((string) ($row['note'] ?? ''));
+            $row['note'] = $existingNote === '' ? $mark : $existingNote.'；'.$mark;
+
+            if (isset($row['notice']) && is_array($row['notice'])) {
+                $row['notice']['grand_total'] = $adjusted;
+            }
+        }
+        unset($row);
+
+        return $rows;
+    }
+
+    private static function overrideKey(int $studentId, int $startYear, int $startMonth): string
+    {
+        return $studentId.'|'.$startYear.'|'.$startMonth;
     }
 
     /**

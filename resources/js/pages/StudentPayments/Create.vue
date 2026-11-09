@@ -119,6 +119,9 @@ const props = defineProps<{
     suggested_pay_cycle?: 'monthly' | 'quarterly' | 'annual' | null;
     suggested_course_months?: Record<string, string[]> | null;
     enrolled_course_ids?: number[];
+    /** 從繳費名單帶入，確認收款應對齊此金額 */
+    roster_fee?: number | null;
+    roster_period?: { start_year: number; start_month: number } | null;
     bundles?: Array<{
         id: number;
         name: string;
@@ -698,20 +701,27 @@ type CustomPeriod = {
 const isCustomSubject = (s: Subject | undefined | null): boolean =>
     !!s && s.unit === 'custom_period' && Array.isArray(s.periods) && s.periods.length > 0;
 
-/** 同一收費設定下，本次勾選科數（單／雙／三科價） */
+/**
+ * 同一收費設定下報名科數（單／雙／三科價）。
+ * 與後端 EnrollmentPricing::feePlanSubjectCount 一致：本次勾選＋已報／續期科目。
+ */
 const feePlanSubjectCount = (s: Subject): number => {
     if (!s.fee_plan_id) {
         return 1;
     }
 
-    return Math.max(
-        1,
-        selected.value.filter((id) => {
-            const peer = props.subjects.find((x) => x.id === id);
+    const ids = new Set<number>();
+    for (const id of [
+        ...selected.value,
+        ...(props.enrolled_course_ids ?? []),
+    ]) {
+        const peer = props.subjects.find((x) => x.id === id);
+        if (peer?.fee_plan_id === s.fee_plan_id) {
+            ids.add(id);
+        }
+    }
 
-            return peer?.fee_plan_id === s.fee_plan_id;
-        }).length,
-    );
+    return Math.max(1, ids.size);
 };
 
 const priceForSubjectCount = (period: CustomPeriod, count: number): number => {
@@ -2064,6 +2074,37 @@ const grandTotal = computed(() =>
     ),
 );
 
+const rosterFee = computed(() =>
+    props.roster_fee != null && props.roster_fee >= 0
+        ? Number(props.roster_fee)
+        : null,
+);
+
+/** 從繳費名單進來：自動用折讓對齊名單金額（不疊加優惠方案） */
+const syncAllowanceToRosterFee = () => {
+    const target = rosterFee.value;
+    if (target === null || selectedDiscountId.value !== null) {
+        return;
+    }
+
+    const subtotal = tuitionTotal.value + materialTotal.value;
+    if (subtotal <= 0) {
+        return;
+    }
+
+    // 名單較低：用學費折讓補齊；名單較高：無法自動加價，維持 0 折讓
+    const needed = Math.max(0, subtotal - target);
+    allowance.value = Math.min(tuitionTotal.value, needed);
+};
+
+watch(
+    [rosterFee, tuitionTotal, materialTotal, selectedDiscountId],
+    () => {
+        syncAllowanceToRosterFee();
+    },
+    { immediate: true },
+);
+
 const feeDiscounts = computed(() => props.fee_discounts ?? []);
 
 const selectedDiscount = computed(() =>
@@ -3349,6 +3390,28 @@ defineOptions({
                                     {{ grandTotal.toLocaleString() }}
                                 </dd>
                             </div>
+                            <p
+                                v-if="rosterFee !== null"
+                                class="text-xs"
+                                :class="
+                                    grandTotal === rosterFee
+                                        ? 'text-emerald-700'
+                                        : 'text-amber-700'
+                                "
+                            >
+                                繳費名單金額：{{ rosterFee.toLocaleString() }}
+                                <template v-if="grandTotal === rosterFee">
+                                    （已對齊）
+                                </template>
+                                <template v-else>
+                                    （與目前試算差
+                                    {{
+                                        Math.abs(
+                                            grandTotal - rosterFee,
+                                        ).toLocaleString()
+                                    }}，請檢查科目／月份）
+                                </template>
+                            </p>
                         </dl>
                         <p class="mt-3 text-sm text-muted-foreground">
                             學費依勾選月份計算；教材費請在左側勾選。
