@@ -264,6 +264,43 @@ export function defaultBillingMonths(
     return out;
 }
 
+/**
+ * 依起始年＋起迄月列出帳期（可跨年，例：2026、3→8 → 3–8 月；7→6 → 7–12＋隔年 1–6）。
+ */
+export function billingMonthsFromSpan(
+    startYear: number,
+    startMonth: number,
+    endMonth: number,
+): YearMonth[] {
+    if (
+        !Number.isFinite(startYear) ||
+        startMonth < 1 ||
+        startMonth > 12 ||
+        endMonth < 1 ||
+        endMonth > 12
+    ) {
+        return [];
+    }
+
+    const out: YearMonth[] = [];
+    let year = Math.trunc(startYear);
+    let month = Math.trunc(startMonth);
+
+    for (let i = 0; i < 12; i++) {
+        out.push({ y: year, m: month });
+        if (month === endMonth) {
+            break;
+        }
+        month += 1;
+        if (month > 12) {
+            month = 1;
+            year += 1;
+        }
+    }
+
+    return out;
+}
+
 /** 自起算月起列出可勾選的月份選項（預設 12 個月） */
 export function billingMonthOptions(
     startDate: string,

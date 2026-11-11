@@ -14,6 +14,7 @@ import { studentStatusLabel, studentStatusPillClass } from '@/lib/studentStatus'
 import {
     billingBaselineSessions,
     billingMonthOptions,
+    billingMonthsFromSpan,
     buildDefaultSessionEntries,
     countSessionsForCourse,
     defaultBillingMonths,
@@ -22,11 +23,9 @@ import {
     monthsFromDates,
     parseMonthKey,
     proratedMonthTuitionExact,
-    uniqueDatesFromSessions
-    
-    
+    uniqueDatesFromSessions,
 } from '@/lib/weekdayDates';
-import type {SessionEntry, YearMonth} from '@/lib/weekdayDates';
+import type { SessionEntry, YearMonth } from '@/lib/weekdayDates';
 
 type Subject = {
     id: number;
@@ -445,9 +444,46 @@ const syncDefaultMaterialChecks = () => {
 };
 
 /** 依繳別決定預選／可瀏覽堂次月數 */
+/** 年繳方案期數（依收費設定起迄月） */
+const activePackageMonthCount = computed(() => {
+    const pack = activeGrade9Package.value;
+    if (!pack) {
+        return 0;
+    }
+    return billingMonthsFromSpan(
+        2000,
+        Number(pack.start_month ?? 7),
+        Number(pack.end_month ?? 12),
+    ).length;
+});
+
+const packagePeriodCount = (pack: {
+    start_month?: number;
+    end_month?: number;
+}): number =>
+    billingMonthsFromSpan(
+        2000,
+        Number(pack.start_month ?? 7),
+        Number(pack.end_month ?? 12),
+    ).length;
+
+const packageMonthsLabel = (pack: {
+    start_month?: number;
+    end_month?: number;
+}): string => {
+    const start = Number(pack.start_month ?? 7);
+    const end = Number(pack.end_month ?? 12);
+    return start === end ? `${start} 月` : `${start}–${end} 月`;
+};
+
+const activePackageMonthsLabel = computed(() => {
+    const pack = activeGrade9Package.value;
+    return pack ? packageMonthsLabel(pack) : '7–12 月';
+});
+
 const sessionMonthSpan = computed(() => {
     if (isGrade9PackageMode.value) {
-        return 6;
+        return Math.max(1, activePackageMonthCount.value || 6);
     }
 
     switch (payCycle.value) {
@@ -597,12 +633,18 @@ const packageMonthBreakdown = computed((): MonthBreakdownRow[] => {
         return [];
     }
 
+    const pack = activeGrade9Package.value;
     const year = Number(startDate.value.slice(0, 4));
     const ids = [...selected.value];
     const n = ids.length;
-    const monthly = activeGrade9Package.value?.monthly_total ?? 20000;
+    const monthly = pack?.monthly_total ?? 20000;
+    const months = billingMonthsFromSpan(
+        year,
+        Number(pack?.start_month ?? 7),
+        Number(pack?.end_month ?? 12),
+    );
 
-    return [7, 8, 9, 10, 11, 12].map((m) => {
+    return months.map((month) => {
         const courses: MonthCourseLine[] = ids.map((id, index) => {
             const s = props.subjects.find((x) => x.id === id);
             const share = packageShareForCourse(index, n);
@@ -617,9 +659,9 @@ const packageMonthBreakdown = computed((): MonthBreakdownRow[] => {
         });
 
         return {
-            y: year,
-            m,
-            label: `${year}/${m}`,
+            y: month.y,
+            m: month.m,
+            label: `${month.y}/${month.m}`,
             tuition: monthly,
             material: 0,
             subtotal: monthly,
@@ -1031,10 +1073,13 @@ const syncSuggestedMonths = () => {
     }
 
     if (isGrade9PackageMode.value) {
+        const pack = activeGrade9Package.value;
         const year = Number(startDate.value.slice(0, 4));
-        selectedMonthKeys.value = [7, 8, 9, 10, 11, 12].map((m) =>
-            monthKey(year, m),
-        );
+        selectedMonthKeys.value = billingMonthsFromSpan(
+            year,
+            Number(pack?.start_month ?? 7),
+            Number(pack?.end_month ?? 12),
+        ).map((m) => monthKey(m.y, m.m));
 
         return;
     }
@@ -1556,7 +1601,10 @@ const billingMonths = computed(() =>
 );
 const monthCount = computed(() =>
     isGrade9PackageMode.value
-        ? Math.max(6, selectedMonths.value.length)
+        ? Math.max(
+              activePackageMonthCount.value,
+              selectedMonths.value.length,
+          ) || selectedMonths.value.length
         : billingMonths.value.length,
 );
 const courseBillingMonths = (courseId: number): YearMonth[] => {
@@ -2860,7 +2908,10 @@ defineOptions({
                                                 總額
                                                 {{
                                                     pack.total.toLocaleString()
-                                                }}／6 期，約每月
+                                                }}／{{ packagePeriodCount(pack) }}
+                                                期（{{
+                                                    packageMonthsLabel(pack)
+                                                }}），約每月
                                                 {{
                                                     pack.monthly_total.toLocaleString()
                                                 }}
@@ -2926,8 +2977,9 @@ defineOptions({
                             >
                                 {{
                                     activeGrade9Package?.label ??
-                                    '國三年繳方案'
-                                }}固定 7–12 月共 6 期，每月合計約
+                                    '年繳方案'
+                                }}固定 {{ activePackageMonthsLabel }}共
+                                {{ activePackageMonthCount || 6 }} 期，每月合計約
                                 {{
                                     (
                                         activeGrade9Package?.monthly_total ??
@@ -3232,8 +3284,11 @@ defineOptions({
                         >
                             {{ activeGrade9Package.label }}：{{
                                 activeGrade9Package.total.toLocaleString()
-                            }}（含教材）／6 期；各科該月應收＝當月合計 ÷
-                            {{ selected.length }} 科。
+                            }}（含教材）／{{
+                                activePackageMonthCount || 6
+                            }}
+                            期（{{ activePackageMonthsLabel }}）；各科該月應收＝當月合計
+                            ÷ {{ selected.length }} 科。
                         </p>
                         <dl class="mt-3 space-y-2.5 text-base">
                             <div
