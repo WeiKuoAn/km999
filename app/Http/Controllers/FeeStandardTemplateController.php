@@ -27,7 +27,17 @@ class FeeStandardTemplateController extends Controller
 {
     public function index(Request $request): Response
     {
-        $gradeFilter = $request->string('grade')->toString();
+        $validated = $request->validate([
+            'grade' => ['nullable', 'string', 'max:50'],
+            'academic_year_id' => ['nullable', 'string', 'max:20'],
+            'status' => ['nullable', 'string', 'in:all,active,inactive'],
+            'q' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $gradeFilter = trim((string) ($validated['grade'] ?? ''));
+        $yearFilter = trim((string) ($validated['academic_year_id'] ?? ''));
+        $statusFilter = (string) ($validated['status'] ?? 'all');
+        $q = trim((string) ($validated['q'] ?? ''));
 
         $query = FeeStandardTemplate::query()
             ->with(['gradeLevel:id,name,code', 'academicYear:id,year_code,name'])
@@ -36,7 +46,27 @@ class FeeStandardTemplateController extends Controller
             ->orderBy('id');
 
         if ($gradeFilter !== '' && $gradeFilter !== '全部') {
-            $query->whereHas('gradeLevel', fn ($q) => $q->where('name', $gradeFilter));
+            $query->whereHas('gradeLevel', fn ($builder) => $builder->where('name', $gradeFilter));
+        }
+
+        if ($yearFilter === 'none') {
+            $query->whereNull('academic_year_id');
+        } elseif ($yearFilter !== '' && $yearFilter !== 'all' && ctype_digit($yearFilter)) {
+            $query->where('academic_year_id', (int) $yearFilter);
+        }
+
+        if ($statusFilter === 'active') {
+            $query->where('is_active', true);
+        } elseif ($statusFilter === 'inactive') {
+            $query->where('is_active', false);
+        }
+
+        if ($q !== '') {
+            $query->where(function ($builder) use ($q): void {
+                $builder->where('title', 'like', '%'.$q.'%')
+                    ->orWhere('deadline_label', 'like', '%'.$q.'%')
+                    ->orWhere('footer_note', 'like', '%'.$q.'%');
+            });
         }
 
         /** @var User $user */
@@ -50,8 +80,12 @@ class FeeStandardTemplateController extends Controller
                 ->withQueryString(),
             'filters' => [
                 'grade' => $gradeFilter !== '' ? $gradeFilter : '全部',
+                'academic_year_id' => $yearFilter !== '' ? $yearFilter : 'all',
+                'status' => in_array($statusFilter, ['active', 'inactive'], true) ? $statusFilter : 'all',
+                'q' => $q,
             ],
             'gradeOptions' => $this->gradeFilterOptions(),
+            'academicYears' => $this->academicYearOptions(),
             'canManage' => $canManage,
         ]);
     }

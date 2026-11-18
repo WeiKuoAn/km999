@@ -231,3 +231,54 @@ test('pdf export records students and hides them from list', function () {
     $shown->assertOk();
     expect(collect($shown->json('students'))->pluck('id'))->toContain($student->id);
 });
+
+test('fee standard index filters by grade year status and title', function () {
+    ['year' => $year, 'grade' => $g8] = feeStandardCtx();
+    $g7 = GradeLevel::query()->create([
+        'name' => '國一',
+        'code' => 7,
+        'is_active' => true,
+        'sort_order' => 7,
+    ]);
+    $admin = feeStandardAdmin();
+
+    $this->actingAs($admin)
+        ->post(route('fee-standard-templates.store'), feeStandardPayload($year, $g8, [
+            'title' => '國二收費單',
+        ]));
+    $this->actingAs($admin)
+        ->post(route('fee-standard-templates.store'), feeStandardPayload($year, $g7, [
+            'title' => '國一收費單',
+            'is_active' => false,
+        ]));
+
+    $this->actingAs($admin)
+        ->get(route('fee-standard-templates.index', ['grade' => '國二']))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('FeeStandardTemplates/Index')
+            ->has('templates.data', 1)
+            ->where('templates.data.0.title', '國二收費單')
+            ->where('filters.grade', '國二'));
+
+    $this->actingAs($admin)
+        ->get(route('fee-standard-templates.index', [
+            'status' => 'inactive',
+            'q' => '國一',
+        ]))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->has('templates.data', 1)
+            ->where('templates.data.0.title', '國一收費單')
+            ->where('filters.status', 'inactive'));
+
+    $this->actingAs($admin)
+        ->get(route('fee-standard-templates.index', [
+            'academic_year_id' => (string) $year->id,
+        ]))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->has('templates.data', 2)
+            ->where('filters.academic_year_id', (string) $year->id)
+            ->has('academicYears'));
+});

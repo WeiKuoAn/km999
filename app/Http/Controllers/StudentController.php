@@ -11,6 +11,7 @@ use App\Models\GradeLevel;
 use App\Models\Reconciliation;
 use App\Models\Student;
 use App\Models\StudentCourseDrop;
+use App\Models\StudentPromotionLog;
 use App\Models\User;
 use App\Support\CourseTuition;
 use App\Support\EnrollmentTuitionSync;
@@ -286,41 +287,246 @@ class StudentController extends Controller
     {
         $this->authorizeTeacherCanViewStudent($student);
 
+        $student->loadMissing('gradeLevel:id,name,sort_order,code');
+
         $rows = Reconciliation::query()
             ->where('student_id', $student->id)
             ->with([
-                'classroom.course.courseCategory',
-                'course.courseCategory',
+                'classroom.gradeLevel:id,name,sort_order,code',
+                'classroom.course.courseCategory:id,name',
+                'course.courseCategory:id,name',
                 'settledByUser:id,name',
             ])
             ->orderByDesc('billing_year')
             ->orderByDesc('billing_month')
             ->orderByDesc('id')
-            ->paginate(50)
-            ->through(fn (Reconciliation $row): array => [
+            ->get();
+
+        $timeline = $this->paymentGradeTimeline($student);
+
+        /** @var array<string, array{grade_key:string, grade_name:string, grade_sort:int, courses:array<string, array{course_id:int|null, course_name:string, course_category_name:string, periods:list<array<string, mixed>>, expected_total:int, paid_total:int}>, expected_total:int, paid_total:int}> $gradeGroups */
+        $gradeGroups = [];
+
+        foreach ($rows as $row) {
+            $grade = $this->resolvePaymentGrade($row, $timeline, $student);
+            $gradeKey = $grade['key'];
+            $courseId = $row->course_id !== null
+                ? (int) $row->course_id
+                : ($row->classroom?->course_id !== null ? (int) $row->classroom->course_id : null);
+            $courseName = $row->course?->name ?? $row->classroom?->course?->name ?? '未分科目';
+            $categoryName = $row->course?->courseCategory?->name
+                ?? $row->classroom?->course?->courseCategory?->name
+                ?? '';
+            $courseKey = ($courseId !== null ? 'c'.$courseId : 'n').'|'.$courseName;
+
+            if (! isset($gradeGroups[$gradeKey])) {
+                $gradeGroups[$gradeKey] = [
+                    'grade_key' => $gradeKey,
+                    'grade_name' => $grade['name'],
+                    'grade_sort' => $grade['sort'],
+                    'courses' => [],
+                    'expected_total' => 0,
+                    'paid_total' => 0,
+                ];
+            }
+
+            if (! isset($gradeGroups[$gradeKey]['courses'][$courseKey])) {
+                $gradeGroups[$gradeKey]['courses'][$courseKey] = [
+                    'course_id' => $courseId,
+                    'course_name' => $courseName,
+                    'course_category_name' => $categoryName,
+                    'periods' => [],
+                    'expected_total' => 0,
+                    'paid_total' => 0,
+                ];
+            }
+
+            $expected = (int) $row->expected_amount;
+            $paid = (int) $row->paid_amount;
+            $period = [
                 'id' => $row->id,
-                'billing_year' => $row->billing_year,
-                'billing_month' => $row->billing_month,
+                'billing_year' => (int) $row->billing_year,
+                'billing_month' => (int) $row->billing_month,
                 'classroom_name' => $row->classroom?->name ?? '-',
-                'course_name' => $row->course?->name ?? $row->classroom?->course?->name ?? '-',
-                'course_category_name' => $row->course?->courseCategory?->name
-                    ?? $row->classroom?->course?->courseCategory?->name
-                    ?? '-',
-                'expected_amount' => (int) $row->expected_amount,
-                'paid_amount' => (int) $row->paid_amount,
+                'expected_amount' => $expected,
+                'paid_amount' => $paid,
                 'paid_date' => $row->paid_date?->toDateString(),
                 'status' => $row->status,
                 'settled_by_name' => $row->settledByUser?->name ?? '-',
                 'note' => $row->note,
-            ]);
+            ];
+
+            $gradeGroups[$gradeKey]['courses'][$courseKey]['periods'][] = $period;
+            $gradeGroups[$gradeKey]['courses'][$courseKey]['expected_total'] += $expected;
+            $gradeGroups[$gradeKey]['courses'][$courseKey]['paid_total'] += $paid;
+            $gradeGroups[$gradeKey]['expected_total'] += $expected;
+            $gradeGroups[$gradeKey]['paid_total'] += $paid;
+        }
+
+        $groups = collect($gradeGroups)
+            ->map(function (array $grade): array {
+                $courses = collect($grade['courses'])
+                    ->sortBy([
+                        fn (array $course): string => $course['course_category_name'] === '' ? '～' : $course['course_category_name'],
+                        fn (array $course): string => $course['course_name'],
+                    ])
+                    ->values()
+                    ->all();
+
+                return [
+                    'grade_key' => $grade['grade_key'],
+                    'grade_name' => $grade['grade_name'],
+                    'grade_sort' => $grade['grade_sort'],
+                    'expected_total' => $grade['expected_total'],
+                    'paid_total' => $grade['paid_total'],
+                    'courses' => $courses,
+                ];
+            })
+            // 年級由高到低（國三→國一），同層科目下帳期已依新→舊取出
+            ->sortByDesc('grade_sort')
+            ->values()
+            ->all();
 
         return Inertia::render('Students/Payments', [
             'student' => [
                 'id' => $student->id,
                 'name' => $student->name,
+                'grade_name' => $student->gradeLevel?->name,
             ],
-            'rows' => $rows,
+            'groups' => $groups,
         ]);
+    }
+
+    /**
+     * 依轉檔紀錄建立年級時段；無紀錄則整段為目前年級。
+     *
+     * @return list<array{start:?Carbon, end:?Carbon, grade_id:?int, grade_name:string, grade_sort:int}>
+     */
+    private function paymentGradeTimeline(Student $student): array
+    {
+        if (! Schema::hasTable('student_promotion_logs')) {
+            return [[
+                'start' => null,
+                'end' => null,
+                'grade_id' => $student->grade_level_id !== null ? (int) $student->grade_level_id : null,
+                'grade_name' => $student->gradeLevel?->name ?? '未分年級',
+                'grade_sort' => (int) ($student->gradeLevel?->sort_order ?? $student->gradeLevel?->code ?? 0),
+            ]];
+        }
+
+        $logs = StudentPromotionLog::query()
+            ->where('student_id', $student->id)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        if ($logs->isEmpty()) {
+            return [[
+                'start' => null,
+                'end' => null,
+                'grade_id' => $student->grade_level_id !== null ? (int) $student->grade_level_id : null,
+                'grade_name' => $student->gradeLevel?->name ?? '未分年級',
+                'grade_sort' => (int) ($student->gradeLevel?->sort_order ?? $student->gradeLevel?->code ?? 0),
+            ]];
+        }
+
+        $gradeIds = $logs
+            ->flatMap(fn (StudentPromotionLog $log): array => array_filter([
+                $log->from_grade_level_id !== null ? (int) $log->from_grade_level_id : null,
+                $log->to_grade_level_id !== null ? (int) $log->to_grade_level_id : null,
+            ]))
+            ->unique()
+            ->values()
+            ->all();
+        $grades = GradeLevel::query()
+            ->whereIn('id', $gradeIds)
+            ->get(['id', 'name', 'sort_order', 'code'])
+            ->keyBy('id');
+
+        $segments = [];
+        $gradeId = $logs->first()->from_grade_level_id !== null
+            ? (int) $logs->first()->from_grade_level_id
+            : null;
+        $gradeName = $logs->first()->from_grade_name
+            ?? $grades->get($gradeId)?->name
+            ?? '未分年級';
+        $gradeSort = (int) ($grades->get($gradeId)?->sort_order
+            ?? $grades->get($gradeId)?->code
+            ?? 0);
+        $start = null;
+
+        foreach ($logs as $log) {
+            $segments[] = [
+                'start' => $start,
+                'end' => $log->created_at,
+                'grade_id' => $gradeId,
+                'grade_name' => $gradeName,
+                'grade_sort' => $gradeSort,
+            ];
+
+            $gradeId = $log->to_grade_level_id !== null ? (int) $log->to_grade_level_id : null;
+            $gradeName = $log->to_grade_name
+                ?? ($log->action === 'graduate' ? '已畢業' : ($grades->get($gradeId)?->name ?? '未分年級'));
+            $gradeSort = (int) ($grades->get($gradeId)?->sort_order
+                ?? $grades->get($gradeId)?->code
+                ?? ($log->action === 'graduate' ? 10000 : 0));
+            $start = $log->created_at;
+        }
+
+        $segments[] = [
+            'start' => $start,
+            'end' => null,
+            'grade_id' => $gradeId,
+            'grade_name' => $gradeName,
+            'grade_sort' => $gradeSort,
+        ];
+
+        return $segments;
+    }
+
+    /**
+     * @param  list<array{start:?Carbon, end:?Carbon, grade_id:?int, grade_name:string, grade_sort:int}>  $timeline
+     * @return array{key:string, name:string, sort:int}
+     */
+    private function resolvePaymentGrade(Reconciliation $row, array $timeline, Student $student): array
+    {
+        $classroomGrade = $row->classroom?->gradeLevel;
+        if ($classroomGrade !== null) {
+            return [
+                'key' => 'g'.$classroomGrade->id,
+                'name' => $classroomGrade->name,
+                'sort' => (int) ($classroomGrade->sort_order ?? $classroomGrade->code ?? 0),
+            ];
+        }
+
+        $point = Carbon::create(
+            (int) $row->billing_year,
+            max(1, min(12, (int) $row->billing_month)),
+            15,
+            12,
+            0,
+            0,
+        );
+
+        foreach ($timeline as $segment) {
+            $startOk = $segment['start'] === null || $point->greaterThanOrEqualTo($segment['start']);
+            $endOk = $segment['end'] === null || $point->lessThan($segment['end']);
+            if ($startOk && $endOk) {
+                $id = $segment['grade_id'];
+
+                return [
+                    'key' => $id !== null ? 'g'.$id : 'n:'.$segment['grade_name'],
+                    'name' => $segment['grade_name'],
+                    'sort' => $segment['grade_sort'],
+                ];
+            }
+        }
+
+        return [
+            'key' => $student->grade_level_id !== null ? 'g'.$student->grade_level_id : 'n',
+            'name' => $student->gradeLevel?->name ?? '未分年級',
+            'sort' => (int) ($student->gradeLevel?->sort_order ?? $student->gradeLevel?->code ?? 0),
+        ];
     }
 
     public function attendanceRate(Request $request, Student $student): Response

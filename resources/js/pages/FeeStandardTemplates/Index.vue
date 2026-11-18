@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Head, Link, router, usePage } from '@inertiajs/vue3';
 import { Copy, FileDown, Plus } from 'lucide-vue-next';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
@@ -9,6 +9,8 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import TableDeleteIconButton from '@/components/table/TableDeleteIconButton.vue';
 import TableEditIconLink from '@/components/table/TableEditIconLink.vue';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
     Tooltip,
     TooltipContent,
@@ -37,10 +39,22 @@ type StudentOption = {
     student_code: string;
 };
 
+type AcademicYearOption = {
+    id: number;
+    year_code: string;
+    name: string;
+};
+
 const props = defineProps<{
     templates: Paginated<Template>;
-    filters: { grade: string };
+    filters: {
+        grade: string;
+        academic_year_id?: string;
+        status?: string;
+        q?: string;
+    };
     gradeOptions: string[];
+    academicYears?: AcademicYearOption[];
     canManage: boolean;
 }>();
 
@@ -55,14 +69,46 @@ defineOptions({
     },
 });
 
-const activeGrade = computed(() => props.filters.grade || '全部');
+const grade = ref(props.filters.grade || '全部');
+const academicYearId = ref(props.filters.academic_year_id || 'all');
+const status = ref(props.filters.status || 'all');
+const q = ref(props.filters.q || '');
 
-const filterGrade = (grade: string) => {
+watch(
+    () => props.filters,
+    (filters) => {
+        grade.value = filters.grade || '全部';
+        academicYearId.value = filters.academic_year_id || 'all';
+        status.value = filters.status || 'all';
+        q.value = filters.q || '';
+    },
+);
+
+const applyFilters = () => {
     router.get(
         '/fee-standard-templates',
-        grade === '全部' ? {} : { grade },
-        { preserveState: true, replace: true },
+        {
+            grade: grade.value === '全部' ? undefined : grade.value,
+            academic_year_id:
+                academicYearId.value === 'all'
+                    ? undefined
+                    : academicYearId.value,
+            status: status.value === 'all' ? undefined : status.value,
+            q: q.value.trim() === '' ? undefined : q.value.trim(),
+        },
+        {
+            preserveState: true,
+            replace: true,
+        },
     );
+};
+
+const clearFilters = () => {
+    grade.value = '全部';
+    academicYearId.value = 'all';
+    status.value = 'all';
+    q.value = '';
+    applyFilters();
 };
 
 const destroyTemplate = (id: number) => {
@@ -285,22 +331,70 @@ const runExport = async () => {
             {{ successMessage }}
         </div>
 
-        <div class="flex flex-wrap gap-2">
-            <button
-                v-for="g in gradeOptions"
-                :key="g"
-                type="button"
-                class="rounded-md border px-3 py-1.5 text-sm transition-colors"
-                :class="
-                    activeGrade === g
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'hover:bg-muted'
-                "
-                @click="filterGrade(g)"
-            >
-                {{ g }}
-            </button>
-        </div>
+        <form
+            class="mb-4 grid gap-3 rounded-xl border border-sidebar-border/70 bg-card p-4 sm:grid-cols-2 lg:grid-cols-5 lg:items-end"
+            @submit.prevent="applyFilters"
+        >
+            <div class="grid gap-1">
+                <Label for="filter_grade">年級</Label>
+                <select
+                    id="filter_grade"
+                    v-model="grade"
+                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                    @change="applyFilters"
+                >
+                    <option v-for="g in gradeOptions" :key="g" :value="g">
+                        {{ g }}
+                    </option>
+                </select>
+            </div>
+            <div class="grid gap-1">
+                <Label for="filter_year">學年</Label>
+                <select
+                    id="filter_year"
+                    v-model="academicYearId"
+                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                    @change="applyFilters"
+                >
+                    <option value="all">全部學年</option>
+                    <option value="none">不限學年</option>
+                    <option
+                        v-for="year in academicYears ?? []"
+                        :key="year.id"
+                        :value="String(year.id)"
+                    >
+                        {{ year.name }}
+                    </option>
+                </select>
+            </div>
+            <div class="grid gap-1">
+                <Label for="filter_status">狀態</Label>
+                <select
+                    id="filter_status"
+                    v-model="status"
+                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                    @change="applyFilters"
+                >
+                    <option value="all">全部狀態</option>
+                    <option value="active">啟用</option>
+                    <option value="inactive">停用</option>
+                </select>
+            </div>
+            <div class="grid gap-1">
+                <Label for="filter_q">搜尋</Label>
+                <Input
+                    id="filter_q"
+                    v-model="q"
+                    placeholder="標題、截止日說明"
+                />
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <Button type="submit">篩選</Button>
+                <Button type="button" variant="outline" @click="clearFilters">
+                    清除
+                </Button>
+            </div>
+        </form>
 
         <div class="mobile-card-list">
             <MobileRecordCard
@@ -362,7 +456,7 @@ const runExport = async () => {
                 v-if="templates.data.length === 0"
                 class="rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground"
             >
-                尚無收費標準模板。
+                沒有符合條件的收費標準模板。
             </p>
         </div>
 
