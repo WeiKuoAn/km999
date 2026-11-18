@@ -13,6 +13,7 @@ import {
     emptyCheckItem,
     emptyTableItem,
     mergeFeeStandardItems,
+    normalizeHeadingColor,
     type FeeStandardFormData,
     type FeeStandardFormItem,
 } from '@/lib/feeStandardForm';
@@ -312,13 +313,14 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                         <Button
                             type="button"
                             variant="ghost"
-                            size="sm"
+                            size="icon"
                             class="text-destructive"
                             :disabled="!canRemoveTable"
+                            title="刪除表格"
                             @click="removeTableItem(i)"
                         >
                             <Trash2 class="size-4" />
-                            刪除
+                            <span class="sr-only">刪除表格</span>
                         </Button>
                     </div>
 
@@ -335,19 +337,44 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                         </div>
                         <div class="grid gap-1.5">
                             <Label :for="`table-color-${i}`">標題顏色</Label>
-                            <select
-                                :id="`table-color-${i}`"
-                                v-model="item.heading_color"
-                                class="h-9 rounded-md border px-3"
-                            >
-                                <option
-                                    v-for="c in FEE_STANDARD_HEADING_COLORS"
-                                    :key="c.value"
-                                    :value="c.value"
-                                >
-                                    {{ c.label }}
-                                </option>
-                            </select>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <input
+                                    :id="`table-color-${i}`"
+                                    type="color"
+                                    class="h-9 w-11 cursor-pointer rounded-md border bg-white p-1"
+                                    :value="normalizeHeadingColor(item.heading_color)"
+                                    @input="
+                                        item.heading_color = (
+                                            $event.target as HTMLInputElement
+                                        ).value
+                                    "
+                                />
+                                <Input
+                                    :aria-label="`表格 ${i + 1} 標題色碼`"
+                                    v-model="item.heading_color"
+                                    class="h-9 w-[7.5rem] font-mono text-xs uppercase"
+                                    placeholder="#1d4ed8"
+                                    maxlength="7"
+                                    @blur="
+                                        item.heading_color =
+                                            normalizeHeadingColor(
+                                                item.heading_color,
+                                            )
+                                    "
+                                />
+                                <div class="flex items-center gap-1">
+                                    <button
+                                        v-for="c in FEE_STANDARD_HEADING_COLORS"
+                                        :key="c.value"
+                                        type="button"
+                                        class="size-6 rounded-full border shadow-sm ring-offset-1 hover:ring-2 hover:ring-primary/40"
+                                        :style="{ backgroundColor: c.value }"
+                                        :title="c.label"
+                                        :aria-label="`套用${c.label}`"
+                                        @click="item.heading_color = c.value"
+                                    />
+                                </div>
+                            </div>
                         </div>
                     </div>
 

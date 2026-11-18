@@ -17,21 +17,26 @@
             src: url('{{ $latinFontUrl }}') format('truetype');
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        /*
+         * Dompdf：用 @page margin 留邊；表格用 width:100%（相對內容區）。
+         * 不要再包一層固定 mm 寬的 .sheet 包住固定寬表格，會把內容頂到紙邊。
+         */
+        @page {
+            margin: 18mm 16mm;
+        }
 
-        /* 上／右／下；左邊距改由 body padding 固定 1cm（Dompdf 較穩） */
-        @page { margin: 10mm 12mm 10mm 0; }
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+        }
 
         body {
             font-family: 'NoticeCJK', 'NoticeLatin', sans-serif;
             font-size: 11.5pt;
             color: #111;
             line-height: 1.5;
-            padding-left: 10mm; /* 左邊留白 1 公分 */
-        }
-
-        .sheet {
-            width: 100%;
         }
 
         .page-break {
@@ -39,56 +44,49 @@
         }
 
         .slot {
-            width: 100%;
-            min-height: 128mm;
+            min-height: 120mm;
         }
 
         .cut-line {
             border-top: 0.7pt dashed #888;
-            margin: 3mm 0 5mm;
+            margin: 3mm 0 4mm;
             height: 0;
         }
 
-        /* Dompdf 對 CJK 粗體常缺字→????，標題改用字級＋字距強調 */
         .title {
             text-align: center;
             font-size: 16pt;
             font-weight: normal;
             letter-spacing: 0.18em;
-            margin-bottom: 6mm;
+            margin: 0 0 5mm;
         }
 
         .greeting {
             font-size: 12.5pt;
-            margin-bottom: 5mm;
+            margin: 0 0 5mm;
         }
 
         .name {
             text-decoration: underline;
-            padding: 0 2mm;
+            padding: 0 1.5mm;
         }
 
         .item {
             margin: 0 0 3.5mm;
         }
 
-        .item-row {
-            display: table;
-            width: 100%;
-        }
-
         .checkbox {
-            display: table-cell;
-            width: 7mm;
+            display: inline-block;
+            width: 6mm;
             vertical-align: top;
             font-family: 'NoticeLatin', 'NoticeCJK', sans-serif;
             font-size: 12.5pt;
             line-height: 1.4;
-            padding-top: 0.2mm;
         }
 
         .item-body {
-            display: table-cell;
+            display: inline-block;
+            width: 92%;
             vertical-align: top;
         }
 
@@ -98,7 +96,7 @@
 
         .item-detail {
             margin-top: 1mm;
-            margin-left: 1mm;
+            margin-left: 0.5mm;
             font-size: 10.5pt;
             color: #222;
             white-space: pre-wrap;
@@ -110,21 +108,22 @@
 
         .table-heading {
             font-size: 12pt;
-            margin-bottom: 1.5mm;
+            margin: 0 0 2.5mm;
             letter-spacing: 0.04em;
         }
 
         .fee-table {
             width: 100%;
             border-collapse: collapse;
+            border: 0.8pt solid #333;
             table-layout: fixed;
             font-size: 10pt;
         }
 
         .fee-table th,
         .fee-table td {
-            border: 0.7pt solid #333;
-            padding: 1.6mm 2mm;
+            border: 0.8pt solid #333;
+            padding: 1.8mm 2mm;
             vertical-align: middle;
             text-align: center;
             word-wrap: break-word;
@@ -154,7 +153,7 @@
         }
 
         .footer {
-            margin-top: 6mm;
+            margin-top: 5mm;
             font-size: 10pt;
             color: #222;
         }
@@ -178,12 +177,12 @@
                     @if (($item['kind'] ?? 'check') === 'table')
                         <div class="table-block">
                             @if (!empty($item['label']))
-                                <div class="table-heading"@if (!empty($item['heading_color'])) style="color: {{ $item['heading_color'] }};"@endif>
+                                <div class="table-heading"@if (!empty($item['heading_color']) && preg_match('/^#[0-9a-fA-F]{3,8}$/', (string) $item['heading_color'])) style="color: {{ $item['heading_color'] }};"@endif>
                                     {{ $item['label'] }}
                                 </div>
                             @endif
                             @if (!empty($item['table_headers']))
-                                <table class="fee-table">
+                                <table class="fee-table" cellpadding="0" cellspacing="0">
                                     <thead>
                                         <tr>
                                             @foreach ($item['table_headers'] as $header)
@@ -205,15 +204,13 @@
                         </div>
                     @else
                         <div class="item">
-                            <div class="item-row">
-                                <div class="checkbox">□</div>
-                                <div class="item-body">
-                                    <div class="item-label">{{ $item['label'] }}@if (!str_ends_with(rtrim($item['label']), '：') && !str_ends_with(rtrim($item['label']), ':'))：@endif</div>
-                                    @if (!empty($item['detail']))
-                                        <div class="item-detail">{{ $item['detail'] }}</div>
-                                    @endif
-                                </div>
-                            </div>
+                            <span class="checkbox">□</span>
+                            <span class="item-body">
+                                <div class="item-label">{{ $item['label'] }}@if (!str_ends_with(rtrim($item['label']), '：') && !str_ends_with(rtrim($item['label']), ':'))：@endif</div>
+                                @if (!empty($item['detail']))
+                                    <div class="item-detail">{{ $item['detail'] }}</div>
+                                @endif
+                            </span>
                         </div>
                     @endif
                 @endforeach

@@ -60,7 +60,7 @@ const labelWithColon = (label: string): string => {
 
 <template>
     <div
-        class="rounded-sm border border-neutral-300 bg-white py-8 pr-6 pl-10 text-neutral-900 shadow-sm sm:pr-8 sm:pl-14"
+        class="rounded-sm border border-neutral-300 bg-white px-10 py-8 text-neutral-900 shadow-sm sm:px-12 sm:py-10"
         style="font-family: 'Noto Sans TC', 'Microsoft JhengHei', sans-serif"
     >
         <p
@@ -96,7 +96,7 @@ const labelWithColon = (label: string): string => {
                 {{ item.label.trim() }}
             </p>
             <table
-                class="w-full border-collapse text-center text-[12px] sm:text-[13px]"
+                class="w-full border-collapse border border-neutral-700 text-center text-[12px] sm:text-[13px]"
             >
                 <thead>
                     <tr class="bg-[#ffe566]">

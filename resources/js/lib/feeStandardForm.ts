@@ -149,3 +149,27 @@ export const FEE_STANDARD_HEADING_COLORS: Array<{
     { value: '#166534', label: '綠' },
     { value: '#111827', label: '黑' },
 ];
+
+/** 正規成 #rrggbb；無法辨識時回預設藍，供 color input 使用 */
+export const normalizeHeadingColor = (
+    value: string | null | undefined,
+    fallback = '#1d4ed8',
+): string => {
+    const raw = String(value ?? '')
+        .trim()
+        .replace(/^#/, '');
+
+    if (/^[0-9a-fA-F]{6}$/.test(raw)) {
+        return `#${raw.toLowerCase()}`;
+    }
+
+    if (/^[0-9a-fA-F]{3}$/.test(raw)) {
+        return `#${raw
+            .split('')
+            .map((ch) => `${ch}${ch}`)
+            .join('')
+            .toLowerCase()}`;
+    }
+
+    return fallback;
+};

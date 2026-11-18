@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Jobs\GenerateFeeStandardPdfJob;
 use App\Models\AcademicYear;
 use App\Models\FeeStandardTemplate;
+use App\Models\FeeStandardTemplateExport;
 use App\Models\FeeStandardTemplateItem;
 use App\Models\GradeLevel;
 use App\Models\User;
@@ -180,6 +181,13 @@ class FeeStandardTemplateController extends Controller
 
         /** @var User $user */
         $user = $request->user();
+        $exportedIds = FeeStandardTemplateExport::query()
+            ->where('fee_standard_template_id', $feeStandardTemplate->id)
+            ->pluck('student_id')
+            ->map(fn ($id): int => (int) $id)
+            ->all();
+        $exportedSet = array_fill_keys($exportedIds, true);
+
         $students = FeeStandardExport::studentsForTemplate(
             $feeStandardTemplate,
             $user,
@@ -190,6 +198,7 @@ class FeeStandardTemplateController extends Controller
                 'id' => (int) $s->id,
                 'name' => (string) $s->name,
                 'student_code' => (string) ($s->student_code ?? ''),
+                'exported' => isset($exportedSet[(int) $s->id]),
             ])
             ->values()
             ->all();
@@ -339,7 +348,7 @@ class FeeStandardTemplateController extends Controller
             'items' => ['required', 'array', 'min:1'],
             'items.*.kind' => ['nullable', 'in:check,table'],
             'items.*.label' => ['required', 'string', 'max:255'],
-            'items.*.heading_color' => ['nullable', 'string', 'max:32'],
+            'items.*.heading_color' => ['nullable', 'string', 'max:32', 'regex:/^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/'],
             'items.*.detail' => ['nullable', 'string', 'max:2000'],
             'items.*.table_headers' => ['nullable', 'array'],
             'items.*.table_headers.*' => ['nullable', 'string', 'max:128'],
@@ -372,9 +381,7 @@ class FeeStandardTemplateController extends Controller
                 ? FeeStandardTemplateItem::KIND_TABLE
                 : FeeStandardTemplateItem::KIND_CHECK;
             $label = trim((string) $item['label']);
-            $headingColor = isset($item['heading_color']) && trim((string) $item['heading_color']) !== ''
-                ? trim((string) $item['heading_color'])
-                : null;
+            $headingColor = $this->normalizeHeadingColor($item['heading_color'] ?? null);
 
             if ($kind === FeeStandardTemplateItem::KIND_TABLE) {
                 $headers = array_values(array_map(
@@ -515,6 +522,25 @@ class FeeStandardTemplateController extends Controller
                 'sort_order' => (int) $item->sort_order,
             ])->values()->all(),
         ];
+    }
+
+    private function normalizeHeadingColor(mixed $value): ?string
+    {
+        $raw = strtoupper(ltrim(trim((string) ($value ?? '')), '#'));
+
+        if ($raw === '') {
+            return null;
+        }
+
+        if (preg_match('/^[0-9A-F]{3}$/', $raw) === 1) {
+            $raw = $raw[0].$raw[0].$raw[1].$raw[1].$raw[2].$raw[2];
+        }
+
+        if (preg_match('/^[0-9A-F]{6}$/', $raw) !== 1) {
+            return null;
+        }
+
+        return '#'.strtolower($raw);
     }
 
     /**

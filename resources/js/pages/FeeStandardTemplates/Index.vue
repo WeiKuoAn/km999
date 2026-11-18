@@ -37,6 +37,7 @@ type StudentOption = {
     id: number;
     name: string;
     student_code: string;
+    exported?: boolean;
 };
 
 type AcademicYearOption = {
@@ -135,6 +136,21 @@ const exportBusy = ref(false);
 const exportMessage = ref('');
 const includeExported = ref(false);
 const exportedCount = ref(0);
+const studentQuery = ref('');
+
+const filteredStudents = computed(() => {
+    const q = studentQuery.value.trim().toLowerCase();
+    if (q === '') {
+        return students.value;
+    }
+
+    return students.value.filter((s) => {
+        const name = s.name.toLowerCase();
+        const code = (s.student_code || '').toLowerCase();
+
+        return name.includes(q) || code.includes(q);
+    });
+});
 
 const loadExportStudents = async () => {
     const template = exportTemplate.value;
@@ -177,6 +193,7 @@ const openExport = async (template: Template) => {
     exportScope.value = 'grade';
     selectedIds.value = [];
     students.value = [];
+    studentQuery.value = '';
     exportMessage.value = '';
     includeExported.value = false;
     exportedCount.value = 0;
@@ -187,6 +204,7 @@ const openExport = async (template: Template) => {
 const closeExport = () => {
     exportOpen.value = false;
     exportTemplate.value = null;
+    studentQuery.value = '';
 };
 
 const onIncludeExportedChange = async () => {
@@ -202,7 +220,7 @@ const toggleStudent = (id: number) => {
 };
 
 const selectAllStudents = () => {
-    selectedIds.value = students.value.map((s) => s.id);
+    selectedIds.value = filteredStudents.value.map((s) => s.id);
 };
 
 const clearStudents = () => {
@@ -604,7 +622,17 @@ const runExport = async () => {
                     v-if="exportScope === 'students'"
                     class="mt-3 space-y-2 rounded-md border p-3"
                 >
-                    <div class="flex gap-2">
+                    <div class="grid gap-1">
+                        <Label for="export-student-q">篩選姓名／學號</Label>
+                        <Input
+                            id="export-student-q"
+                            v-model="studentQuery"
+                            type="search"
+                            placeholder="輸入姓名或學號"
+                            class="h-9"
+                        />
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
                         <Button
                             type="button"
                             variant="outline"
@@ -622,6 +650,12 @@ const runExport = async () => {
                         >
                             清除
                         </Button>
+                        <p class="text-xs text-muted-foreground">
+                            顯示 {{ filteredStudents.length }}／{{
+                                students.length
+                            }}
+                            人
+                        </p>
                     </div>
                     <p
                         v-if="studentsLoading"
@@ -633,7 +667,7 @@ const runExport = async () => {
                         v-else
                         class="max-h-56 space-y-1 overflow-y-auto text-sm"
                     >
-                        <li v-for="s in students" :key="s.id">
+                        <li v-for="s in filteredStudents" :key="s.id">
                             <label class="flex cursor-pointer items-center gap-2">
                                 <input
                                     type="checkbox"
@@ -645,6 +679,11 @@ const runExport = async () => {
                                     s.student_code || '—'
                                 }}</span>
                                 <span>{{ s.name }}</span>
+                                <span
+                                    v-if="s.exported"
+                                    class="text-xs text-amber-700"
+                                    >（已匯出）</span
+                                >
                             </label>
                         </li>
                         <li
@@ -656,6 +695,12 @@ const runExport = async () => {
                                     ? '尚未匯出的學生已全部匯出，可勾選上方「顯示已匯出」。'
                                     : '此年級目前沒有可見學生。'
                             }}
+                        </li>
+                        <li
+                            v-else-if="filteredStudents.length === 0"
+                            class="text-muted-foreground"
+                        >
+                            沒有符合「{{ studentQuery.trim() }}」的學生。
                         </li>
                     </ul>
                 </div>
