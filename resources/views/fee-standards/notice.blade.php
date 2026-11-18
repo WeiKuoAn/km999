@@ -27,12 +27,10 @@
 
         * { box-sizing: border-box; }
 
-        html, body {
+        /* 不可設 html { margin:0 }，Dompdf 會因此忽略 @page 邊距 */
+        body {
             margin: 0;
             padding: 0;
-        }
-
-        body {
             font-family: 'NoticeCJK', 'NoticeLatin', sans-serif;
             font-size: 11.5pt;
             color: #111;
