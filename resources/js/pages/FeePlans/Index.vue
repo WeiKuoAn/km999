@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Head, Link, router, usePage } from '@inertiajs/vue3';
 import { Copy, Plus } from 'lucide-vue-next';
-import { computed } from 'vue';
+import { ref, watch } from 'vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
@@ -9,6 +9,8 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import TableDeleteIconButton from '@/components/table/TableDeleteIconButton.vue';
 import TableEditIconLink from '@/components/table/TableEditIconLink.vue';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
     Tooltip,
     TooltipContent,
@@ -29,6 +31,7 @@ type TierLine = {
 type Plan = {
     id: number;
     grade_name: string | null;
+    academic_year_name?: string | null;
     group_name: string;
     plan_kind?: 'period' | 'annual_package';
     course_names: string[];
@@ -51,10 +54,22 @@ type Paginated<T> = {
     links: Array<{ url: string | null; label: string; active: boolean }>;
 };
 
+type AcademicYearOption = {
+    id: number;
+    year_code: string;
+    name: string;
+};
+
 const props = defineProps<{
     plans: Paginated<Plan>;
-    filters: { grade: string };
+    filters: {
+        grade: string;
+        plan_kind?: string;
+        academic_year_id?: string;
+        q?: string;
+    };
     gradeOptions: string[];
+    academicYears?: AcademicYearOption[];
 }>();
 
 const page = usePage();
@@ -68,13 +83,46 @@ defineOptions({
     },
 });
 
-const activeGrade = computed(() => props.filters.grade || '全部');
+const grade = ref(props.filters.grade || '全部');
+const planKind = ref(props.filters.plan_kind || 'all');
+const academicYearId = ref(props.filters.academic_year_id || 'all');
+const q = ref(props.filters.q || '');
 
-const filterGrade = (grade: string) => {
-    router.get('/fee-plans', grade === '全部' ? {} : { grade }, {
-        preserveState: true,
-        replace: true,
-    });
+watch(
+    () => props.filters,
+    (filters) => {
+        grade.value = filters.grade || '全部';
+        planKind.value = filters.plan_kind || 'all';
+        academicYearId.value = filters.academic_year_id || 'all';
+        q.value = filters.q || '';
+    },
+);
+
+const applyFilters = () => {
+    router.get(
+        '/fee-plans',
+        {
+            grade: grade.value === '全部' ? undefined : grade.value,
+            plan_kind: planKind.value === 'all' ? undefined : planKind.value,
+            academic_year_id:
+                academicYearId.value === 'all'
+                    ? undefined
+                    : academicYearId.value,
+            q: q.value.trim() === '' ? undefined : q.value.trim(),
+        },
+        {
+            preserveState: true,
+            replace: true,
+        },
+    );
+};
+
+const clearFilters = () => {
+    grade.value = '全部';
+    planKind.value = 'all';
+    academicYearId.value = 'all';
+    q.value = '';
+    applyFilters();
 };
 
 const destroyPlan = (id: number) => {
@@ -114,29 +162,85 @@ const hasTierInfo = (plan: Plan) =>
             </template>
         </PageHeader>
 
-        <div class="flex flex-wrap gap-2">
-            <button
-                v-for="g in gradeOptions"
-                :key="g"
-                type="button"
-                class="rounded-md border px-3 py-1.5 text-sm transition-colors"
-                :class="
-                    activeGrade === g
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'hover:bg-muted'
-                "
-                @click="filterGrade(g)"
-            >
-                {{ g }}
-            </button>
-        </div>
+        <form
+            class="mb-4 grid gap-3 rounded-xl border border-sidebar-border/70 bg-card p-4 sm:grid-cols-2 lg:grid-cols-5 lg:items-end"
+            @submit.prevent="applyFilters"
+        >
+            <div class="grid gap-1">
+                <Label for="filter_grade">年級</Label>
+                <select
+                    id="filter_grade"
+                    v-model="grade"
+                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                    @change="applyFilters"
+                >
+                    <option
+                        v-for="g in gradeOptions"
+                        :key="g"
+                        :value="g"
+                    >
+                        {{ g }}
+                    </option>
+                </select>
+            </div>
+            <div class="grid gap-1">
+                <Label for="filter_plan_kind">設定類型</Label>
+                <select
+                    id="filter_plan_kind"
+                    v-model="planKind"
+                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                    @change="applyFilters"
+                >
+                    <option value="all">全部類型</option>
+                    <option value="period">期別設定</option>
+                    <option value="annual_package">年繳方案</option>
+                </select>
+            </div>
+            <div class="grid gap-1">
+                <Label for="filter_year">學年</Label>
+                <select
+                    id="filter_year"
+                    v-model="academicYearId"
+                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                    @change="applyFilters"
+                >
+                    <option value="all">全部學年</option>
+                    <option value="none">不限學年</option>
+                    <option
+                        v-for="year in academicYears ?? []"
+                        :key="year.id"
+                        :value="String(year.id)"
+                    >
+                        {{ year.name }}
+                    </option>
+                </select>
+            </div>
+            <div class="grid gap-1 lg:col-span-1">
+                <Label for="filter_q">搜尋</Label>
+                <Input
+                    id="filter_q"
+                    v-model="q"
+                    placeholder="科目組或課目名稱"
+                />
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <Button type="submit">篩選</Button>
+                <Button type="button" variant="outline" @click="clearFilters">
+                    清除
+                </Button>
+            </div>
+        </form>
 
         <div class="mobile-card-list">
             <MobileRecordCard
                 v-for="plan in plans.data"
                 :key="plan.id"
                 :title="plan.group_name"
-                :subtitle="plan.grade_name ?? undefined"
+                :subtitle="
+                    [plan.grade_name ?? '全年級', plan.academic_year_name]
+                        .filter(Boolean)
+                        .join('｜')
+                "
             >
                 <template #badge>
                     <div class="flex flex-wrap items-center justify-end gap-1">
@@ -284,6 +388,9 @@ const hasTierInfo = (plan: Plan) =>
                             <div class="font-medium">{{ plan.group_name }}</div>
                             <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                                 <span>{{ plan.grade_name ?? '全年級' }}</span>
+                                <span v-if="plan.academic_year_name"
+                                    >｜{{ plan.academic_year_name }}</span
+                                >
                                 <span
                                     v-if="plan.plan_kind === 'annual_package'"
                                     class="rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-800"

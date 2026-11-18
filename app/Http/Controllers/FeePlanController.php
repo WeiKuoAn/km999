@@ -21,7 +21,17 @@ class FeePlanController extends Controller
 {
     public function index(Request $request): Response
     {
-        $gradeFilter = $request->string('grade')->toString();
+        $validated = $request->validate([
+            'grade' => ['nullable', 'string', 'max:50'],
+            'plan_kind' => ['nullable', 'string', 'in:all,period,annual_package'],
+            'academic_year_id' => ['nullable', 'string', 'max:20'],
+            'q' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $gradeFilter = trim((string) ($validated['grade'] ?? ''));
+        $planKind = (string) ($validated['plan_kind'] ?? 'all');
+        $yearFilter = trim((string) ($validated['academic_year_id'] ?? ''));
+        $q = trim((string) ($validated['q'] ?? ''));
 
         $query = FeePlan::query()
             ->with(['gradeLevel:id,name,code', 'academicYear:id,year_code,name', 'courses:id,name,color,status', 'periods.coursePrices', 'periods.course:id,name'])
@@ -32,8 +42,31 @@ class FeePlanController extends Controller
             if ($gradeFilter === '全年級') {
                 $query->whereNull('grade_level_id');
             } else {
-                $query->whereHas('gradeLevel', fn ($q) => $q->where('name', $gradeFilter));
+                $query->whereHas('gradeLevel', fn ($builder) => $builder->where('name', $gradeFilter));
             }
+        }
+
+        if ($planKind === 'annual_package') {
+            $query->where('plan_kind', 'annual_package');
+        } elseif ($planKind === 'period') {
+            $query->where(function ($builder): void {
+                $builder->where('plan_kind', 'period')
+                    ->orWhereNull('plan_kind')
+                    ->orWhere('plan_kind', '');
+            });
+        }
+
+        if ($yearFilter === 'none') {
+            $query->whereNull('academic_year_id');
+        } elseif ($yearFilter !== '' && $yearFilter !== 'all' && ctype_digit($yearFilter)) {
+            $query->where('academic_year_id', (int) $yearFilter);
+        }
+
+        if ($q !== '') {
+            $query->where(function ($builder) use ($q): void {
+                $builder->where('group_name', 'like', '%'.$q.'%')
+                    ->orWhereHas('courses', fn ($courseQuery) => $courseQuery->where('name', 'like', '%'.$q.'%'));
+            });
         }
 
         $bundles = CourseBundle::query()
@@ -55,8 +88,12 @@ class FeePlanController extends Controller
                 ->withQueryString(),
             'filters' => [
                 'grade' => $gradeFilter !== '' ? $gradeFilter : '全部',
+                'plan_kind' => in_array($planKind, ['period', 'annual_package'], true) ? $planKind : 'all',
+                'academic_year_id' => $yearFilter !== '' ? $yearFilter : 'all',
+                'q' => $q,
             ],
             'gradeOptions' => $this->gradeFilterOptions(),
+            'academicYears' => $this->academicYearOptions(),
         ]);
     }
 
@@ -457,6 +494,7 @@ class FeePlanController extends Controller
             'allow_annual' => ['boolean'],
             'annual_start_month' => ['nullable', 'integer', 'between:1,12'],
             'annual_end_month' => ['nullable', 'integer', 'between:1,12'],
+            'annual_end_next_year' => ['nullable', 'boolean'],
             'package_total' => ['nullable', 'integer', 'min:1'],
             'annual_prices' => ['nullable', 'array'],
             'annual_prices.*' => ['nullable', 'integer', 'min:1'],
@@ -547,6 +585,7 @@ class FeePlanController extends Controller
             $validated['allow_annual'] = true;
             $validated['annual_start_month'] = $startMonth;
             $validated['annual_end_month'] = $endMonth;
+            $validated['annual_end_next_year'] = (bool) ($validated['annual_end_next_year'] ?? false);
             $validated['annual_prices'] = [];
             $validated['periods'] = [];
             $validated['per_course_periods'] = false;
@@ -580,10 +619,12 @@ class FeePlanController extends Controller
                 }
                 $validated['annual_start_month'] = $startMonth;
                 $validated['annual_end_month'] = $endMonth;
+                $validated['annual_end_next_year'] = (bool) ($validated['annual_end_next_year'] ?? false);
                 $validated['annual_prices'] = $normalizedAnnual;
             } else {
                 $validated['annual_start_month'] = null;
                 $validated['annual_end_month'] = null;
+                $validated['annual_end_next_year'] = false;
                 $validated['annual_prices'] = [];
             }
 
@@ -807,6 +848,9 @@ class FeePlanController extends Controller
             'annual_end_month' => ($plan->allow_annual || $plan->isAnnualPackage())
                 ? $plan->annualEndMonth()
                 : null,
+            'annual_end_next_year' => ($plan->allow_annual || $plan->isAnnualPackage())
+                ? $plan->annualEndNextYear()
+                : false,
             'package_total' => $plan->package_total !== null ? (int) $plan->package_total : null,
             'annual_prices' => $plan->relationLoaded('annualPrices')
                 ? $plan->annualPrices
@@ -885,15 +929,17 @@ class FeePlanController extends Controller
      */
     private function gradeFilterOptions(): array
     {
-        return array_merge(
-            ['全部', '全年級'],
-            GradeLevel::query()
-                ->where('is_active', true)
-                ->orderBy('sort_order')
-                ->orderBy('code')
-                ->pluck('name')
-                ->all()
-        );
+        $grades = GradeLevel::query()
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->orderBy('code')
+            ->pluck('name')
+            ->filter(fn ($name): bool => is_string($name) && trim($name) !== '')
+            ->unique()
+            ->values()
+            ->all();
+
+        return array_merge(['全部', '全年級'], $grades);
     }
 
     /**

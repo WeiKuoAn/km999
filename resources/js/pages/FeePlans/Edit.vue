@@ -29,6 +29,7 @@ const props = defineProps<{
         allow_annual?: boolean;
         annual_start_month?: number | null;
         annual_end_month?: number | null;
+        annual_end_next_year?: boolean;
         package_total?: number | null;
         annual_prices?: Record<number, number>;
         periods: Array<{
@@ -109,6 +110,7 @@ const form = useForm<FeePlanFormData>({
     allow_annual: !!props.plan.allow_annual,
     annual_start_month: props.plan.annual_start_month ?? 7,
     annual_end_month: props.plan.annual_end_month ?? 6,
+    annual_end_next_year: !!props.plan.annual_end_next_year,
     package_total: props.plan.package_total ?? '',
     annual_prices: Object.fromEntries(
         props.plan.course_ids.map((id) => {

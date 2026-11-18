@@ -19,6 +19,10 @@ class StudentAnnualIntent extends Model
         'fee_plan_id',
         'package_label',
         'package_total',
+        'deposit',
+        'next_fee',
+        'pay_cycle',
+        'course_months',
         'status',
         'note',
         'recorded_by_user_id',
@@ -29,6 +33,9 @@ class StudentAnnualIntent extends Model
     {
         return [
             'package_total' => 'integer',
+            'deposit' => 'integer',
+            'next_fee' => 'integer',
+            'course_months' => 'array',
         ];
     }
 
@@ -57,13 +64,33 @@ class StudentAnnualIntent extends Model
         return $query->where('status', self::STATUS_PLANNED);
     }
 
-    /** @return array{fee_plan_id:?int, package_label:?string, package_total:?int, note:?string, is_annual:bool} */
+    /**
+     * @return array{
+     *   fee_plan_id:?int,
+     *   package_label:?string,
+     *   package_total:?int,
+     *   deposit:?int,
+     *   next_fee:?int,
+     *   pay_cycle:?string,
+     *   course_months:?list<string>,
+     *   note:?string,
+     *   is_annual:bool
+     * }
+     */
     public function toPayload(): array
     {
+        $months = is_array($this->course_months)
+            ? array_values(array_map('strval', $this->course_months))
+            : null;
+
         return [
             'fee_plan_id' => $this->fee_plan_id !== null ? (int) $this->fee_plan_id : null,
             'package_label' => $this->package_label,
             'package_total' => $this->package_total !== null ? (int) $this->package_total : null,
+            'deposit' => $this->deposit !== null ? (int) $this->deposit : null,
+            'next_fee' => $this->next_fee !== null ? (int) $this->next_fee : null,
+            'pay_cycle' => $this->pay_cycle,
+            'course_months' => $months,
             'note' => $this->note,
             'is_annual' => $this->fee_plan_id !== null,
         ];

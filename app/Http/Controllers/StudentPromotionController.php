@@ -37,6 +37,25 @@ class StudentPromotionController extends Controller
         $fromYearId = isset($validated['from_academic_year_id']) ? (int) $validated['from_academic_year_id'] : null;
         $status = (string) ($validated['status'] ?? 'active');
 
+        // 初次進入：預設目前年級＝國三、新的年級＝畢業，直接列出名單
+        if ($fromGradeId === null) {
+            $defaultFrom = GradeLevel::query()
+                ->where('is_active', true)
+                ->where(function ($query): void {
+                    $query->where('name', '國三')->orWhere('code', 9);
+                })
+                ->orderBy('sort_order')
+                ->orderBy('code')
+                ->first();
+
+            if ($defaultFrom !== null) {
+                $fromGradeId = (int) $defaultFrom->id;
+                if ($toGradeId === null && ! array_key_exists('graduate', $validated)) {
+                    $graduate = true;
+                }
+            }
+        }
+
         $preview = [];
         $targetSubjects = [];
         $fromGrade = $fromGradeId !== null ? GradeLevel::query()->find($fromGradeId) : null;
@@ -225,6 +244,11 @@ class StudentPromotionController extends Controller
             'annual_selections' => ['nullable', 'array'],
             'annual_selections.*.student_id' => ['required', 'integer', 'exists:students,id'],
             'annual_selections.*.fee_plan_id' => ['nullable', 'integer', 'exists:fee_plans,id'],
+            'annual_selections.*.deposit' => ['nullable', 'integer', 'min:0'],
+            'annual_selections.*.next_fee' => ['nullable', 'integer', 'min:0'],
+            'annual_selections.*.pay_cycle' => ['nullable', 'string', 'in:monthly,quarterly,annual'],
+            'annual_selections.*.course_months' => ['nullable', 'array'],
+            'annual_selections.*.course_months.*' => ['string', 'regex:/^\d{4}-\d{1,2}$/'],
             'annual_selections.*.note' => ['nullable', 'string', 'max:500'],
         ]);
 
@@ -253,7 +277,7 @@ class StudentPromotionController extends Controller
             && $this->isGrade8($fromGrade)
             && $this->isGrade9($toGrade);
 
-        /** @var array<int, array{fee_plan_id:?int, note:?string}> $annualMap */
+        /** @var array<int, array{fee_plan_id:?int, deposit:?int, next_fee:?int, pay_cycle:?string, course_months:?list<string>, note:?string}> $annualMap */
         $annualMap = [];
         if ($needsAnnual) {
             $allowedPlanIds = array_fill_keys(
@@ -280,14 +304,49 @@ class StudentPromotionController extends Controller
                     ]);
                 }
                 $note = isset($row['note']) ? trim((string) $row['note']) : null;
+                $deposit = array_key_exists('deposit', $row) && $row['deposit'] !== null && $row['deposit'] !== ''
+                    ? max(0, (int) $row['deposit'])
+                    : null;
+                $nextFee = array_key_exists('next_fee', $row) && $row['next_fee'] !== null && $row['next_fee'] !== ''
+                    ? max(0, (int) $row['next_fee'])
+                    : null;
+                $payCycle = isset($row['pay_cycle']) && is_string($row['pay_cycle']) && $row['pay_cycle'] !== ''
+                    ? (string) $row['pay_cycle']
+                    : null;
+                $courseMonths = [];
+                foreach ($row['course_months'] ?? [] as $key) {
+                    if (is_string($key) && preg_match('/^\d{4}-\d{1,2}$/', $key)) {
+                        $courseMonths[] = $key;
+                    }
+                }
+                $courseMonths = array_values(array_unique($courseMonths));
+                if ($planId !== null) {
+                    // 年繳方案：訂金／下次應收；不需一般繳別月份
+                    $payCycle = null;
+                    $courseMonths = [];
+                } else {
+                    $deposit = null;
+                    $payCycle = $payCycle ?? 'quarterly';
+                }
                 $annualMap[$sid] = [
                     'fee_plan_id' => $planId,
+                    'deposit' => $deposit,
+                    'next_fee' => $nextFee,
+                    'pay_cycle' => $payCycle,
+                    'course_months' => $courseMonths === [] ? null : $courseMonths,
                     'note' => $note === '' ? null : $note,
                 ];
             }
             foreach ($studentIds as $sid) {
                 if (! array_key_exists($sid, $annualMap)) {
-                    $annualMap[$sid] = ['fee_plan_id' => null, 'note' => null];
+                    $annualMap[$sid] = [
+                        'fee_plan_id' => null,
+                        'deposit' => null,
+                        'next_fee' => null,
+                        'pay_cycle' => null,
+                        'course_months' => null,
+                        'note' => null,
+                    ];
                 }
             }
         }
@@ -521,7 +580,7 @@ class StudentPromotionController extends Controller
     }
 
     /**
-     * @param  array{fee_plan_id:?int, note:?string}  $selection
+     * @param  array{fee_plan_id:?int, deposit:?int, next_fee:?int, pay_cycle:?string, course_months:?list<string>, note:?string}  $selection
      */
     private function upsertAnnualIntent(
         int $studentId,
@@ -544,6 +603,23 @@ class StudentPromotionController extends Controller
             }
         }
 
+        $deposit = $planId === null
+            ? null
+            : (isset($selection['deposit']) ? max(0, (int) $selection['deposit']) : null);
+        $nextFee = array_key_exists('next_fee', $selection) && $selection['next_fee'] !== null
+            ? max(0, (int) $selection['next_fee'])
+            : ($planId === null
+                ? null
+                : max(0, (int) ($total ?? 0) - (int) ($deposit ?? 0)));
+        $payCycle = $planId === null
+            ? (isset($selection['pay_cycle']) && is_string($selection['pay_cycle'])
+                ? $selection['pay_cycle']
+                : null)
+            : null;
+        $courseMonths = $planId === null && is_array($selection['course_months'] ?? null)
+            ? array_values(array_unique(array_map('strval', $selection['course_months'])))
+            : null;
+
         $existing = StudentAnnualIntent::query()
             ->where('student_id', $studentId)
             ->planned()
@@ -554,6 +630,10 @@ class StudentPromotionController extends Controller
             'fee_plan_id' => $planId,
             'package_label' => $planId === null ? null : ($label ?? '年繳方案'),
             'package_total' => $planId === null ? null : $total,
+            'deposit' => $deposit,
+            'next_fee' => $nextFee,
+            'pay_cycle' => $payCycle,
+            'course_months' => $courseMonths,
             'status' => StudentAnnualIntent::STATUS_PLANNED,
             'note' => $selection['note'] ?? null,
             'recorded_by_user_id' => $actorId,

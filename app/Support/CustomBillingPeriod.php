@@ -9,12 +9,35 @@ namespace App\Support;
 final class CustomBillingPeriod
 {
     /**
-     * 期別包含的月份（依序，可跨年如 11–2 → [11,12,1,2]）。
+     * 期別包含的月份（依序）。
+     * - 未勾隔年：可跨年如 11–2 → [11,12,1,2]；7–8 → [7,8]
+     * - 勾選結束為隔年：7–8 → [7…12,1…8]（14 個月）
      *
      * @return list<int>
      */
-    public static function monthNumbers(int $startMonth, int $endMonth): array
-    {
+    public static function monthNumbers(
+        int $startMonth,
+        int $endMonth,
+        bool $endNextYear = false,
+    ): array {
+        if ($endNextYear) {
+            $months = [];
+            $month = $startMonth;
+            $passedNewYear = false;
+            for ($i = 0; $i < 24; $i++) {
+                $months[] = $month;
+                if ($passedNewYear && $month === $endMonth) {
+                    break;
+                }
+                $month = $month % 12 + 1;
+                if ($month === 1) {
+                    $passedNewYear = true;
+                }
+            }
+
+            return $months;
+        }
+
         $months = [];
         $month = $startMonth;
         for ($i = 0; $i < 12; $i++) {
@@ -28,9 +51,38 @@ final class CustomBillingPeriod
         return $months;
     }
 
-    public static function monthCount(int $startMonth, int $endMonth): int
-    {
-        return count(self::monthNumbers($startMonth, $endMonth));
+    public static function monthCount(
+        int $startMonth,
+        int $endMonth,
+        bool $endNextYear = false,
+    ): int {
+        return count(self::monthNumbers($startMonth, $endMonth, $endNextYear));
+    }
+
+    /**
+     * 依起始年＋起迄月列出實際年月（可隔年結束）。
+     *
+     * @return list<array{y:int,m:int}>
+     */
+    public static function yearMonths(
+        int $startYear,
+        int $startMonth,
+        int $endMonth,
+        bool $endNextYear = false,
+    ): array {
+        $numbers = self::monthNumbers($startMonth, $endMonth, $endNextYear);
+        $out = [];
+        $year = $startYear;
+        $prev = null;
+        foreach ($numbers as $month) {
+            if ($prev !== null && $month < $prev) {
+                $year++;
+            }
+            $out[] = ['y' => $year, 'm' => $month];
+            $prev = $month;
+        }
+
+        return $out;
     }
 
     /**

@@ -185,6 +185,9 @@ final class EnrollmentPricing
                 'annual_end_month' => $plan !== null && $plan->allow_annual
                     ? $plan->annualEndMonth()
                     : null,
+                'annual_end_next_year' => $plan !== null && $plan->allow_annual
+                    ? $plan->annualEndNextYear()
+                    : false,
                 'annual_price' => $plan !== null
                     ? $plan->annualAmountForCourse((int) $course->id)
                     : null,
@@ -233,7 +236,7 @@ final class EnrollmentPricing
      * @return list<int>
      */
     /**
-     * 帳期是否剛好涵蓋年繳起迄月（可跨年，例如 7–6、9–6）。
+     * 帳期是否剛好涵蓋年繳起迄月（可跨年／隔年結束，例如 7–6、7–隔年8）。
      *
      * @param  list<array{y:int,m:int}>  $months
      */
@@ -241,22 +244,9 @@ final class EnrollmentPricing
         array $months,
         int $startMonth,
         int $endMonth,
+        bool $endNextYear = false,
     ): bool {
         if ($months === [] || $startMonth < 1 || $startMonth > 12 || $endMonth < 1 || $endMonth > 12) {
-            return false;
-        }
-
-        $expected = [];
-        $month = $startMonth;
-        for ($i = 0; $i < 12; $i++) {
-            $expected[] = $month;
-            if ($month === $endMonth) {
-                break;
-            }
-            $month = ($month % 12) + 1;
-        }
-
-        if (count($months) !== count($expected)) {
             return false;
         }
 
@@ -265,19 +255,21 @@ final class EnrollmentPricing
             return false;
         }
 
-        $year = (int) $first['y'];
-        $month = $startMonth;
-        foreach ($months as $row) {
-            if ((int) ($row['y'] ?? 0) !== $year || (int) ($row['m'] ?? 0) !== $month) {
+        $expected = CustomBillingPeriod::yearMonths(
+            (int) $first['y'],
+            $startMonth,
+            $endMonth,
+            $endNextYear,
+        );
+
+        if (count($months) !== count($expected)) {
+            return false;
+        }
+
+        foreach ($months as $i => $row) {
+            if ((int) ($row['y'] ?? 0) !== (int) $expected[$i]['y']
+                || (int) ($row['m'] ?? 0) !== (int) $expected[$i]['m']) {
                 return false;
-            }
-            if ($month === $endMonth) {
-                break;
-            }
-            $month++;
-            if ($month > 12) {
-                $month = 1;
-                $year++;
             }
         }
 
@@ -507,11 +499,12 @@ final class EnrollmentPricing
                 : null;
             $annualStart = (int) ($subject['annual_start_month'] ?? 7);
             $annualEnd = (int) ($subject['annual_end_month'] ?? 6);
+            $annualEndNextYear = ! empty($subject['annual_end_next_year']);
             $useAnnualPreferential = $payCycle === 'annual'
                 && ! empty($subject['allow_annual'])
                 && $annualPrice !== null
                 && $annualPrice > 0
-                && self::matchesAnnualMonthSpan($subjectMonths, $annualStart, $annualEnd);
+                && self::matchesAnnualMonthSpan($subjectMonths, $annualStart, $annualEnd, $annualEndNextYear);
 
             if ($useAnnualPreferential) {
                 // 年繳優惠：整學年 7–6 一次金額，均攤到 12 個月帳期

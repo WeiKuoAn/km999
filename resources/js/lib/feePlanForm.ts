@@ -106,6 +106,8 @@ export type FeePlanFormData = {
     annual_start_month: number | '';
     /** 年繳帳期／方案結束月 */
     annual_end_month: number | '';
+    /** 結束月是否為隔年（例：7 月～隔年 8 月＝14 個月） */
+    annual_end_next_year: boolean;
     /** 年繳方案總額（含教材） */
     package_total: number | '';
     /** 各科年繳金額；key=course_id（期別＋開放年繳用） */
@@ -252,6 +254,10 @@ export function feePlanPayload(data: FeePlanFormData) {
             data.plan_kind === 'annual_package' || data.allow_annual
                 ? Number(data.annual_end_month || 6)
                 : null,
+        annual_end_next_year:
+            data.plan_kind === 'annual_package' || data.allow_annual
+                ? !!data.annual_end_next_year
+                : false,
         package_total:
             data.plan_kind === 'annual_package'
                 ? Number(data.package_total || 0) || null

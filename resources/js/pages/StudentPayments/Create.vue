@@ -55,6 +55,7 @@ type Subject = {
     allow_annual?: boolean;
     annual_start_month?: number | null;
     annual_end_month?: number | null;
+    annual_end_next_year?: boolean;
     annual_price?: number | null;
 };
 
@@ -161,6 +162,7 @@ const props = defineProps<{
             ready: boolean;
             start_month?: number;
             end_month?: number;
+            end_next_year?: boolean;
         }>;
         required_course_ids: number[];
         required_count: number;
@@ -173,6 +175,10 @@ const props = defineProps<{
         fee_plan_id: number | null;
         package_label: string | null;
         package_total: number | null;
+        deposit?: number | null;
+        next_fee?: number | null;
+        pay_cycle?: string | null;
+        course_months?: string[] | null;
         note: string | null;
         is_annual: boolean;
     } | null;
@@ -454,26 +460,33 @@ const activePackageMonthCount = computed(() => {
         2000,
         Number(pack.start_month ?? 7),
         Number(pack.end_month ?? 12),
+        !!pack.end_next_year,
     ).length;
 });
 
 const packagePeriodCount = (pack: {
     start_month?: number;
     end_month?: number;
+    end_next_year?: boolean;
 }): number =>
     billingMonthsFromSpan(
         2000,
         Number(pack.start_month ?? 7),
         Number(pack.end_month ?? 12),
+        !!pack.end_next_year,
     ).length;
 
 const packageMonthsLabel = (pack: {
     start_month?: number;
     end_month?: number;
+    end_next_year?: boolean;
 }): string => {
     const start = Number(pack.start_month ?? 7);
     const end = Number(pack.end_month ?? 12);
-    return start === end ? `${start} 月` : `${start}–${end} 月`;
+    if (start === end && !pack.end_next_year) {
+        return `${start} 月`;
+    }
+    return pack.end_next_year ? `${start}–隔年 ${end} 月` : `${start}–${end} 月`;
 };
 
 const activePackageMonthsLabel = computed(() => {
@@ -642,6 +655,7 @@ const packageMonthBreakdown = computed((): MonthBreakdownRow[] => {
         year,
         Number(pack?.start_month ?? 7),
         Number(pack?.end_month ?? 12),
+        !!pack?.end_next_year,
     );
 
     return months.map((month) => {
@@ -687,12 +701,37 @@ const monthCheckboxOptions = computed(() => {
         return [];
     }
 
+    // 年繳方案：依方案起迄（含隔年結束）列出全部期別，勿截成 12 個月
+    if (isGrade9PackageMode.value && activeGrade9Package.value) {
+        const pack = activeGrade9Package.value;
+        const year = Number(startDate.value.slice(0, 4));
+
+        return billingMonthsFromSpan(
+            year,
+            Number(pack.start_month ?? 7),
+            Number(pack.end_month ?? 12),
+            !!pack.end_next_year,
+        ).map((m) => ({
+            key: monthKey(m.y, m.m),
+            label: `${m.m}月`,
+            yearLabel: `${m.y}/${m.m}`,
+            y: m.y,
+            m: m.m,
+        }));
+    }
+
     const from = startDate.value < BACKFILL_FROM ? startDate.value : BACKFILL_FROM;
     const extra =
         (Number(startDate.value.slice(0, 4)) - Number(from.slice(0, 4))) * 12 +
         (Number(startDate.value.slice(5, 7)) - Number(from.slice(5, 7)));
+    // 一般年繳／自訂跨度：至少涵蓋 session 月數與已勾選月份（含隔年結束 >12）
+    const span = Math.max(
+        12,
+        sessionMonthSpan.value,
+        selectedMonthKeys.value.length,
+    );
 
-    return billingMonthOptions(from, 12 + extra).map((m) => ({
+    return billingMonthOptions(from, span + Math.max(0, extra)).map((m) => ({
         key: monthKey(m.y, m.m),
         label: `${m.m}月`,
         yearLabel: `${m.y}/${m.m}`,
@@ -873,11 +912,12 @@ const allocateRounded = (exacts: number[]): number[] => {
     return floors;
 };
 
-/** 帳期是否剛好等於年繳起迄月（可跨年） */
+/** 帳期是否剛好等於年繳起迄月（可跨年／隔年結束） */
 const matchesAnnualMonthSpan = (
     months: Array<{ y: number; m: number }>,
     startMonth: number,
     endMonth: number,
+    endNextYear = false,
 ): boolean => {
     if (
         months.length === 0 ||
@@ -889,38 +929,24 @@ const matchesAnnualMonthSpan = (
         return false;
     }
 
-    const expected: number[] = [];
-    let cursor = startMonth;
-    for (let i = 0; i < 12; i++) {
-        expected.push(cursor);
-        if (cursor === endMonth) break;
-        cursor = (cursor % 12) + 1;
-    }
-    if (months.length !== expected.length) {
-        return false;
-    }
-
     const first = months[0];
     if (!first || first.m !== startMonth) {
         return false;
     }
 
-    let year = first.y;
-    let month = startMonth;
-    for (const row of months) {
-        if (row.y !== year || row.m !== month) {
-            return false;
-        }
-        if (month === endMonth) {
-            break;
-        }
-        month += 1;
-        if (month > 12) {
-            month = 1;
-            year += 1;
-        }
+    const expected = billingMonthsFromSpan(
+        first.y,
+        startMonth,
+        endMonth,
+        endNextYear,
+    );
+    if (months.length !== expected.length) {
+        return false;
     }
-    return true;
+
+    return months.every(
+        (row, i) => row.y === expected[i].y && row.m === expected[i].m,
+    );
 };
 
 const usesAnnualPreferential = (s: Subject): boolean =>
@@ -932,6 +958,7 @@ const usesAnnualPreferential = (s: Subject): boolean =>
         courseBillingMonths(s.id),
         Number(s.annual_start_month ?? 7),
         Number(s.annual_end_month ?? 6),
+        !!s.annual_end_next_year,
     );
 
 /** 自訂期別各月金額：依報科數取每月單價 × 勾選月數；符合年繳優惠則均攤年繳金額 */
@@ -1079,6 +1106,7 @@ const syncSuggestedMonths = () => {
             year,
             Number(pack?.start_month ?? 7),
             Number(pack?.end_month ?? 12),
+            !!pack?.end_next_year,
         ).map((m) => monthKey(m.y, m.m));
 
         return;
@@ -2867,9 +2895,46 @@ defineOptions({
                                         annualIntent.package_total
                                     "
                                 >
-                                    （${{
+                                    （總額 ${{
                                         annualIntent.package_total.toLocaleString()
                                     }}）
+                                </template>
+                                <template
+                                    v-if="
+                                        !annualIntent.is_annual &&
+                                        annualIntent.pay_cycle
+                                    "
+                                >
+                                    （{{
+                                        annualIntent.pay_cycle === 'monthly'
+                                            ? '月繳'
+                                            : annualIntent.pay_cycle ===
+                                                'annual'
+                                              ? '年繳'
+                                              : '季繳'
+                                    }}{{
+                                        annualIntent.course_months?.length
+                                            ? ` ${annualIntent.course_months.length} 個月`
+                                            : ''
+                                    }}）
+                                </template>
+                                <template
+                                    v-if="
+                                        annualIntent.is_annual &&
+                                        annualIntent.deposit != null &&
+                                        annualIntent.deposit > 0
+                                    "
+                                >
+                                    ｜訂金 ${{
+                                        annualIntent.deposit.toLocaleString()
+                                    }}
+                                </template>
+                                <template
+                                    v-if="annualIntent.next_fee != null"
+                                >
+                                    ｜建議下次應收 ${{
+                                        annualIntent.next_fee.toLocaleString()
+                                    }}
                                 </template>
                                 <span
                                     v-if="annualIntent.note"

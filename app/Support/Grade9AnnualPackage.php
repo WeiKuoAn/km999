@@ -118,10 +118,7 @@ final class Grade9AnnualPackage
         foreach ($plans as $plan) {
             $ids = $plan->courses->pluck('id')->map(fn ($id) => (int) $id)->unique()->sort()->values()->all();
             $total = max(1, (int) ($plan->package_total ?? 0));
-            $monthCount = max(1, CustomBillingPeriod::monthCount(
-                $plan->annualStartMonth(),
-                $plan->annualEndMonth()
-            ));
+            $monthCount = max(1, $plan->annualMonthCount());
             $out[] = [
                 'code' => 'fee_plan_'.$plan->id,
                 'label' => $plan->group_name,
@@ -132,6 +129,7 @@ final class Grade9AnnualPackage
                 'ready' => $ids !== [] && $total > 0,
                 'start_month' => $plan->annualStartMonth(),
                 'end_month' => $plan->annualEndMonth(),
+                'end_next_year' => $plan->annualEndNextYear(),
                 'fee_plan_id' => (int) $plan->id,
             ];
         }
@@ -215,6 +213,7 @@ final class Grade9AnnualPackage
                     'monthly_total' => $pack['monthly_total'],
                     'start_month' => $pack['start_month'],
                     'end_month' => $pack['end_month'],
+                    'end_next_year' => (bool) ($pack['end_next_year'] ?? false),
                     'fee_plan_id' => $pack['fee_plan_id'],
                 ];
             }
@@ -262,7 +261,9 @@ final class Grade9AnnualPackage
             'total' => $first['total'] ?? self::TOTAL,
             'monthly_total' => $first['monthly_total'] ?? self::MONTHLY_TOTAL,
             'months_label' => $first !== null
-                ? $first['start_month'].'–'.$first['end_month'].' 月'
+                ? $first['start_month'].'–'
+                    .(! empty($first['end_next_year']) ? '隔年' : '')
+                    .$first['end_month'].' 月'
                 : '7–12 月（6 期）',
             'reason' => $eligible
                 ? null
@@ -289,26 +290,19 @@ final class Grade9AnnualPackage
         $total = (int) $package['total'];
         $startMonth = (int) ($package['start_month'] ?? self::START_MONTH);
         $endMonth = (int) ($package['end_month'] ?? self::END_MONTH);
+        $endNextYear = (bool) ($package['end_next_year'] ?? false);
         $start = Carbon::parse($startDate);
         $year = (int) $start->year;
         $subjects = collect(EnrollmentPricing::subjectsForStudent($student))->keyBy('id');
         $ids = array_values(array_unique(array_map('intval', $courseIds)));
         sort($ids);
 
-        $months = [];
-        $cursor = $startMonth;
-        $y = $year;
-        for ($i = 0; $i < 12; $i++) {
-            $months[] = ['y' => $y, 'm' => $cursor];
-            if ($cursor === $endMonth) {
-                break;
-            }
-            $cursor++;
-            if ($cursor > 12) {
-                $cursor = 1;
-                $y++;
-            }
-        }
+        $months = CustomBillingPeriod::yearMonths(
+            $year,
+            $startMonth,
+            $endMonth,
+            $endNextYear,
+        );
 
         $monthAmounts = EnrollmentPricing::allocateRoundedAmounts(
             array_fill(0, count($months), $total / max(1, count($months)))

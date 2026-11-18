@@ -21,6 +21,7 @@ class FeePlan extends Model
         'allow_annual',
         'annual_start_month',
         'annual_end_month',
+        'annual_end_next_year',
         'package_total',
         'session_block_size',
         'list_price',
@@ -40,6 +41,7 @@ class FeePlan extends Model
             'allow_annual' => 'boolean',
             'annual_start_month' => 'integer',
             'annual_end_month' => 'integer',
+            'annual_end_next_year' => 'boolean',
             'package_total' => 'integer',
             'list_price' => 'integer',
             'quarter_price' => 'integer',
@@ -134,6 +136,21 @@ class FeePlan extends Model
         return $month >= 1 && $month <= 12 ? $month : 6;
     }
 
+    /** 年繳結束月是否為隔年（例：7 月～隔年 8 月） */
+    public function annualEndNextYear(): bool
+    {
+        return (bool) $this->annual_end_next_year;
+    }
+
+    public function annualMonthCount(): int
+    {
+        return CustomBillingPeriod::monthCount(
+            $this->annualStartMonth(),
+            $this->annualEndMonth(),
+            $this->annualEndNextYear(),
+        );
+    }
+
     /** 該科年繳金額；未開放或未設定則 null */
     public function annualAmountForCourse(int $courseId): ?int
     {
@@ -215,10 +232,14 @@ class FeePlan extends Model
             $total = (int) ($this->package_total ?? 0);
             $start = $this->annualStartMonth();
             $end = $this->annualEndMonth();
-            $monthCount = CustomBillingPeriod::monthCount($start, $end);
+            $endNextYear = $this->annualEndNextYear();
+            $monthCount = CustomBillingPeriod::monthCount($start, $end, $endNextYear);
+            $spanLabel = $start === $end && ! $endNextYear
+                ? $start.'月'
+                : $start.'–'.($endNextYear ? '隔年' : '').$end.'月';
 
             return [[
-                'label' => ($start === $end ? $start.'月' : $start.'–'.$end.'月').' · '.$monthCount.'個月',
+                'label' => $spanLabel.' · '.$monthCount.'個月',
                 'monthly' => '$'.number_format($total).'（年繳總額）',
                 // months=0：列表不套「／月 ×N」版型
                 'months' => 0,

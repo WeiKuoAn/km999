@@ -265,12 +265,15 @@ export function defaultBillingMonths(
 }
 
 /**
- * 依起始年＋起迄月列出帳期（可跨年，例：2026、3→8 → 3–8 月；7→6 → 7–12＋隔年 1–6）。
+ * 依起始年＋起迄月列出帳期。
+ * - 未勾隔年：可同年或跨年（例：3→8；7→6＝7–12＋隔年 1–6）
+ * - 勾選結束為隔年：7→8＝7–12＋隔年 1–8（14 個月）
  */
 export function billingMonthsFromSpan(
     startYear: number,
     startMonth: number,
     endMonth: number,
+    endNextYear = false,
 ): YearMonth[] {
     if (
         !Number.isFinite(startYear) ||
@@ -285,16 +288,23 @@ export function billingMonthsFromSpan(
     const out: YearMonth[] = [];
     let year = Math.trunc(startYear);
     let month = Math.trunc(startMonth);
+    let passedNewYear = false;
+    const limit = endNextYear ? 24 : 12;
 
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < limit; i++) {
         out.push({ y: year, m: month });
-        if (month === endMonth) {
+        if (endNextYear) {
+            if (passedNewYear && month === endMonth) {
+                break;
+            }
+        } else if (month === endMonth) {
             break;
         }
         month += 1;
         if (month > 12) {
             month = 1;
             year += 1;
+            passedNewYear = true;
         }
     }
 

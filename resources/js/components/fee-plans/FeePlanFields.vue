@@ -69,10 +69,13 @@ const planCourseCount = computed(() => props.form.course_ids.length);
 const showDoubleTier = computed(() => planCourseCount.value >= 2);
 const showTripleTier = computed(() => planCourseCount.value >= 3);
 
-const periodMonthsPreview = (period: {
-    start_month: number | '';
-    end_month: number | '';
-}): number => {
+const periodMonthsPreview = (
+    period: {
+        start_month: number | '';
+        end_month: number | '';
+    },
+    endNextYear = false,
+): number => {
     const start = Number(period.start_month);
     const end = Number(period.end_month);
     if (!start || !end || start < 1 || start > 12 || end < 1 || end > 12) {
@@ -80,13 +83,32 @@ const periodMonthsPreview = (period: {
     }
     let count = 0;
     let month = start;
-    for (let i = 0; i < 12; i++) {
+    let passedNewYear = false;
+    const limit = endNextYear ? 24 : 12;
+    for (let i = 0; i < limit; i++) {
         count++;
-        if (month === end) break;
+        if (endNextYear) {
+            if (passedNewYear && month === end) break;
+        } else if (month === end) {
+            break;
+        }
         month = (month % 12) + 1;
+        if (month === 1) {
+            passedNewYear = true;
+        }
     }
     return count;
 };
+
+const annualMonthsPreview = computed(() =>
+    periodMonthsPreview(
+        {
+            start_month: props.form.annual_start_month,
+            end_month: props.form.annual_end_month,
+        },
+        !!props.form.annual_end_next_year,
+    ),
+);
 
 const ensurePeriodCoursePrices = () => {
     if (props.form.per_course_periods) {
@@ -619,6 +641,23 @@ if (props.form.material_unit === 'subject') {
                             </option>
                         </select>
                     </div>
+                    <label class="flex items-center gap-2 pb-2 text-sm">
+                        <input
+                            v-model="form.annual_end_next_year"
+                            type="checkbox"
+                            class="size-4 accent-[var(--brand-green)]"
+                        />
+                        結束月為隔年
+                    </label>
+                    <p class="pb-2 text-xs text-muted-foreground">
+                        <template v-if="annualMonthsPreview">
+                            共 {{ annualMonthsPreview }} 個月
+                            <template v-if="form.annual_end_next_year">
+                                （例：7–隔年 8＝14 個月）
+                            </template>
+                        </template>
+                        <template v-else>請選擇起迄月</template>
+                    </p>
                 </div>
             </section>
 
@@ -1143,8 +1182,19 @@ if (props.form.material_unit === 'subject') {
                                 "
                             />
                         </div>
+                        <label class="flex items-center gap-2 pb-2 text-sm">
+                            <input
+                                v-model="form.annual_end_next_year"
+                                type="checkbox"
+                                class="size-4 accent-[var(--brand-green)]"
+                            />
+                            結束月為隔年
+                        </label>
                         <p class="pb-2 text-xs text-muted-foreground">
-                            例：7–6＝整學年；9–6＝從 9 月繳到隔年 6 月。
+                            <template v-if="annualMonthsPreview">
+                                共 {{ annualMonthsPreview }} 個月。
+                            </template>
+                            例：7–6＝整學年；勾選隔年後 7–8＝14 個月。
                         </p>
                     </div>
 

@@ -36,6 +36,7 @@ const form = useForm<FeePlanFormData>({
     allow_annual: false,
     annual_start_month: 7,
     annual_end_month: 6,
+    annual_end_next_year: false,
     package_total: '',
     annual_prices: {},
     periods: [

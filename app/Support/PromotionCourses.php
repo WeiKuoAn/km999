@@ -22,7 +22,7 @@ final class PromotionCourses
      *   transferable_labels:list<string>,
      *   blocked_ids:list<int>,
      *   blocked_labels:list<string>,
-     *   target_subjects:list<array{id:int,name:string,category:string|null}>,
+     *   target_subjects:list<array<string,mixed>>,
      *   note:string|null
      * }
      */
@@ -147,7 +147,9 @@ final class PromotionCourses
     }
 
     /**
-     * @return list<array{id:int,name:string,category:string|null}>
+     * 新年級可選科目（含價目，供個別轉檔試算）。
+     *
+     * @return list<array<string, mixed>>
      */
     private static function subjectsForTargetGrade(Student $student, GradeLevel $toGrade): array
     {
@@ -164,6 +166,16 @@ final class PromotionCourses
                 'id' => (int) $s['id'],
                 'name' => (string) $s['name'],
                 'category' => $s['category'] ?? null,
+                'unit' => (string) ($s['unit'] ?? 'month'),
+                'list' => (int) ($s['list'] ?? 0),
+                'q_single' => (int) ($s['q_single'] ?? 0),
+                'material' => (int) ($s['material'] ?? 0),
+                'material_unit' => (string) ($s['material_unit'] ?? 'term'),
+                'periods' => is_array($s['periods'] ?? null) ? $s['periods'] : [],
+                'allow_annual' => (bool) ($s['allow_annual'] ?? false),
+                'annual_start_month' => $s['annual_start_month'] ?? null,
+                'annual_end_month' => $s['annual_end_month'] ?? null,
+                'annual_price' => isset($s['annual_price']) ? (int) $s['annual_price'] : null,
             ])
             ->values()
             ->all();

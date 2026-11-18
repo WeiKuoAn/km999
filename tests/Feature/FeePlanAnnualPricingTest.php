@@ -7,6 +7,7 @@ use App\Models\FeePlan;
 use App\Models\GradeLevel;
 use App\Models\Student;
 use App\Models\User;
+use App\Support\CustomBillingPeriod;
 use App\Support\EnrollmentPricing;
 use App\Support\PricingGroup;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -253,9 +254,14 @@ test('matchesAnnualMonthSpan supports custom ranges', function () {
         fn (array $row): bool => ! in_array((int) $row['m'], [7, 8], true)
     ));
 
+    $julyToNextAug = CustomBillingPeriod::yearMonths(2026, 7, 8, true);
+
     expect(EnrollmentPricing::matchesAnnualMonthSpan($julyToJune, 7, 6))->toBeTrue()
         ->and(EnrollmentPricing::matchesAnnualMonthSpan($septToJune, 9, 6))->toBeTrue()
-        ->and(EnrollmentPricing::matchesAnnualMonthSpan(array_slice($julyToJune, 0, 3), 7, 6))->toBeFalse();
+        ->and(EnrollmentPricing::matchesAnnualMonthSpan(array_slice($julyToJune, 0, 3), 7, 6))->toBeFalse()
+        ->and(EnrollmentPricing::matchesAnnualMonthSpan($julyToNextAug, 7, 8, true))->toBeTrue()
+        ->and(EnrollmentPricing::matchesAnnualMonthSpan($julyToNextAug, 7, 8, false))->toBeFalse()
+        ->and(count($julyToNextAug))->toBe(14);
 });
 
 test('custom annual month range uses preferential total', function () {
