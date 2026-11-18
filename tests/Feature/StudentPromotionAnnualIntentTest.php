@@ -138,7 +138,7 @@ test('g8 to g9 preview includes annual packages dialog flag', function () {
             ->where('annual_packages.0.label', '國社年繳'));
 });
 
-test('g8 to g9 promote stores annual intent', function () {
+test('g8 to g9 promote stores annual intent without amounts', function () {
     ['g8' => $g8, 'g9' => $g9, 'plan' => $plan, 'student' => $student] = promotionAnnualCtx();
     $admin = promotionAnnualAdmin();
 
@@ -153,8 +153,8 @@ test('g8 to g9 promote stores annual intent', function () {
                 [
                     'student_id' => $student->id,
                     'fee_plan_id' => $plan->id,
-                    'deposit' => 5000,
-                    'next_fee' => 32000,
+                    'deposit' => null,
+                    'next_fee' => null,
                     'note' => '家長已確認',
                 ],
             ],
@@ -171,8 +171,8 @@ test('g8 to g9 promote stores annual intent', function () {
         ->and((int) $intent->fee_plan_id)->toBe($plan->id)
         ->and($intent->package_label)->toBe('國社年繳')
         ->and((int) $intent->package_total)->toBe(37000)
-        ->and((int) $intent->deposit)->toBe(5000)
-        ->and((int) $intent->next_fee)->toBe(32000)
+        ->and($intent->deposit)->toBeNull()
+        ->and($intent->next_fee)->toBeNull()
         ->and($intent->note)->toBe('家長已確認');
 
     $this->actingAs($admin)
@@ -181,8 +181,8 @@ test('g8 to g9 promote stores annual intent', function () {
         ->assertInertia(fn ($page) => $page
             ->component('StudentPayments/Create')
             ->where('annual_intent.fee_plan_id', $plan->id)
-            ->where('annual_intent.deposit', 5000)
-            ->where('annual_intent.next_fee', 32000)
+            ->where('annual_intent.deposit', null)
+            ->where('annual_intent.next_fee', null)
             ->where('annual_intent.note', '家長已確認'));
 });
 
@@ -200,9 +200,6 @@ test('g8 to g9 promote can record no annual', function () {
                 [
                     'student_id' => $student->id,
                     'fee_plan_id' => null,
-                    'pay_cycle' => 'quarterly',
-                    'course_months' => ['2026-7', '2026-8', '2026-9'],
-                    'next_fee' => 12600,
                     'note' => '不修數學',
                 ],
             ],
@@ -213,9 +210,9 @@ test('g8 to g9 promote can record no annual', function () {
     expect($intent)->not->toBeNull()
         ->and($intent->fee_plan_id)->toBeNull()
         ->and($intent->package_label)->toBeNull()
-        ->and($intent->pay_cycle)->toBe('quarterly')
-        ->and($intent->course_months)->toBe(['2026-7', '2026-8', '2026-9'])
-        ->and((int) $intent->next_fee)->toBe(12600)
+        ->and($intent->pay_cycle)->toBeNull()
+        ->and($intent->course_months)->toBeNull()
+        ->and($intent->next_fee)->toBeNull()
         ->and($intent->note)->toBe('不修數學');
 });
 

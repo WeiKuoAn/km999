@@ -321,12 +321,11 @@ class StudentPromotionController extends Controller
                 }
                 $courseMonths = array_values(array_unique($courseMonths));
                 if ($planId !== null) {
-                    // 年繳方案：訂金／下次應收；不需一般繳別月份
+                    // 年繳方案：不需一般繳別月份；金額欄若未填則留空
                     $payCycle = null;
                     $courseMonths = [];
                 } else {
                     $deposit = null;
-                    $payCycle = $payCycle ?? 'quarterly';
                 }
                 $annualMap[$sid] = [
                     'fee_plan_id' => $planId,
@@ -603,14 +602,18 @@ class StudentPromotionController extends Controller
             }
         }
 
-        $deposit = $planId === null
-            ? null
-            : (isset($selection['deposit']) ? max(0, (int) $selection['deposit']) : null);
-        $nextFee = array_key_exists('next_fee', $selection) && $selection['next_fee'] !== null
+        // 轉檔只登記意向；未填訂金／下次應收則留空，金額到收款再算
+        $deposit = $planId !== null
+            && array_key_exists('deposit', $selection)
+            && $selection['deposit'] !== null
+            && $selection['deposit'] !== ''
+            ? max(0, (int) $selection['deposit'])
+            : null;
+        $nextFee = array_key_exists('next_fee', $selection)
+            && $selection['next_fee'] !== null
+            && $selection['next_fee'] !== ''
             ? max(0, (int) $selection['next_fee'])
-            : ($planId === null
-                ? null
-                : max(0, (int) ($total ?? 0) - (int) ($deposit ?? 0)));
+            : null;
         $payCycle = $planId === null
             ? (isset($selection['pay_cycle']) && is_string($selection['pay_cycle'])
                 ? $selection['pay_cycle']

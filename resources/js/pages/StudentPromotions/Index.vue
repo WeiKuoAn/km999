@@ -13,13 +13,6 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { isGraduationGrade, studentStatusLabel } from '@/lib/studentStatus';
-import {
-    billingMonthOptions,
-    defaultBillingMonths,
-    monthKey,
-    parseMonthKey,
-} from '@/lib/weekdayDates';
-import type { YearMonth } from '@/lib/weekdayDates';
 
 type GradeOption = {
     id: number;
@@ -38,23 +31,6 @@ type TargetSubject = {
     id: number;
     name: string;
     category: string | null;
-    unit?: string;
-    list?: number;
-    q_single?: number;
-    material?: number;
-    material_unit?: string;
-    periods?: Array<{
-        start_month: number;
-        end_month: number;
-        total_price: number;
-        double_price?: number | null;
-        triple_price?: number | null;
-    }>;
-    allow_annual?: boolean;
-    annual_start_month?: number | null;
-    annual_end_month?: number | null;
-    annual_end_next_year?: boolean;
-    annual_price?: number | null;
 };
 type AnnualPackage = {
     fee_plan_id: number;
@@ -68,12 +44,10 @@ type AnnualPackage = {
     required_count?: number;
 };
 
+/** 轉檔只登記年繳意向（方案／備註），金額到收款再算 */
 type AnnualSelectionRow = {
     fee_plan_id: string;
-    deposit: string;
-    next_fee: string;
     note: string;
-    next_fee_manual: boolean;
 };
 type PromotionLog = {
     id: number;
@@ -323,14 +297,8 @@ const individualCourseIds = ref<number[]>([]);
 const individualError = ref('');
 const individualAnnual = reactive<AnnualSelectionRow>({
     fee_plan_id: '',
-    deposit: '0',
-    next_fee: '0',
     note: '',
-    next_fee_manual: false,
 });
-const individualPayCycle = ref<'monthly' | 'quarterly' | 'annual'>('quarterly');
-const individualStartDate = ref('');
-const individualMonthKeys = ref<string[]>([]);
 
 const annualOpen = ref(false);
 const annualRows = ref<PreviewRow[]>([]);
@@ -341,10 +309,7 @@ const annualPackages = computed(() => props.annual_packages ?? []);
 
 const emptyAnnualSelection = (): AnnualSelectionRow => ({
     fee_plan_id: '',
-    deposit: '0',
-    next_fee: '0',
     note: '',
-    next_fee_manual: false,
 });
 
 const packageOptionLabel = (pack: AnnualPackage) =>
@@ -366,46 +331,6 @@ const idsMatch = (a: number[], b: number[]) => {
 const packageMatchesCourses = (pack: AnnualPackage, courseIds: number[]) =>
     idsMatch(pack.required_course_ids ?? [], courseIds);
 
-const parseMoney = (raw: string): number => {
-    const n = Number(String(raw).replace(/[^\d]/g, ''));
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-};
-
-const suggestedNextFee = (total: number, deposit: number) =>
-    Math.max(0, total - deposit);
-
-const syncAnnualNextFee = (sel: AnnualSelectionRow) => {
-    const pack = findPackage(sel.fee_plan_id);
-    if (!pack) {
-        sel.deposit = '0';
-        return;
-    }
-    if (sel.next_fee_manual) {
-        return;
-    }
-    sel.next_fee = String(
-        suggestedNextFee(pack.total, parseMoney(sel.deposit)),
-    );
-};
-
-const onAnnualPlanChange = (sel: AnnualSelectionRow) => {
-    sel.next_fee_manual = false;
-    sel.deposit = '0';
-    syncAnnualNextFee(sel);
-    if (sel === individualAnnual && sel.fee_plan_id === '') {
-        syncIndividualNonAnnualMonths();
-        syncIndividualNonAnnualFee();
-    }
-};
-
-const onAnnualDepositChange = (sel: AnnualSelectionRow) => {
-    syncAnnualNextFee(sel);
-};
-
-const onAnnualNextFeeInput = (sel: AnnualSelectionRow) => {
-    sel.next_fee_manual = true;
-};
-
 const initAnnualSelections = (rows: PreviewRow[]) => {
     for (const key of Object.keys(annualSelections)) {
         delete annualSelections[Number(key)];
@@ -417,211 +342,20 @@ const initAnnualSelections = (rows: PreviewRow[]) => {
 
 const resetIndividualAnnual = () => {
     Object.assign(individualAnnual, emptyAnnualSelection());
-    individualPayCycle.value = 'quarterly';
-    individualStartDate.value = defaultPromotionStartDate();
-    individualMonthKeys.value = [];
-};
-
-const defaultPromotionStartDate = (): string => {
-    const current =
-        props.years.find((y) => y.is_current) ?? props.years[0] ?? null;
-    const code = Number(current?.year_code ?? new Date().getFullYear() - 1911);
-    const year = Number.isFinite(code) ? code + 1911 : new Date().getFullYear();
-
-    return `${year}-07-01`;
-};
-
-const monthSpanForCycle = (cycle: 'monthly' | 'quarterly' | 'annual') => {
-    switch (cycle) {
-        case 'monthly':
-            return 1;
-        case 'annual':
-            return 12;
-        default:
-            return 3;
-    }
-};
-
-const syncIndividualNonAnnualMonths = () => {
-    if (!individualStartDate.value) {
-        individualStartDate.value = defaultPromotionStartDate();
-    }
-    individualMonthKeys.value = defaultBillingMonths(
-        individualStartDate.value,
-        monthSpanForCycle(individualPayCycle.value),
-    ).map((m) => monthKey(m.y, m.m));
-};
-
-const subjectById = (id: number) =>
-    (props.target_subjects ?? []).find((s) => s.id === id) ?? null;
-
-const periodMonthCount = (start: number, end: number): number => {
-    let count = 0;
-    let m = start;
-    for (let i = 0; i < 12; i++) {
-        count += 1;
-        if (m === end) {
-            break;
-        }
-        m = (m % 12) + 1;
-    }
-    return Math.max(1, count);
-};
-
-/** 不年繳簡易試算（與收款頁接近：月／季／年＋自訂期別均攤） */
-const estimateNonAnnualFee = (
-    courseIds: number[],
-    cycle: 'monthly' | 'quarterly' | 'annual',
-    monthKeys: string[],
-): { tuition: number; material: number; total: number; months: YearMonth[] } => {
-    const months = monthKeys
-        .map((key) => parseMonthKey(key))
-        .filter((m): m is YearMonth => m !== null)
-        .sort((a, b) => a.y * 12 + a.m - (b.y * 12 + b.m));
-    const monthCount = Math.max(1, months.length);
-    let tuition = 0;
-    let material = 0;
-
-    for (const id of courseIds) {
-        const s = subjectById(id);
-        if (!s) {
-            continue;
-        }
-
-        if (s.unit === 'custom_period' && (s.periods?.length ?? 0) > 0) {
-            const subjectCount = Math.max(1, courseIds.length);
-            for (const month of months) {
-                const period = (s.periods ?? []).find((p) => {
-                    const nums: number[] = [];
-                    let cursor = p.start_month;
-                    for (let i = 0; i < 12; i++) {
-                        nums.push(cursor);
-                        if (cursor === p.end_month) {
-                            break;
-                        }
-                        cursor = (cursor % 12) + 1;
-                    }
-                    return nums.includes(month.m);
-                });
-                if (!period) {
-                    continue;
-                }
-                const size = periodMonthCount(period.start_month, period.end_month);
-                let periodTotal = period.total_price;
-                if (subjectCount >= 3 && period.triple_price != null) {
-                    periodTotal = period.triple_price;
-                } else if (subjectCount === 2 && period.double_price != null) {
-                    periodTotal = period.double_price;
-                }
-                tuition += Math.round(periodTotal / size);
-            }
-        } else if (cycle === 'monthly') {
-            tuition += Number(s.list ?? 0) * monthCount;
-        } else if (cycle === 'annual') {
-            tuition +=
-                s.annual_price != null && s.annual_price > 0
-                    ? Number(s.annual_price)
-                    : Number(s.list ?? 0) * 12;
-        } else {
-            // 季繳：以單科季繳價 × 季數
-            const quarters = Math.max(1, Math.ceil(monthCount / 3));
-            tuition += Number(s.q_single ?? s.list ?? 0) * quarters;
-        }
-
-        const mat = Number(s.material ?? 0);
-        if (mat > 0 && (s.material_unit ?? 'term') !== 'class_day') {
-            const halves = new Set(
-                months
-                    .filter((m) => m.m === 1 || m.m === 7)
-                    .map((m) => `${m.y}-${m.m <= 6 ? 'H1' : 'H2'}`),
-            );
-            material += Math.round(mat / 2) * halves.size;
-        }
-    }
-
-    return {
-        tuition,
-        material,
-        total: tuition + material,
-        months,
-    };
-};
-
-const individualUsesAnnualPackage = computed(
-    () => individualAnnual.fee_plan_id !== '',
-);
-
-const individualNonAnnualEstimate = computed(() =>
-    estimateNonAnnualFee(
-        individualCourseIds.value,
-        individualPayCycle.value,
-        individualMonthKeys.value,
-    ),
-);
-
-const individualMonthOptions = computed(() => {
-    if (!individualStartDate.value) {
-        return [] as Array<{ key: string; label: string }>;
-    }
-    return billingMonthOptions(individualStartDate.value, 18).map((m) => ({
-        key: monthKey(m.y, m.m),
-        label: `${m.y}/${m.m}`,
-    }));
-});
-
-const syncIndividualNonAnnualFee = () => {
-    if (individualUsesAnnualPackage.value || individualAnnual.next_fee_manual) {
-        return;
-    }
-    individualAnnual.next_fee = String(individualNonAnnualEstimate.value.total);
-};
-
-const toggleIndividualMonth = (key: string) => {
-    if (individualMonthKeys.value.includes(key)) {
-        individualMonthKeys.value = individualMonthKeys.value.filter(
-            (k) => k !== key,
-        );
-    } else {
-        individualMonthKeys.value = [...individualMonthKeys.value, key].sort();
-    }
-    if (!individualAnnual.next_fee_manual) {
-        syncIndividualNonAnnualFee();
-    }
-};
-
-const onIndividualPayCycleChange = () => {
-    individualAnnual.next_fee_manual = false;
-    syncIndividualNonAnnualMonths();
-    syncIndividualNonAnnualFee();
 };
 
 const buildAnnualPayloadFromSelection = (
     studentId: number,
     sel: AnnualSelectionRow,
-    extras?: {
-        pay_cycle?: string | null;
-        course_months?: string[] | null;
-    },
 ) => {
     const raw = sel.fee_plan_id;
     const planId = raw === '' ? null : Number(raw);
-    if (planId === null) {
-        return {
-            student_id: studentId,
-            fee_plan_id: null,
-            deposit: null,
-            next_fee: parseMoney(sel.next_fee) || null,
-            pay_cycle: extras?.pay_cycle ?? null,
-            course_months: extras?.course_months ?? null,
-            note: (sel.note ?? '').trim(),
-        };
-    }
 
     return {
         student_id: studentId,
         fee_plan_id: planId,
-        deposit: parseMoney(sel.deposit),
-        next_fee: parseMoney(sel.next_fee),
+        deposit: null,
+        next_fee: null,
         pay_cycle: null,
         course_months: null,
         note: (sel.note ?? '').trim(),
@@ -639,33 +373,6 @@ const buildAnnualPayload = (rows: PreviewRow[]) =>
 const individualSelectedPackage = computed(() =>
     findPackage(individualAnnual.fee_plan_id),
 );
-
-const individualPackageTotal = computed(
-    () => individualSelectedPackage.value?.total ?? 0,
-);
-
-const individualDepositAmount = computed(() =>
-    individualSelectedPackage.value ? parseMoney(individualAnnual.deposit) : 0,
-);
-
-const individualBalance = computed(() =>
-    Math.max(
-        0,
-        individualPackageTotal.value - individualDepositAmount.value,
-    ),
-);
-
-const individualNextFeeAmount = computed(() => {
-    if (individualUsesAnnualPackage.value) {
-        return parseMoney(individualAnnual.next_fee);
-    }
-    // 不年繳：以欄位為準；若尚未同步則用學費＋教材試算加總
-    const typed = parseMoney(individualAnnual.next_fee);
-    if (individualAnnual.next_fee_manual || typed > 0) {
-        return typed;
-    }
-    return individualNonAnnualEstimate.value.total;
-});
 
 const individualPackageMatch = computed(() => {
     const pack = individualSelectedPackage.value;
@@ -694,10 +401,6 @@ const openIndividual = (row: PreviewRow) => {
     } else {
         // 預選可延續科目；可點掉國二有、國三不修的課，也可加選新年級科目
         individualCourseIds.value = [...(row.transferable_ids ?? [])];
-        if (needsAnnualDialog.value) {
-            syncIndividualNonAnnualMonths();
-            syncIndividualNonAnnualFee();
-        }
     }
     individualOpen.value = true;
 };
@@ -710,9 +413,6 @@ const toggleIndividualCourse = (courseId: number) => {
     } else {
         individualCourseIds.value = [...individualCourseIds.value, courseId];
     }
-    if (!individualUsesAnnualPackage.value) {
-        syncIndividualNonAnnualFee();
-    }
 };
 
 watch(matchingAnnualPackages, (packs) => {
@@ -724,7 +424,6 @@ watch(matchingAnnualPackages, (packs) => {
     }
     if (packs.length === 1) {
         individualAnnual.fee_plan_id = String(packs[0].fee_plan_id);
-        onAnnualPlanChange(individualAnnual);
     }
 });
 
@@ -805,22 +504,13 @@ const submitIndividual = () => {
         : (toGradeOption.value?.name ?? '');
     const annualPayload =
         !graduate && needsAnnualDialog.value
-            ? [
-                  buildAnnualPayloadFromSelection(row.id, individualAnnual, {
-                      pay_cycle: individualUsesAnnualPackage.value
-                          ? null
-                          : individualPayCycle.value,
-                      course_months: individualUsesAnnualPackage.value
-                          ? null
-                          : [...individualMonthKeys.value],
-                  }),
-              ]
+            ? [buildAnnualPayloadFromSelection(row.id, individualAnnual)]
             : [];
 
     const confirmMsg = graduate
         ? `確定將「${row.name}」標記為「已畢業」？`
         : needsAnnualDialog.value
-          ? `確定將「${row.name}」由「${fromName}」個別轉至「${toName}」，並登記年繳意向？（不立刻開帳）`
+          ? `確定將「${row.name}」由「${fromName}」個別轉至「${toName}」，並登記年繳意向？（金額到收款再算）`
           : `確定將「${row.name}」由「${fromName}」個別轉至「${toName}」？\n將依你勾選的課程設定${toName}要修科目。`;
 
     if (!window.confirm(confirmMsg)) {
@@ -928,7 +618,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="學生轉檔"
-            description="批次轉檔：科目不變可自動帶課；科目有變請勾選後於上方選課。國二升國三時會跳出視窗登記年繳意向。右側「個別轉檔」可為單人調整課程。國三轉已畢業。"
+            description="批次轉檔：科目不變可自動帶課；科目有變請勾選後於上方選課。轉檔不計算費用；國二升國三只登記是否年繳。右側「個別轉檔」可為單人調整課程。國三轉已畢業。"
         />
 
         <div
@@ -1237,15 +927,7 @@ defineOptions({
                 }
             "
         >
-            <DialogContent
-                :class="
-                    needsAnnualDialog &&
-                    individualRow &&
-                    !(isGraduate() || individualRow.action === 'graduate')
-                        ? 'max-h-[92vh] overflow-y-auto sm:max-w-3xl'
-                        : 'sm:max-w-lg'
-                "
-            >
+            <DialogContent class="sm:max-w-lg">
                 <DialogHeader>
                     <DialogTitle>個別轉檔</DialogTitle>
                     <DialogDescription>
@@ -1266,396 +948,121 @@ defineOptions({
                     將標記為已畢業；學號與年級維持不變。
                 </div>
 
-                <div
-                    v-else-if="individualRow"
-                    class="grid gap-4"
-                    :class="
-                        needsAnnualDialog
-                            ? 'lg:grid-cols-[minmax(0,1.2fr)_minmax(16rem,0.9fr)]'
-                            : ''
-                    "
-                >
-                    <div class="space-y-3">
-                        <p class="text-sm text-muted-foreground">
-                            請勾選升上「{{
-                                toGradeOption?.name ?? '新年級'
-                            }}」後要修的課。國二有修、國三不修可點掉；也可加選新科目。
-                        </p>
-                        <p
-                            v-if="individualRow.transferable_labels?.length"
-                            class="text-xs text-emerald-700"
-                        >
-                            可延續（已預選）：{{
-                                individualRow.transferable_labels.join('、')
-                            }}
-                        </p>
-                        <p
-                            v-if="individualRow.current_labels?.length"
-                            class="text-xs text-muted-foreground"
-                        >
-                            原年級科目：{{
-                                individualRow.current_labels.join('、')
-                            }}
-                        </p>
-                        <div class="flex flex-wrap gap-2">
-                            <button
-                                v-for="s in target_subjects ?? []"
-                                :key="`ind-${s.id}`"
-                                type="button"
-                                class="rounded-md border px-2.5 py-1.5 text-sm"
-                                :class="
-                                    individualCourseIds.includes(s.id)
-                                        ? 'border-primary bg-primary/10 text-foreground'
-                                        : 'border-border text-muted-foreground hover:border-primary/40'
-                                "
-                                @click="toggleIndividualCourse(s.id)"
-                            >
-                                {{ subjectLabel(s) }}
-                            </button>
-                        </div>
-                        <p
-                            v-if="!(target_subjects ?? []).length"
-                            class="text-xs text-amber-700"
-                        >
-                            新年級尚無可選課程，請先至收費設定／課程確認適用年級。
-                        </p>
-
-                        <template v-if="needsAnnualDialog">
-                            <div class="grid gap-2 border-t pt-3 sm:grid-cols-2">
-                                <div class="grid gap-1 sm:col-span-2">
-                                    <Label for="ind-annual-plan">年繳方案</Label>
-                                    <select
-                                        id="ind-annual-plan"
-                                        v-model="individualAnnual.fee_plan_id"
-                                        class="h-9 rounded-md border bg-background px-3 text-sm"
-                                        @change="
-                                            onAnnualPlanChange(individualAnnual)
-                                        "
-                                    >
-                                        <option value="">不年繳</option>
-                                        <option
-                                            v-for="pack in annualPackages"
-                                            :key="pack.fee_plan_id"
-                                            :value="String(pack.fee_plan_id)"
-                                        >
-                                            {{ packageOptionLabel(pack)
-                                            }}{{
-                                                packageMatchesCourses(
-                                                    pack,
-                                                    individualCourseIds,
-                                                )
-                                                    ? '｜科目相符'
-                                                    : ''
-                                            }}
-                                        </option>
-                                    </select>
-                                    <p
-                                        v-if="
-                                            individualSelectedPackage &&
-                                            !individualPackageMatch
-                                        "
-                                        class="text-xs text-amber-700"
-                                    >
-                                        目前勾選科目與方案科目不完全相同；仍可登記意向，之後收款再調整。
-                                    </p>
-                                </div>
-
-                                <template v-if="!individualUsesAnnualPackage">
-                                    <div class="grid gap-1 sm:col-span-2">
-                                        <Label>繳別</Label>
-                                        <div class="flex flex-wrap gap-2">
-                                            <button
-                                                v-for="opt in [
-                                                    {
-                                                        value: 'monthly',
-                                                        label: '月繳（定價）',
-                                                    },
-                                                    {
-                                                        value: 'quarterly',
-                                                        label: '季繳',
-                                                    },
-                                                    {
-                                                        value: 'annual',
-                                                        label: '年繳',
-                                                    },
-                                                ]"
-                                                :key="opt.value"
-                                                type="button"
-                                                class="rounded-md border px-3 py-1.5 text-sm"
-                                                :class="
-                                                    individualPayCycle ===
-                                                    opt.value
-                                                        ? 'border-primary bg-primary text-primary-foreground'
-                                                        : 'border-border text-muted-foreground hover:border-primary/40'
-                                                "
-                                                @click="
-                                                    individualPayCycle =
-                                                        opt.value as
-                                                            | 'monthly'
-                                                            | 'quarterly'
-                                                            | 'annual';
-                                                    onIndividualPayCycleChange();
-                                                "
-                                            >
-                                                {{ opt.label }}
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div class="grid gap-1 sm:col-span-2">
-                                        <Label for="ind-start-date"
-                                            >帳期起算</Label
-                                        >
-                                        <input
-                                            id="ind-start-date"
-                                            v-model="individualStartDate"
-                                            type="date"
-                                            class="h-9 rounded-md border bg-background px-3 text-sm"
-                                            @change="
-                                                individualAnnual.next_fee_manual = false;
-                                                syncIndividualNonAnnualMonths();
-                                                syncIndividualNonAnnualFee();
-                                            "
-                                        />
-                                    </div>
-                                    <div class="grid gap-1 sm:col-span-2">
-                                        <Label>帳期月份</Label>
-                                        <div
-                                            class="grid grid-cols-3 gap-1.5 sm:grid-cols-4"
-                                        >
-                                            <label
-                                                v-for="opt in individualMonthOptions"
-                                                :key="opt.key"
-                                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs"
-                                                :class="
-                                                    individualMonthKeys.includes(
-                                                        opt.key,
-                                                    )
-                                                        ? 'border-sky-500 bg-sky-50 text-sky-950'
-                                                        : 'border-border text-muted-foreground'
-                                                "
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    class="size-3.5 accent-sky-600"
-                                                    :checked="
-                                                        individualMonthKeys.includes(
-                                                            opt.key,
-                                                        )
-                                                    "
-                                                    @change="
-                                                        toggleIndividualMonth(
-                                                            opt.key,
-                                                        )
-                                                    "
-                                                />
-                                                {{ opt.label }}
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div class="grid gap-1">
-                                        <Label for="ind-next-fee-na"
-                                            >下次應收</Label
-                                        >
-                                        <input
-                                            id="ind-next-fee-na"
-                                            v-model="individualAnnual.next_fee"
-                                            type="number"
-                                            min="0"
-                                            step="1"
-                                            class="h-9 rounded-md border bg-background px-3 text-sm tabular-nums"
-                                            @input="
-                                                onAnnualNextFeeInput(
-                                                    individualAnnual,
-                                                )
-                                            "
-                                        />
-                                    </div>
-                                    <div class="grid gap-1 sm:col-span-2">
-                                        <Label for="ind-annual-note-na"
-                                            >備註（選填）</Label
-                                        >
-                                        <input
-                                            id="ind-annual-note-na"
-                                            v-model="individualAnnual.note"
-                                            type="text"
-                                            maxlength="500"
-                                            class="h-9 rounded-md border bg-background px-3 text-sm"
-                                            placeholder="例：國三不修數學"
-                                        />
-                                    </div>
-                                </template>
-
-                                <template v-else>
-                                    <div class="grid gap-1">
-                                        <Label for="ind-deposit">訂金</Label>
-                                        <input
-                                            id="ind-deposit"
-                                            v-model="individualAnnual.deposit"
-                                            type="number"
-                                            min="0"
-                                            step="1"
-                                            class="h-9 rounded-md border bg-background px-3 text-sm tabular-nums"
-                                            @input="
-                                                onAnnualDepositChange(
-                                                    individualAnnual,
-                                                )
-                                            "
-                                        />
-                                    </div>
-                                    <div class="grid gap-1">
-                                        <Label for="ind-next-fee"
-                                            >下次應收</Label
-                                        >
-                                        <input
-                                            id="ind-next-fee"
-                                            v-model="individualAnnual.next_fee"
-                                            type="number"
-                                            min="0"
-                                            step="1"
-                                            class="h-9 rounded-md border bg-background px-3 text-sm tabular-nums"
-                                            @input="
-                                                onAnnualNextFeeInput(
-                                                    individualAnnual,
-                                                )
-                                            "
-                                        />
-                                    </div>
-                                    <div class="grid gap-1 sm:col-span-2">
-                                        <Label for="ind-annual-note"
-                                            >備註（選填）</Label
-                                        >
-                                        <input
-                                            id="ind-annual-note"
-                                            v-model="individualAnnual.note"
-                                            type="text"
-                                            maxlength="500"
-                                            class="h-9 rounded-md border bg-background px-3 text-sm"
-                                            placeholder="例：家長已付訂金／確認全科年繳"
-                                        />
-                                    </div>
-                                </template>
-                            </div>
-                        </template>
-
-                        <p v-if="individualError" class="text-xs text-destructive">
-                            {{ individualError }}
-                        </p>
-                        <p
-                            v-if="
-                                form.errors[
-                                    `course_selections.${individualRow.id}`
-                                ]
-                            "
-                            class="text-xs text-destructive"
-                        >
-                            {{
-                                form.errors[
-                                    `course_selections.${individualRow.id}`
-                                ]
-                            }}
-                        </p>
-                    </div>
-
-                    <aside
-                        v-if="needsAnnualDialog"
-                        class="rounded-xl border border-primary/25 bg-accent/40 p-4"
+                <div v-else-if="individualRow" class="space-y-3">
+                    <p class="text-sm text-muted-foreground">
+                        請勾選升上「{{
+                            toGradeOption?.name ?? '新年級'
+                        }}」後預計要修的課（之後還可再調）。此處不計算費用。
+                    </p>
+                    <p
+                        v-if="individualRow.transferable_labels?.length"
+                        class="text-xs text-emerald-700"
                     >
-                        <h3 class="text-base font-semibold text-primary">
-                            試算
-                        </h3>
-                        <p class="mt-1 text-xs text-muted-foreground">
-                            只登記意向，不會立刻開帳。之後在「新增收款」再正式套用。
-                        </p>
-                        <dl class="mt-3 space-y-2 text-sm">
-                            <div class="flex justify-between gap-2">
-                                <dt class="text-muted-foreground">已選科目</dt>
-                                <dd>{{ individualCourseIds.length }} 科</dd>
+                        可延續（已預選）：{{
+                            individualRow.transferable_labels.join('、')
+                        }}
+                    </p>
+                    <p
+                        v-if="individualRow.current_labels?.length"
+                        class="text-xs text-muted-foreground"
+                    >
+                        原年級科目：{{
+                            individualRow.current_labels.join('、')
+                        }}
+                    </p>
+                    <div class="flex flex-wrap gap-2">
+                        <button
+                            v-for="s in target_subjects ?? []"
+                            :key="`ind-${s.id}`"
+                            type="button"
+                            class="rounded-md border px-2.5 py-1.5 text-sm"
+                            :class="
+                                individualCourseIds.includes(s.id)
+                                    ? 'border-primary bg-primary/10 text-foreground'
+                                    : 'border-border text-muted-foreground hover:border-primary/40'
+                            "
+                            @click="toggleIndividualCourse(s.id)"
+                        >
+                            {{ subjectLabel(s) }}
+                        </button>
+                    </div>
+                    <p
+                        v-if="!(target_subjects ?? []).length"
+                        class="text-xs text-amber-700"
+                    >
+                        新年級尚無可選課程，請先至收費設定／課程確認適用年級。
+                    </p>
+
+                    <template v-if="needsAnnualDialog">
+                        <div class="grid gap-2 border-t pt-3">
+                            <div class="grid gap-1">
+                                <Label for="ind-annual-plan">年繳方案</Label>
+                                <select
+                                    id="ind-annual-plan"
+                                    v-model="individualAnnual.fee_plan_id"
+                                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                                >
+                                    <option value="">不年繳</option>
+                                    <option
+                                        v-for="pack in annualPackages"
+                                        :key="pack.fee_plan_id"
+                                        :value="String(pack.fee_plan_id)"
+                                    >
+                                        {{ packageOptionLabel(pack)
+                                        }}{{
+                                            packageMatchesCourses(
+                                                pack,
+                                                individualCourseIds,
+                                            )
+                                                ? '｜科目相符'
+                                                : ''
+                                        }}
+                                    </option>
+                                </select>
+                                <p class="text-xs text-muted-foreground">
+                                    只登記是否年繳；訂金／應收金額到「新增收款」再算。
+                                </p>
+                                <p
+                                    v-if="
+                                        individualSelectedPackage &&
+                                        !individualPackageMatch
+                                    "
+                                    class="text-xs text-amber-700"
+                                >
+                                    目前勾選科目與方案科目不完全相同；仍可登記意向，之後收款再調整。
+                                </p>
                             </div>
-                            <template v-if="individualSelectedPackage">
-                                <div class="flex justify-between gap-2">
-                                    <dt class="text-muted-foreground">
-                                        方案總額
-                                    </dt>
-                                    <dd class="tabular-nums">
-                                        ${{
-                                            individualPackageTotal.toLocaleString()
-                                        }}
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-2">
-                                    <dt class="text-muted-foreground">訂金</dt>
-                                    <dd class="tabular-nums">
-                                        ${{
-                                            individualDepositAmount.toLocaleString()
-                                        }}
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-2">
-                                    <dt class="text-muted-foreground">
-                                        餘額
-                                    </dt>
-                                    <dd class="tabular-nums">
-                                        ${{
-                                            individualBalance.toLocaleString()
-                                        }}
-                                    </dd>
-                                </div>
-                            </template>
-                            <template v-else>
-                                <div class="flex justify-between gap-2">
-                                    <dt class="text-muted-foreground">繳別</dt>
-                                    <dd>
-                                        {{
-                                            individualPayCycle === 'monthly'
-                                                ? '月繳'
-                                                : individualPayCycle ===
-                                                    'annual'
-                                                  ? '年繳'
-                                                  : '季繳'
-                                        }}
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-2">
-                                    <dt class="text-muted-foreground">
-                                        帳期月數
-                                    </dt>
-                                    <dd>
-                                        {{
-                                            individualNonAnnualEstimate.months
-                                                .length
-                                        }}
-                                        個月
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-2">
-                                    <dt class="text-muted-foreground">學費</dt>
-                                    <dd class="tabular-nums">
-                                        ${{
-                                            individualNonAnnualEstimate.tuition.toLocaleString()
-                                        }}
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-2">
-                                    <dt class="text-muted-foreground">教材</dt>
-                                    <dd class="tabular-nums">
-                                        ${{
-                                            individualNonAnnualEstimate.material.toLocaleString()
-                                        }}
-                                    </dd>
-                                </div>
-                            </template>
-                            <div
-                                class="flex justify-between gap-2 border-t pt-2 text-base font-semibold"
-                            >
-                                <dt>下次應收</dt>
-                                <dd class="tabular-nums text-primary">
-                                    ${{
-                                        individualNextFeeAmount.toLocaleString()
-                                    }}
-                                </dd>
+                            <div class="grid gap-1">
+                                <Label for="ind-annual-note">備註（選填）</Label>
+                                <input
+                                    id="ind-annual-note"
+                                    v-model="individualAnnual.note"
+                                    type="text"
+                                    maxlength="500"
+                                    class="h-9 rounded-md border bg-background px-3 text-sm"
+                                    placeholder="例：確認全科年繳／暫不修數學"
+                                />
                             </div>
-                        </dl>
-                    </aside>
+                        </div>
+                    </template>
+
+                    <p v-if="individualError" class="text-xs text-destructive">
+                        {{ individualError }}
+                    </p>
+                    <p
+                        v-if="
+                            form.errors[
+                                `course_selections.${individualRow.id}`
+                            ]
+                        "
+                        class="text-xs text-destructive"
+                    >
+                        {{
+                            form.errors[
+                                `course_selections.${individualRow.id}`
+                            ]
+                        }}
+                    </p>
                 </div>
 
                 <DialogFooter class="gap-2 sm:gap-0">
@@ -1694,7 +1101,7 @@ defineOptions({
                 <DialogHeader>
                     <DialogTitle>國二 → 國三：登記年繳</DialogTitle>
                     <DialogDescription>
-                        先記下每位學生是否走年繳方案（只登記意向，不會立刻開帳）。之後在「新增收款」再正式套用。
+                        先記下每位學生是否走年繳方案（只登記意向，不計算金額、不開帳）。之後在「新增收款」再算費用。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -1735,11 +1142,6 @@ defineOptions({
                                         annualSelections[row.id].fee_plan_id
                                     "
                                     class="h-9 rounded-md border bg-background px-3 text-sm"
-                                    @change="
-                                        onAnnualPlanChange(
-                                            annualSelections[row.id],
-                                        )
-                                    "
                                 >
                                     <option value="">不年繳</option>
                                     <option
@@ -1751,52 +1153,6 @@ defineOptions({
                                     </option>
                                 </select>
                             </div>
-                            <template
-                                v-if="
-                                    annualSelections[row.id].fee_plan_id !== ''
-                                "
-                            >
-                                <div class="grid gap-1">
-                                    <Label :for="`annual-deposit-${row.id}`"
-                                        >訂金</Label
-                                    >
-                                    <input
-                                        :id="`annual-deposit-${row.id}`"
-                                        v-model="
-                                            annualSelections[row.id].deposit
-                                        "
-                                        type="number"
-                                        min="0"
-                                        step="1"
-                                        class="h-9 rounded-md border bg-background px-3 text-sm tabular-nums"
-                                        @input="
-                                            onAnnualDepositChange(
-                                                annualSelections[row.id],
-                                            )
-                                        "
-                                    />
-                                </div>
-                                <div class="grid gap-1">
-                                    <Label :for="`annual-next-${row.id}`"
-                                        >下次應收</Label
-                                    >
-                                    <input
-                                        :id="`annual-next-${row.id}`"
-                                        v-model="
-                                            annualSelections[row.id].next_fee
-                                        "
-                                        type="number"
-                                        min="0"
-                                        step="1"
-                                        class="h-9 rounded-md border bg-background px-3 text-sm tabular-nums"
-                                        @input="
-                                            onAnnualNextFeeInput(
-                                                annualSelections[row.id],
-                                            )
-                                        "
-                                    />
-                                </div>
-                            </template>
                             <div class="grid gap-1 sm:col-span-2">
                                 <Label :for="`annual-note-${row.id}`"
                                     >備註（選填）</Label
@@ -1807,7 +1163,7 @@ defineOptions({
                                     type="text"
                                     maxlength="500"
                                     class="h-9 rounded-md border bg-background px-3 text-sm"
-                                    placeholder="例：家長已付訂金／確認全科年繳"
+                                    placeholder="例：確認全科年繳／暫不修數學"
                                 />
                             </div>
                         </div>
