@@ -78,7 +78,7 @@ const labelWithColon = (label: string): string => {
         </p>
 
         <div v-if="isEmpty" class="mb-6 text-sm text-neutral-500">
-            請在左側分別新增勾選項目或收費表格，預覽會即時顯示。
+            請先新增勾選項目或收費表格，再開啟預覽查看。
         </div>
 
         <div

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\StudentFinanceSnapshot;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -9,6 +10,9 @@ class Reconciliation extends Model
 {
     protected $fillable = [
         'student_id',
+        'student_code',
+        'student_name',
+        'grade_name',
         'classroom_id',
         'course_id',
         'pay_cycle',
@@ -29,6 +33,16 @@ class Reconciliation extends Model
         return [
             'paid_date' => 'date',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $model): void {
+            StudentFinanceSnapshot::apply(
+                $model,
+                $model->student_id !== null ? (int) $model->student_id : null
+            );
+        });
     }
 
     public function classroom(): BelongsTo

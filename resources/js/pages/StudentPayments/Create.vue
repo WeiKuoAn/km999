@@ -601,6 +601,7 @@ const applyGrade9Package = (code?: string) => {
     chargeMaterialMaster.value = false;
     chargeConsumableIds.value = [];
     materialHalfState.value = {};
+    selectedMonthKeys.value = [];
     syncSuggestedMonths();
     refillSessionDates();
 };
@@ -632,15 +633,16 @@ type MonthBreakdownRow = {
     materialHalfHint: string | null;
 };
 
-/** 國三方案：當月總額均攤各科 */
-const packageShareForCourse = (index: number, count: number) => {
-    const monthly = activeGrade9Package.value?.monthly_total ?? 20000;
-    const base = Math.floor(monthly / count);
-    const rem = monthly % count;
+/** 國三方案：依該月合計均攤各科（與後端 allocateRoundedAmounts 同邏輯） */
+const packageShareForCourse = (monthTotal: number, index: number, count: number) => {
+    const n = Math.max(1, count);
+    const base = Math.floor(monthTotal / n);
+    const rem = monthTotal % n;
 
     return base + (index < rem ? 1 : 0);
 };
 
+/** 方案總額固定均攤到收費設定期別（與帳期／上課勾選月份無關） */
 const packageMonthBreakdown = computed((): MonthBreakdownRow[] => {
     if (!isGrade9PackageMode.value || !startDate.value) {
         return [];
@@ -650,18 +652,26 @@ const packageMonthBreakdown = computed((): MonthBreakdownRow[] => {
     const year = Number(startDate.value.slice(0, 4));
     const ids = [...selected.value];
     const n = ids.length;
-    const monthly = pack?.monthly_total ?? 20000;
-    const months = billingMonthsFromSpan(
+    const total = pack?.total ?? 120000;
+    const feeMonths = billingMonthsFromSpan(
         year,
         Number(pack?.start_month ?? 7),
         Number(pack?.end_month ?? 12),
         !!pack?.end_next_year,
     );
+    if (feeMonths.length === 0) {
+        return [];
+    }
 
-    return months.map((month) => {
-        const courses: MonthCourseLine[] = ids.map((id, index) => {
+    const periodCount = feeMonths.length;
+    const baseMonthly = Math.floor(total / periodCount);
+    const remMonthly = total % periodCount;
+
+    return feeMonths.map((month, index) => {
+        const monthly = baseMonthly + (index < remMonthly ? 1 : 0);
+        const courses: MonthCourseLine[] = ids.map((id, courseIndex) => {
             const s = props.subjects.find((x) => x.id === id);
-            const share = packageShareForCourse(index, n);
+            const share = packageShareForCourse(monthly, courseIndex, n);
 
             return {
                 id,
@@ -696,21 +706,44 @@ const selectedMonths = computed((): YearMonth[] =>
 /** 暫時開放補登：帳期月份最早可選到此日所在月份 */
 const BACKFILL_FROM = '2026-07-01';
 
+/** 年繳方案可勾月份：起算年整年（1–12）＋方案均攤期（可能跨年），供預收對應整年上課 */
+const packageSelectableMonths = (
+    startDateStr: string,
+    pack: {
+        start_month?: number;
+        end_month?: number;
+        end_next_year?: boolean;
+    },
+): YearMonth[] => {
+    const year = Number(startDateStr.slice(0, 4));
+    const byKey = new Map<string, YearMonth>();
+
+    for (const month of defaultBillingMonths(`${year}-01-01`, 12)) {
+        byKey.set(monthKey(month.y, month.m), month);
+    }
+
+    for (const month of billingMonthsFromSpan(
+        year,
+        Number(pack.start_month ?? 7),
+        Number(pack.end_month ?? 12),
+        !!pack.end_next_year,
+    )) {
+        byKey.set(monthKey(month.y, month.m), month);
+    }
+
+    return [...byKey.values()].sort((a, b) => a.y - b.y || a.m - b.m);
+};
+
 const monthCheckboxOptions = computed(() => {
     if (!startDate.value) {
         return [];
     }
 
-    // 年繳方案：依方案起迄（含隔年結束）列出全部期別，勿截成 12 個月
+    // 年繳方案：顯示整年月份（費用仍只均攤到收費設定的方案期）
     if (isGrade9PackageMode.value && activeGrade9Package.value) {
-        const pack = activeGrade9Package.value;
-        const year = Number(startDate.value.slice(0, 4));
-
-        return billingMonthsFromSpan(
-            year,
-            Number(pack.start_month ?? 7),
-            Number(pack.end_month ?? 12),
-            !!pack.end_next_year,
+        return packageSelectableMonths(
+            startDate.value,
+            activeGrade9Package.value,
         ).map((m) => ({
             key: monthKey(m.y, m.m),
             label: `${m.m}月`,
@@ -1100,14 +1133,21 @@ const syncSuggestedMonths = () => {
     }
 
     if (isGrade9PackageMode.value) {
+        // 年繳方案：不自動勾月；只保留仍在「整年可勾範圍」內的勾選
         const pack = activeGrade9Package.value;
-        const year = Number(startDate.value.slice(0, 4));
-        selectedMonthKeys.value = billingMonthsFromSpan(
-            year,
-            Number(pack?.start_month ?? 7),
-            Number(pack?.end_month ?? 12),
-            !!pack?.end_next_year,
-        ).map((m) => monthKey(m.y, m.m));
+        if (!pack) {
+            selectedMonthKeys.value = [];
+
+            return;
+        }
+        const valid = new Set(
+            packageSelectableMonths(startDate.value, pack).map((m) =>
+                monthKey(m.y, m.m),
+            ),
+        );
+        selectedMonthKeys.value = selectedMonthKeys.value.filter((key) =>
+            valid.has(key),
+        );
 
         return;
     }
@@ -1128,7 +1168,13 @@ const toggleBillingMonth = (key: string) => {
         const ym = parseMonthKey(key);
         const monthStart = ym ? `${ym.y}-${String(ym.m).padStart(2, '0')}-01` : '';
 
-        if (monthStart !== '' && startDate.value && monthStart < startDate.value.slice(0, 7) + '-01') {
+        // 年繳方案：下方月份只是上課／涵蓋月，不可改起算日，否則方案失效、試算會跟勾選月跑
+        if (
+            !isGrade9PackageMode.value &&
+            monthStart !== '' &&
+            startDate.value &&
+            monthStart < startDate.value.slice(0, 7) + '-01'
+        ) {
             pendingMonthKeys = next;
             startDate.value = monthStart;
 
@@ -1163,7 +1209,13 @@ const toggleCourseMonth = (courseId: number, key: string) => {
         const ym = parseMonthKey(key);
         const monthStart = ym ? `${ym.y}-${String(ym.m).padStart(2, '0')}-01` : '';
 
-        if (monthStart !== '' && startDate.value && monthStart < startDate.value.slice(0, 7) + '-01') {
+        // 同 toggleBillingMonth：年繳方案模式下勾月份不改起算日
+        if (
+            !isGrade9PackageMode.value &&
+            monthStart !== '' &&
+            startDate.value &&
+            monthStart < startDate.value.slice(0, 7) + '-01'
+        ) {
             pendingCourseMonths = { ...courseMonthKeys.value, [courseId]: next };
             startDate.value = monthStart;
 
@@ -1337,6 +1389,10 @@ watch(isGrade9PackageMode, (active) => {
         chargeMaterialMaster.value = false;
         chargeConsumableIds.value = [];
         materialHalfState.value = {};
+        // 進入方案模式不自動勾月（編輯帶回的 pendingMonthKeys 除外）
+        if (pendingMonthKeys === null) {
+            selectedMonthKeys.value = [];
+        }
         syncSuggestedMonths();
     }
 });
@@ -1629,10 +1685,7 @@ const billingMonths = computed(() =>
 );
 const monthCount = computed(() =>
     isGrade9PackageMode.value
-        ? Math.max(
-              activePackageMonthCount.value,
-              selectedMonths.value.length,
-          ) || selectedMonths.value.length
+        ? activePackageMonthCount.value || packageMonthBreakdown.value.length
         : billingMonths.value.length,
 );
 const courseBillingMonths = (courseId: number): YearMonth[] => {
@@ -2032,7 +2085,12 @@ const materialHalfSummary = computed(() => {
 
 const tuitionTotal = computed(() => {
     if (isGrade9PackageMode.value) {
-        return activeGrade9Package.value?.total ?? 120000;
+        // 年繳方案應收＝方案總額（均攤顯示用收費設定期別，不依上課勾選月）
+        return activeGrade9Package.value?.total
+            ?? packageMonthBreakdown.value.reduce(
+                (sum, row) => sum + row.tuition,
+                0,
+            );
     }
 
     // 與試算「各月金額」一致：每月先加總各科精確學費，再四捨五入後加總
@@ -2434,7 +2492,11 @@ const submit = () => {
         ? Object.fromEntries(
               selected.value.map((id) => [id, courseMonthKeys.value[id] ?? []]),
           )
-        : {};
+        : isGrade9PackageMode.value
+          ? Object.fromEntries(
+                selected.value.map((id) => [id, [...selectedMonthKeys.value]]),
+            )
+          : {};
     form.embed = isEmbed.value;
 
     // 名單編輯：存回繳費名單，不開帳；成功後通知父視窗關閉並重整名單
@@ -2508,11 +2570,13 @@ const notifyEmbedParentSaved = (fallbackMessage?: string) => {
 
 // embed 模式儘早藏側欄，避免 iframe 先閃出完整 App 殼
 if (typeof document !== 'undefined' && props.embed) {
+    document.documentElement.classList.add('payment-embed');
     document.body.classList.add('payment-embed');
 }
 
 onMounted(() => {
     if (isEmbed.value) {
+        document.documentElement.classList.add('payment-embed');
         document.body.classList.add('payment-embed');
     }
     if (props.embed_saved) {
@@ -2521,6 +2585,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    document.documentElement.classList.remove('payment-embed');
     document.body.classList.remove('payment-embed');
     if (timer) {
         clearTimeout(timer);
@@ -2552,7 +2617,11 @@ defineOptions({
 
     <div
         class="page-shell w-full text-base [&_.text-xs]:text-sm [&_.text-sm]:text-base"
-        :class="isEmbed ? 'px-3 py-3 sm:px-4' : ''"
+        :class="
+            isEmbed
+                ? 'flex h-full min-h-0 flex-col overflow-hidden px-3 py-3 sm:px-4'
+                : ''
+        "
     >
         <div v-if="!isEmbed" class="mb-2">
             <Link
@@ -2570,19 +2639,16 @@ defineOptions({
         </div>
 
         <PageHeader
+            v-if="!isEmbed"
             :title="
-                isEmbed
-                    ? `編輯收款｜${student ? `${student.student_code ?? ''} ${student.name}`.trim() : ''}`
-                    : isEditMode
-                      ? `編輯收款｜${editContext?.period_label}`
-                      : '新增收款／報名計價'
+                isEditMode
+                    ? `編輯收款｜${editContext?.period_label}`
+                    : '新增收款／報名計價'
             "
             :description="
-                isEmbed
-                    ? '調整科目、繳別、月份、教材與優惠後，右側試算會即時更新；確認後儲存。'
-                    : isEditMode
-                      ? '可重新選擇科目、繳別、月份、教材與優惠；儲存後會取代原本這一期的收款紀錄（收款日與收款人保留）。'
-                      : '選擇學生、科目與帳期月份後，右側試算確認金額即可收款。'
+                isEditMode
+                    ? '可重新選擇科目、繳別、月份、教材與優惠；儲存後會取代原本這一期的收款紀錄（收款日與收款人保留）。'
+                    : '選擇學生、科目與帳期月份後，右側試算確認金額即可收款。'
             "
         />
 
@@ -2603,7 +2669,7 @@ defineOptions({
         </div>
 
         <div
-            class="mb-4 rounded-xl border border-sidebar-border/70 bg-card p-4"
+            class="mb-4 shrink-0 rounded-xl border border-sidebar-border/70 bg-card p-4"
         >
             <div class="relative grid gap-2">
                 <Label for="student_q">學生</Label>
@@ -2764,15 +2830,36 @@ defineOptions({
 
         <template v-else>
             <div
+                :class="
+                    isEmbed
+                        ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+                        : ''
+                "
+            >
+            <div
                 v-for="(w, i) in warnings"
                 :key="i"
-                class="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+                class="mb-4 shrink-0 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
             >
                 {{ w }}
             </div>
 
-            <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-                <div class="min-w-0 space-y-4">
+            <div
+                class="grid gap-5"
+                :class="
+                    isEmbed
+                        ? 'min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem] grid-rows-[minmax(0,1fr)] items-stretch overflow-hidden'
+                        : 'items-start xl:grid-cols-[minmax(0,1fr)_22rem]'
+                "
+            >
+                <div
+                    class="min-w-0 space-y-4"
+                    :class="
+                        isEmbed
+                            ? 'h-full min-h-0 overflow-y-auto overscroll-contain pr-1'
+                            : ''
+                    "
+                >
                     <div class="rounded-xl border border-sidebar-border/70 p-4">
                         <h2 class="text-lg font-semibold">科目</h2>
                         <p
@@ -2783,7 +2870,12 @@ defineOptions({
                         </p>
                         <div
                             v-else
-                            class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+                            class="mt-3 grid gap-2"
+                            :class="
+                                isEmbed
+                                    ? 'grid-cols-2'
+                                    : 'sm:grid-cols-2 xl:grid-cols-3'
+                            "
                         >
                             <div
                                 v-for="s in subjects"
@@ -3043,15 +3135,17 @@ defineOptions({
                                 {{
                                     activeGrade9Package?.label ??
                                     '年繳方案'
-                                }}固定 {{ activePackageMonthsLabel }}共
-                                {{ activePackageMonthCount || 6 }} 期，每月合計約
+                                }}：應收總額
                                 {{
                                     (
-                                        activeGrade9Package?.monthly_total ??
-                                        20000
+                                        activeGrade9Package?.total ?? 120000
                                     ).toLocaleString()
                                 }}
-                                均攤至各科。
+                                ，試算均攤至收費期
+                                {{ activePackageMonthsLabel }}（{{
+                                    activePackageMonthCount || 6
+                                }}
+                                期）。下方帳期月份是上課／涵蓋月，可勾整年，不影響年繳應收。
                             </p>
                             <label
                                 v-if="!isGrade9PackageMode && selected.length > 1"
@@ -3127,9 +3221,7 @@ defineOptions({
                                         selectedMonthKeys.includes(opt.key)
                                             ? 'border-primary bg-primary/10 text-foreground'
                                             : 'border-border text-muted-foreground',
-                                        isGrade9PackageMode
-                                            ? 'cursor-not-allowed opacity-80'
-                                            : 'cursor-pointer',
+                                        'cursor-pointer',
                                     ]"
                                 >
                                     <input
@@ -3138,7 +3230,6 @@ defineOptions({
                                         :checked="
                                             selectedMonthKeys.includes(opt.key)
                                         "
-                                        :disabled="isGrade9PackageMode"
                                         @change="toggleBillingMonth(opt.key)"
                                     />
                                     {{ opt.yearLabel }}
@@ -3336,9 +3427,20 @@ defineOptions({
                     </div>
                 </div>
 
-                <aside class="xl:sticky xl:top-20 xl:self-start">
+                <aside
+                    :class="
+                        isEmbed
+                            ? 'flex h-full min-h-0 flex-col overflow-hidden'
+                            : 'xl:sticky xl:top-20 xl:self-start'
+                    "
+                >
                     <div
-                        class="rounded-xl border border-primary/25 bg-accent/40 p-5 shadow-sm xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
+                        class="rounded-xl border border-primary/25 bg-accent/40 p-5 shadow-sm"
+                        :class="
+                            isEmbed
+                                ? 'flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain'
+                                : 'xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto'
+                        "
                     >
                         <h2 class="text-lg font-semibold text-primary">
                             試算
@@ -3347,13 +3449,15 @@ defineOptions({
                             v-if="isGrade9PackageMode && activeGrade9Package"
                             class="mt-2 rounded-md border border-emerald-200 bg-emerald-50/80 px-3 py-2 text-sm text-emerald-950"
                         >
-                            {{ activeGrade9Package.label }}：{{
+                            {{ activeGrade9Package.label }}：應收
+                            {{
                                 activeGrade9Package.total.toLocaleString()
-                            }}（含教材）／{{
-                                activePackageMonthCount || 6
-                            }}
-                            期（{{ activePackageMonthsLabel }}）；各科該月應收＝當月合計
-                            ÷ {{ selected.length }} 科。
+                            }}（含教材），均攤顯示
+                            {{ activePackageMonthCount || 6 }} 期（{{
+                                activePackageMonthsLabel
+                            }}）；上課月份已勾
+                            {{ selectedMonthKeys.length }} 個月（不影響應收）；各科該月＝當月合計 ÷
+                            {{ selected.length }} 科。
                         </p>
                         <dl class="mt-3 space-y-2.5 text-base">
                             <div
@@ -3372,15 +3476,32 @@ defineOptions({
                                 </dd>
                             </div>
                             <div class="flex justify-between gap-2">
-                                <dt class="text-muted-foreground">帳期月數</dt>
+                                <dt class="text-muted-foreground">
+                                    {{
+                                        isGrade9PackageMode
+                                            ? '收費期數'
+                                            : '帳期月數'
+                                    }}
+                                </dt>
                                 <dd>{{ monthCount }} 個月</dd>
+                            </div>
+                            <div
+                                v-if="isGrade9PackageMode"
+                                class="flex justify-between gap-2"
+                            >
+                                <dt class="text-muted-foreground">上課月份</dt>
+                                <dd>{{ selectedMonthKeys.length }} 個月</dd>
                             </div>
                             <div
                                 v-if="monthBreakdown.length"
                                 class="space-y-2 border-t pt-2"
                             >
                                 <dt class="font-medium text-foreground">
-                                    各月金額
+                                    {{
+                                        isGrade9PackageMode
+                                            ? '收費期均攤'
+                                            : '各月金額'
+                                    }}
                                 </dt>
                                 <dd>
                                     <ul class="space-y-2">
@@ -3603,11 +3724,12 @@ defineOptions({
                             :disabled="
                                 form.processing ||
                                 selected.length === 0 ||
-                                sessions.length === 0
+                                (isGrade9PackageMode
+                                    ? selectedMonthKeys.length === 0
+                                    : sessions.length === 0)
                             "
                             @click="submit"
                         >
-                            {{ isEditMode ? '儲存修改' : '確認收款' }}
                             {{
                                 isEditMode
                                     ? '儲存修改'
@@ -3633,6 +3755,7 @@ defineOptions({
                         </p>
                     </div>
                 </aside>
+            </div>
             </div>
         </template>
     </div>

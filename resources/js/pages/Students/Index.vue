@@ -63,11 +63,13 @@ const flash = computed(
     () =>
         page.props.flash as {
             success?: string;
+            error?: string;
             import_errors?: string[];
             open_import?: boolean;
         } | undefined,
 );
 const successMessage = computed(() => flash.value?.success);
+const errorMessage = computed(() => flash.value?.error);
 const importErrors = computed(() => flash.value?.import_errors ?? []);
 
 const importOpen = ref(false);
@@ -135,11 +137,15 @@ defineOptions({
 });
 
 const destroyStudent = (id: number) => {
-    if (!window.confirm('確定要刪除此學生嗎？')) {
+    if (
+        !window.confirm(
+            '確定要刪除此學生嗎？\n已有的收款／訂金紀錄會保留，不影響營收統計。',
+        )
+    ) {
         return;
     }
 
-    router.delete(`/students/${id}`);
+    router.delete(`/students/${id}`, { preserveScroll: true });
 };
 
 const applyFilters = () => {
@@ -178,6 +184,12 @@ const resetFilters = () => {
             class="mb-4 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700"
         >
             {{ successMessage }}
+        </div>
+        <div
+            v-if="errorMessage"
+            class="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"
+        >
+            {{ errorMessage }}
         </div>
 
         <form

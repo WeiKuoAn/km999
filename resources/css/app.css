@@ -775,8 +775,27 @@ body.payment-embed [data-slot='sidebar-wrapper'] {
     width: 100% !important;
     max-width: none !important;
     min-height: 0 !important;
+    height: 100% !important;
 }
 
+html.payment-embed,
 body.payment-embed {
-    overflow: auto !important;
+    height: 100% !important;
+    overflow: hidden !important;
+}
+
+body.payment-embed #app,
+body.payment-embed #app > div {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+/* embed 內 .page-shell 吃滿高度，左右欄才能各自捲動 */
+body.payment-embed .page-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    max-width: none;
 }

@@ -23,8 +23,9 @@ class ReportController extends Controller
         $year = (int) ($validated['year'] ?? Carbon::today()->year);
         $teacherId = isset($validated['teacher_id']) ? (int) $validated['teacher_id'] : null;
 
+        // 不強制 join students：刪學生後 student_id 為 null，仍計入營收（靠快照欄位）。
         $base = Reconciliation::query()
-            ->join('students', 'students.id', '=', 'reconciliations.student_id')
+            ->leftJoin('students', 'students.id', '=', 'reconciliations.student_id')
             ->leftJoin('grade_levels', 'grade_levels.id', '=', 'students.grade_level_id')
             ->where('reconciliations.status', 'paid')
             ->where('reconciliations.billing_year', $year);
@@ -51,11 +52,11 @@ class ReportController extends Controller
 
         $pieByGrade = (clone $base)
             ->selectRaw("
-                COALESCE(grade_levels.name, '未分年級') as label,
+                COALESCE(NULLIF(reconciliations.grade_name, ''), grade_levels.name, '未分年級') as label,
                 COALESCE(MIN(grade_levels.sort_order), 9999) as sort_order,
                 SUM(reconciliations.paid_amount) as value
             ")
-            ->groupBy('grade_levels.name')
+            ->groupBy(DB::raw("COALESCE(NULLIF(reconciliations.grade_name, ''), grade_levels.name, '未分年級')"))
             ->orderBy('sort_order')
             ->orderBy('label')
             ->get()

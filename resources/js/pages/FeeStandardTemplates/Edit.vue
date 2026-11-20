@@ -79,7 +79,7 @@ const submit = () => {
 
 <template>
     <Head title="編輯收費標準模板" />
-    <div class="page-shell mx-auto w-full max-w-6xl">
+    <div class="page-shell mx-auto w-full max-w-4xl">
         <h1 class="text-xl font-semibold tracking-tight">編輯收費標準模板</h1>
         <form class="mt-4 space-y-5" @submit.prevent="submit">
             <FeeStandardTemplateFields

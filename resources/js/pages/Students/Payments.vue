@@ -43,26 +43,12 @@ const props = defineProps<{
 
 const formatMoney = (n: number) => n.toLocaleString('zh-TW');
 
-const statusLabel = (status: string) => {
-    if (status === 'paid') return '已繳';
-    if (status === 'cancelled') return '已取消';
-    return '未繳';
-};
-
-const statusClass = (status: string) => {
-    if (status === 'paid') return 'text-emerald-700';
-    if (status === 'cancelled') return 'text-muted-foreground line-through';
-    return 'text-amber-700';
-};
-
 const totals = computed(() => {
-    let expected = 0;
     let paid = 0;
     for (const grade of props.groups) {
-        expected += grade.expected_total;
         paid += grade.paid_total;
     }
-    return { expected, paid };
+    return { paid };
 });
 
 defineOptions({
@@ -105,12 +91,6 @@ defineOptions({
             class="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground"
         >
             <p>
-                合計應收
-                <span class="ml-1 font-medium tabular-nums text-foreground">
-                    ${{ formatMoney(totals.expected) }}
-                </span>
-            </p>
-            <p>
                 合計已收
                 <span class="ml-1 font-medium tabular-nums text-foreground">
                     ${{ formatMoney(totals.paid) }}
@@ -124,7 +104,10 @@ defineOptions({
             </p>
         </div>
 
-        <div v-if="groups.length === 0" class="rounded-xl border border-sidebar-border/70 px-4 py-12 text-center text-sm text-muted-foreground">
+        <div
+            v-if="groups.length === 0"
+            class="rounded-xl border border-sidebar-border/70 px-4 py-12 text-center text-sm text-muted-foreground"
+        >
             目前沒有繳費紀錄。
         </div>
 
@@ -141,11 +124,6 @@ defineOptions({
                         {{ grade.grade_name }}
                     </h2>
                     <p class="text-sm text-muted-foreground">
-                        應收
-                        <span class="tabular-nums text-foreground"
-                            >${{ formatMoney(grade.expected_total) }}</span
-                        >
-                        <span class="mx-1.5 text-border">｜</span>
                         已收
                         <span class="tabular-nums text-foreground"
                             >${{ formatMoney(grade.paid_total) }}</span
@@ -172,13 +150,6 @@ defineOptions({
                                 {{ course.course_name }}
                             </h3>
                             <p class="text-xs text-muted-foreground">
-                                應收
-                                <span class="tabular-nums text-foreground"
-                                    >${{
-                                        formatMoney(course.expected_total)
-                                    }}</span
-                                >
-                                <span class="mx-1 text-border">｜</span>
                                 已收
                                 <span class="tabular-nums text-foreground"
                                     >${{
@@ -189,24 +160,30 @@ defineOptions({
                         </div>
 
                         <div class="overflow-x-auto">
-                            <table class="w-full min-w-[36rem] text-sm">
+                            <table class="w-full table-fixed text-sm">
+                                <colgroup>
+                                    <col class="w-[18%]" />
+                                    <col class="w-[18%]" />
+                                    <col class="w-[28%]" />
+                                    <col class="w-[36%]" />
+                                </colgroup>
                                 <thead>
                                     <tr
                                         class="border-b text-xs text-muted-foreground"
                                     >
-                                        <th class="py-1.5 pr-3 text-left font-normal">
+                                        <th
+                                            class="py-1.5 pr-4 text-left font-normal"
+                                        >
                                             帳期
                                         </th>
-                                        <th class="py-1.5 pr-3 text-right font-normal">
-                                            應收
-                                        </th>
-                                        <th class="py-1.5 pr-3 text-right font-normal">
+                                        <th
+                                            class="py-1.5 pr-4 text-right font-normal"
+                                        >
                                             已收
                                         </th>
-                                        <th class="py-1.5 pr-3 text-left font-normal">
-                                            狀態
-                                        </th>
-                                        <th class="py-1.5 pr-3 text-left font-normal">
+                                        <th
+                                            class="py-1.5 pr-4 text-left font-normal"
+                                        >
                                             收款日
                                         </th>
                                         <th class="py-1.5 text-left font-normal">
@@ -220,34 +197,29 @@ defineOptions({
                                         :key="period.id"
                                         class="border-b border-border/60 last:border-0"
                                     >
-                                        <td class="py-1.5 pr-3 whitespace-nowrap tabular-nums">
+                                        <td
+                                            class="py-1.5 pr-4 whitespace-nowrap tabular-nums"
+                                        >
                                             {{ period.billing_year }}/{{
                                                 period.billing_month
                                             }}
                                         </td>
-                                        <td class="py-1.5 pr-3 text-right tabular-nums">
-                                            {{
-                                                formatMoney(
-                                                    period.expected_amount,
-                                                )
-                                            }}
-                                        </td>
-                                        <td class="py-1.5 pr-3 text-right tabular-nums">
+                                        <td
+                                            class="py-1.5 pr-4 text-right tabular-nums"
+                                        >
                                             {{
                                                 formatMoney(period.paid_amount)
                                             }}
                                         </td>
                                         <td
-                                            class="py-1.5 pr-3"
-                                            :class="statusClass(period.status)"
+                                            class="py-1.5 pr-4 whitespace-nowrap"
                                         >
-                                            {{ statusLabel(period.status) }}
-                                        </td>
-                                        <td class="py-1.5 pr-3 whitespace-nowrap">
                                             {{ period.paid_date ?? '—' }}
                                         </td>
-                                        <td class="py-1.5">
-                                            {{ period.settled_by_name }}
+                                        <td class="py-1.5 whitespace-nowrap">
+                                            {{
+                                                period.settled_by_name || '—'
+                                            }}
                                         </td>
                                     </tr>
                                 </tbody>

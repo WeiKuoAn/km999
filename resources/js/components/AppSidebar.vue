@@ -11,6 +11,7 @@ import {
     ClipboardList,
     GraduationCap,
     CalendarDays,
+    HandCoins,
     LayoutDashboard,
     Layers,
     Percent,
@@ -86,6 +87,11 @@ const navGroups = computed<NavGroup[]>(() => {
                         href: '/fee-standard-templates',
                         icon: ClipboardList,
                     },
+                    {
+                        title: '年繳訂金紀錄',
+                        href: '/annual-deposit-records',
+                        icon: HandCoins,
+                    },
                 ],
             },
         ];
@@ -111,6 +117,11 @@ const navGroups = computed<NavGroup[]>(() => {
             title: '收費標準單',
             href: '/fee-standard-templates',
             icon: ClipboardList,
+        },
+        {
+            title: '年繳訂金紀錄',
+            href: '/annual-deposit-records',
+            icon: HandCoins,
         },
     ];
 

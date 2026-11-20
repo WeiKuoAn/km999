@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AcademicYearController;
+use App\Http\Controllers\AnnualDepositRecordController;
 use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\ClassroomController;
@@ -96,6 +97,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('fee-standard-templates/exports/{export}/download', [FeeStandardTemplateController::class, 'downloadExport'])->name('fee-standard-templates.exports.download');
         Route::get('fee-standard-templates/{fee_standard_template}/students', [FeeStandardTemplateController::class, 'students'])->name('fee-standard-templates.students');
         Route::get('fee-standard-templates/{fee_standard_template}/pdf', [FeeStandardTemplateController::class, 'pdf'])->name('fee-standard-templates.pdf');
+
+        Route::get('annual-deposit-records/students', [AnnualDepositRecordController::class, 'students'])->name('annual-deposit-records.students');
+        Route::resource('annual-deposit-records', AnnualDepositRecordController::class)->except(['show']);
     });
 
     Route::middleware('role:super_admin')->group(function () {

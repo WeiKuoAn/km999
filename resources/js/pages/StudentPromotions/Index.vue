@@ -291,15 +291,6 @@ const form = useForm({
     }>,
 });
 
-const individualOpen = ref(false);
-const individualRow = ref<PreviewRow | null>(null);
-const individualCourseIds = ref<number[]>([]);
-const individualError = ref('');
-const individualAnnual = reactive<AnnualSelectionRow>({
-    fee_plan_id: '',
-    note: '',
-});
-
 const annualOpen = ref(false);
 const annualRows = ref<PreviewRow[]>([]);
 const annualSelections = reactive<Record<number, AnnualSelectionRow>>({});
@@ -315,22 +306,6 @@ const emptyAnnualSelection = (): AnnualSelectionRow => ({
 const packageOptionLabel = (pack: AnnualPackage) =>
     `${pack.label}（$${pack.total.toLocaleString()}｜${pack.start_month}–${pack.end_month}月）`;
 
-const findPackage = (feePlanId: string): AnnualPackage | null =>
-    annualPackages.value.find((p) => String(p.fee_plan_id) === feePlanId) ??
-    null;
-
-const idsMatch = (a: number[], b: number[]) => {
-    if (a.length !== b.length) {
-        return false;
-    }
-    const left = [...a].sort((x, y) => x - y);
-    const right = [...b].sort((x, y) => x - y);
-    return left.every((id, i) => id === right[i]);
-};
-
-const packageMatchesCourses = (pack: AnnualPackage, courseIds: number[]) =>
-    idsMatch(pack.required_course_ids ?? [], courseIds);
-
 const initAnnualSelections = (rows: PreviewRow[]) => {
     for (const key of Object.keys(annualSelections)) {
         delete annualSelections[Number(key)];
@@ -338,10 +313,6 @@ const initAnnualSelections = (rows: PreviewRow[]) => {
     for (const row of rows) {
         annualSelections[row.id] = emptyAnnualSelection();
     }
-};
-
-const resetIndividualAnnual = () => {
-    Object.assign(individualAnnual, emptyAnnualSelection());
 };
 
 const buildAnnualPayloadFromSelection = (
@@ -369,63 +340,6 @@ const buildAnnualPayload = (rows: PreviewRow[]) =>
             annualSelections[row.id] ?? emptyAnnualSelection(),
         ),
     );
-
-const individualSelectedPackage = computed(() =>
-    findPackage(individualAnnual.fee_plan_id),
-);
-
-const individualPackageMatch = computed(() => {
-    const pack = individualSelectedPackage.value;
-    if (!pack) {
-        return true;
-    }
-    return packageMatchesCourses(pack, individualCourseIds.value);
-});
-
-const matchingAnnualPackages = computed(() =>
-    annualPackages.value.filter((pack) =>
-        packageMatchesCourses(pack, individualCourseIds.value),
-    ),
-);
-
-const openIndividual = (row: PreviewRow) => {
-    if (!fromGrade.value || !toTarget.value) {
-        window.alert('請先選擇目前年級與新的年級（或已畢業）。');
-        return;
-    }
-    individualRow.value = row;
-    individualError.value = '';
-    resetIndividualAnnual();
-    if (isGraduate() || row.action === 'graduate') {
-        individualCourseIds.value = [];
-    } else {
-        // 預選可延續科目；可點掉國二有、國三不修的課，也可加選新年級科目
-        individualCourseIds.value = [...(row.transferable_ids ?? [])];
-    }
-    individualOpen.value = true;
-};
-
-const toggleIndividualCourse = (courseId: number) => {
-    if (individualCourseIds.value.includes(courseId)) {
-        individualCourseIds.value = individualCourseIds.value.filter(
-            (id) => id !== courseId,
-        );
-    } else {
-        individualCourseIds.value = [...individualCourseIds.value, courseId];
-    }
-};
-
-watch(matchingAnnualPackages, (packs) => {
-    if (!individualOpen.value || !needsAnnualDialog.value) {
-        return;
-    }
-    if (individualAnnual.fee_plan_id !== '') {
-        return;
-    }
-    if (packs.length === 1) {
-        individualAnnual.fee_plan_id = String(packs[0].fee_plan_id);
-    }
-});
 
 const postPromotion = (opts: {
     studentIds: number[];
@@ -482,65 +396,6 @@ const confirmAnnualSubmit = () => {
         annualSelections: buildAnnualPayload(rows),
         onSuccess: () => {
             annualOpen.value = false;
-        },
-    });
-};
-
-const submitIndividual = () => {
-    const row = individualRow.value;
-    if (!row || !fromGrade.value || !toTarget.value) {
-        return;
-    }
-
-    const graduate = isGraduate() || row.action === 'graduate';
-    if (!graduate && individualCourseIds.value.length === 0) {
-        individualError.value = `請選擇${toGradeOption.value?.name ?? '新年級'}要修的課程（可保留原有科目並點掉不修的科目）。`;
-        return;
-    }
-
-    const fromName = fromGradeOption.value?.name ?? '';
-    const toName = graduate
-        ? '已畢業'
-        : (toGradeOption.value?.name ?? '');
-    const annualPayload =
-        !graduate && needsAnnualDialog.value
-            ? [buildAnnualPayloadFromSelection(row.id, individualAnnual)]
-            : [];
-
-    const confirmMsg = graduate
-        ? `確定將「${row.name}」標記為「已畢業」？`
-        : needsAnnualDialog.value
-          ? `確定將「${row.name}」由「${fromName}」個別轉至「${toName}」，並登記年繳意向？（金額到收款再算）`
-          : `確定將「${row.name}」由「${fromName}」個別轉至「${toName}」？\n將依你勾選的課程設定${toName}要修科目。`;
-
-    if (!window.confirm(confirmMsg)) {
-        return;
-    }
-
-    postPromotion({
-        studentIds: [row.id],
-        graduate,
-        courseSelections: graduate
-            ? []
-            : [
-                  {
-                      student_id: row.id,
-                      course_ids: [...individualCourseIds.value],
-                  },
-              ],
-        annualSelections: annualPayload,
-        onSuccess: () => {
-            individualOpen.value = false;
-            individualRow.value = null;
-            resetIndividualAnnual();
-        },
-        onError: (errors) => {
-            const key = `course_selections.${row.id}`;
-            individualError.value =
-                errors[key] ??
-                errors[`annual_selections.${row.id}`] ??
-                errors.student_ids ??
-                '轉檔失敗，請再試一次。';
         },
     });
 };
@@ -618,7 +473,7 @@ defineOptions({
     <div class="page-shell">
         <PageHeader
             title="學生轉檔"
-            description="批次轉檔：科目不變可自動帶課；科目有變請勾選後於上方選課。轉檔不計算費用；國二升國三只登記是否年繳。右側「個別轉檔」可為單人調整課程。國三轉已畢業。"
+            description="勾選學生後按「確認轉檔」。科目不變可自動帶課；科目有變請於上方選課。轉檔不計算費用；國二升國三可登記是否年繳。國三轉已畢業。"
         />
 
         <div
@@ -820,7 +675,6 @@ defineOptions({
                         <th class="px-3 py-2 text-left">新學號</th>
                         <th class="px-3 py-2 text-left">課程</th>
                         <th class="px-3 py-2 text-left">備註</th>
-                        <th class="px-3 py-2 text-right">操作</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -891,21 +745,10 @@ defineOptions({
                                 row.course_note
                             }}</span>
                         </td>
-                        <td class="px-3 py-2 text-right">
-                            <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                :disabled="form.processing"
-                                @click="openIndividual(row)"
-                            >
-                                個別轉檔
-                            </Button>
-                        </td>
                     </tr>
                     <tr v-if="preview.length === 0">
                         <td
-                            colspan="7"
+                            colspan="6"
                             class="px-3 py-10 text-center text-muted-foreground"
                         >
                             請選擇目前年級與新的年級（國三請選已畢業）後按「預覽名單」。
@@ -914,179 +757,6 @@ defineOptions({
                 </tbody>
             </table>
         </div>
-
-        <Dialog
-            :open="individualOpen"
-            @update:open="
-                (v) => {
-                    individualOpen = v;
-                    if (!v) {
-                        individualRow = null;
-                        resetIndividualAnnual();
-                    }
-                }
-            "
-        >
-            <DialogContent class="sm:max-w-lg">
-                <DialogHeader>
-                    <DialogTitle>個別轉檔</DialogTitle>
-                    <DialogDescription>
-                        <template v-if="individualRow">
-                            {{ individualRow.name }}
-                            <span class="font-mono">
-                                （{{ individualRow.student_code ?? '—' }} →
-                                {{ individualRow.new_student_code ?? '—' }}）
-                            </span>
-                        </template>
-                    </DialogDescription>
-                </DialogHeader>
-
-                <div
-                    v-if="individualRow && (isGraduate() || individualRow.action === 'graduate')"
-                    class="text-sm text-muted-foreground"
-                >
-                    將標記為已畢業；學號與年級維持不變。
-                </div>
-
-                <div v-else-if="individualRow" class="space-y-3">
-                    <p class="text-sm text-muted-foreground">
-                        請勾選升上「{{
-                            toGradeOption?.name ?? '新年級'
-                        }}」後預計要修的課（之後還可再調）。此處不計算費用。
-                    </p>
-                    <p
-                        v-if="individualRow.transferable_labels?.length"
-                        class="text-xs text-emerald-700"
-                    >
-                        可延續（已預選）：{{
-                            individualRow.transferable_labels.join('、')
-                        }}
-                    </p>
-                    <p
-                        v-if="individualRow.current_labels?.length"
-                        class="text-xs text-muted-foreground"
-                    >
-                        原年級科目：{{
-                            individualRow.current_labels.join('、')
-                        }}
-                    </p>
-                    <div class="flex flex-wrap gap-2">
-                        <button
-                            v-for="s in target_subjects ?? []"
-                            :key="`ind-${s.id}`"
-                            type="button"
-                            class="rounded-md border px-2.5 py-1.5 text-sm"
-                            :class="
-                                individualCourseIds.includes(s.id)
-                                    ? 'border-primary bg-primary/10 text-foreground'
-                                    : 'border-border text-muted-foreground hover:border-primary/40'
-                            "
-                            @click="toggleIndividualCourse(s.id)"
-                        >
-                            {{ subjectLabel(s) }}
-                        </button>
-                    </div>
-                    <p
-                        v-if="!(target_subjects ?? []).length"
-                        class="text-xs text-amber-700"
-                    >
-                        新年級尚無可選課程，請先至收費設定／課程確認適用年級。
-                    </p>
-
-                    <template v-if="needsAnnualDialog">
-                        <div class="grid gap-2 border-t pt-3">
-                            <div class="grid gap-1">
-                                <Label for="ind-annual-plan">年繳方案</Label>
-                                <select
-                                    id="ind-annual-plan"
-                                    v-model="individualAnnual.fee_plan_id"
-                                    class="h-9 rounded-md border bg-background px-3 text-sm"
-                                >
-                                    <option value="">不年繳</option>
-                                    <option
-                                        v-for="pack in annualPackages"
-                                        :key="pack.fee_plan_id"
-                                        :value="String(pack.fee_plan_id)"
-                                    >
-                                        {{ packageOptionLabel(pack)
-                                        }}{{
-                                            packageMatchesCourses(
-                                                pack,
-                                                individualCourseIds,
-                                            )
-                                                ? '｜科目相符'
-                                                : ''
-                                        }}
-                                    </option>
-                                </select>
-                                <p class="text-xs text-muted-foreground">
-                                    只登記是否年繳；訂金／應收金額到「新增收款」再算。
-                                </p>
-                                <p
-                                    v-if="
-                                        individualSelectedPackage &&
-                                        !individualPackageMatch
-                                    "
-                                    class="text-xs text-amber-700"
-                                >
-                                    目前勾選科目與方案科目不完全相同；仍可登記意向，之後收款再調整。
-                                </p>
-                            </div>
-                            <div class="grid gap-1">
-                                <Label for="ind-annual-note">備註（選填）</Label>
-                                <input
-                                    id="ind-annual-note"
-                                    v-model="individualAnnual.note"
-                                    type="text"
-                                    maxlength="500"
-                                    class="h-9 rounded-md border bg-background px-3 text-sm"
-                                    placeholder="例：確認全科年繳／暫不修數學"
-                                />
-                            </div>
-                        </div>
-                    </template>
-
-                    <p v-if="individualError" class="text-xs text-destructive">
-                        {{ individualError }}
-                    </p>
-                    <p
-                        v-if="
-                            form.errors[
-                                `course_selections.${individualRow.id}`
-                            ]
-                        "
-                        class="text-xs text-destructive"
-                    >
-                        {{
-                            form.errors[
-                                `course_selections.${individualRow.id}`
-                            ]
-                        }}
-                    </p>
-                </div>
-
-                <DialogFooter class="gap-2 sm:gap-0">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        @click="individualOpen = false"
-                    >
-                        取消
-                    </Button>
-                    <Button
-                        type="button"
-                        :disabled="form.processing"
-                        @click="submitIndividual"
-                    >
-                        {{
-                            needsAnnualDialog
-                                ? '確認轉檔並登記意向'
-                                : '確認個別轉檔'
-                        }}
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
 
         <Dialog
             :open="annualOpen"

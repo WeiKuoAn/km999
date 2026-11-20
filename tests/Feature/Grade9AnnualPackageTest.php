@@ -201,6 +201,66 @@ test('annual package quote months follow fee plan start and end', function () {
         ]);
 });
 
+test('annual package quote always spreads across fee-setting periods not attendance months', function () {
+    $ctx = g9PkgCtx();
+
+    FeePlan::query()->create([
+        'academic_year_id' => $ctx['year']->id,
+        'grade_level_id' => $ctx['grade']->id,
+        'group_name' => '科研科全科手勾',
+        'pricing_group' => PricingGroup::CORE,
+        'unit' => 'custom_period',
+        'plan_kind' => 'annual_package',
+        'allow_annual' => true,
+        'annual_start_month' => 3,
+        'annual_end_month' => 8,
+        'annual_end_next_year' => false,
+        'package_total' => 136000,
+        'list_price' => 0,
+        'material_fee' => 0,
+        'material_unit' => 'term',
+        'sort_order' => 0,
+        'is_active' => true,
+    ])->courses()->sync([
+        $ctx['chinese']->id,
+        $ctx['english']->id,
+        $ctx['math']->id,
+        $ctx['scienceResearch']->id,
+        $ctx['social']->id,
+    ]);
+
+    $ids = [
+        $ctx['chinese']->id,
+        $ctx['english']->id,
+        $ctx['math']->id,
+        $ctx['scienceResearch']->id,
+        $ctx['social']->id,
+    ];
+
+    $quote = Grade9AnnualPackage::quote(
+        $ctx['student']->load('gradeLevel'),
+        $ids,
+        '2026-03-01',
+        null,
+        ['2026-4', '2026-5', '2026-6'], // 上課勾選不應縮減應收
+    );
+
+    $months = collect($quote['months'])->map(
+        fn (array $m): string => $m['y'].'-'.$m['m']
+    )->all();
+
+    expect((int) $quote['grand_total'])->toBe(136_000)
+        ->and(count($quote['months']))->toBe(6)
+        ->and($months)->toBe([
+            '2026-3',
+            '2026-4',
+            '2026-5',
+            '2026-6',
+            '2026-7',
+            '2026-8',
+        ]);
+});
+
 test('fee plan can store annual package sharing courses with period plan', function () {
     $ctx = g9PkgCtx();
     $admin = User::query()->create([

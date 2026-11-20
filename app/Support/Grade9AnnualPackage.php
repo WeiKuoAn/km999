@@ -272,8 +272,10 @@ final class Grade9AnnualPackage
     }
 
     /**
+     * 年繳方案試算：總額固定均攤到收費設定期別（與上課帳期勾選無關）。
+     *
      * @param  list<int>  $courseIds
-     * @param  array{code:string, label:string, total:int, monthly_total:int, start_month?:int, end_month?:int}|null  $package
+     * @param  array{code:string, label:string, total:int, monthly_total:int, start_month?:int, end_month?:int, end_next_year?:bool}|null  $package
      * @return array<string, mixed>
      */
     public static function quote(
@@ -281,13 +283,17 @@ final class Grade9AnnualPackage
         array $courseIds,
         string $startDate,
         ?array $package = null,
+        ?array $selectedMonthKeys = null,
     ): array {
+        // $selectedMonthKeys 保留參數相容；費用均攤一律依收費設定期別，不受上課勾選影響
+        unset($selectedMonthKeys);
+
         $package ??= self::matchPackage($student, $courseIds, 'annual', $startDate);
         if ($package === null) {
             throw new \InvalidArgumentException('找不到符合的年繳方案。');
         }
 
-        $total = (int) $package['total'];
+        $packageTotal = (int) $package['total'];
         $startMonth = (int) ($package['start_month'] ?? self::START_MONTH);
         $endMonth = (int) ($package['end_month'] ?? self::END_MONTH);
         $endNextYear = (bool) ($package['end_next_year'] ?? false);
@@ -304,8 +310,12 @@ final class Grade9AnnualPackage
             $endNextYear,
         );
 
+        if ($months === []) {
+            throw new \InvalidArgumentException('年繳方案未設定有效收費期別。');
+        }
+
         $monthAmounts = EnrollmentPricing::allocateRoundedAmounts(
-            array_fill(0, count($months), $total / max(1, count($months)))
+            array_fill(0, count($months), $packageTotal / max(1, count($months)))
         );
 
         $n = max(1, count($ids));
@@ -358,17 +368,17 @@ final class Grade9AnnualPackage
         }
 
         return [
-            'tuition_total' => $total,
+            'tuition_total' => $packageTotal,
             'material_total' => 0,
-            'grand_total' => $total,
+            'grand_total' => $packageTotal,
             'months' => $months,
             'month_breakdown' => $monthBreakdown,
             'lines' => array_values($linesByCourse),
             'package' => [
                 'code' => $package['code'],
                 'label' => $package['label'],
-                'total' => $total,
-                'monthly_total' => (int) ($package['monthly_total'] ?? intdiv($total, max(1, count($months)))),
+                'total' => $packageTotal,
+                'monthly_total' => (int) ($package['monthly_total'] ?? intdiv($packageTotal, max(1, count($months)))),
             ],
         ];
     }

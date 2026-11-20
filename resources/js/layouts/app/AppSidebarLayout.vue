@@ -28,12 +28,16 @@ const isPaymentEmbed = computed(() => {
 });
 
 if (typeof document !== 'undefined' && isPaymentEmbed.value) {
+    document.documentElement.classList.add('payment-embed');
     document.body.classList.add('payment-embed');
 }
 </script>
 
 <template>
-    <div v-if="isPaymentEmbed" class="min-h-0 w-full bg-background">
+    <div
+        v-if="isPaymentEmbed"
+        class="flex h-full min-h-0 w-full flex-col overflow-hidden bg-background"
+    >
         <slot />
         <Toaster />
     </div>

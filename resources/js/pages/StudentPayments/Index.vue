@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { Head, Link, router, usePage } from '@inertiajs/vue3';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import { Plus } from 'lucide-vue-next';
 import { computed, ref, watch } from 'vue';
+import InputError from '@/components/InputError.vue';
 import ListPagination from '@/components/layout/ListPagination.vue';
 import MobileRecordCard from '@/components/layout/MobileRecordCard.vue';
 import MobileRecordField from '@/components/layout/MobileRecordField.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
@@ -45,6 +54,8 @@ const props = defineProps<{
     filters: {
         q: string;
         status: string;
+        billing_month: string;
+        paid_month: string;
     };
 }>();
 
@@ -55,12 +66,16 @@ const successMessage = computed(
 
 const q = ref(props.filters.q ?? '');
 const status = ref(props.filters.status ?? 'all');
+const billingMonth = ref(props.filters.billing_month ?? '');
+const paidMonth = ref(props.filters.paid_month ?? '');
 
 watch(
     () => props.filters,
     (filters) => {
         q.value = filters.q ?? '';
         status.value = filters.status ?? 'all';
+        billingMonth.value = filters.billing_month ?? '';
+        paidMonth.value = filters.paid_month ?? '';
     },
 );
 
@@ -72,14 +87,48 @@ const detailHref = (row: Row) =>
 const editHref = (row: Row) =>
     `/student-payments/create?student_id=${row.student_id}&edit_from=${row.start_year}-${row.start_month}&edit_to=${row.end_year}-${row.end_month}`;
 
-const receiptHref = (row: Row) =>
-    `/student-payments/${row.student_id}/period-meta?from=${row.start_year}-${row.start_month}&to=${row.end_year}-${row.end_month}`;
-
 const deleteError = computed(
     () => (page.props.errors as { delete?: string } | undefined)?.delete ?? '',
 );
 
 const deletingId = ref<number | null>(null);
+const receiptOpen = ref(false);
+const receiptRow = ref<Row | null>(null);
+
+const receiptForm = useForm({
+    from: '',
+    to: '',
+    receipt_no: '',
+    paid_date: '',
+});
+
+const payCycleLabel = (cycle: string | null | undefined) =>
+    cycle === 'monthly' ? '月繳' : cycle === 'annual' ? '年繳' : '季繳';
+
+const openReceipt = (row: Row) => {
+    receiptRow.value = row;
+    receiptForm.clearErrors();
+    receiptForm.from = `${row.start_year}-${row.start_month}`;
+    receiptForm.to = `${row.end_year}-${row.end_month}`;
+    receiptForm.receipt_no = row.receipt_no ?? '';
+    receiptForm.paid_date = row.paid_date ?? '';
+    receiptOpen.value = true;
+};
+
+const submitReceipt = () => {
+    const row = receiptRow.value;
+    if (!row) {
+        return;
+    }
+
+    receiptForm.patch(`/student-payments/${row.student_id}/period-meta`, {
+        preserveScroll: true,
+        onSuccess: () => {
+            receiptOpen.value = false;
+            receiptRow.value = null;
+        },
+    });
+};
 
 const confirmDelete = (row: Row) => {
     if (deletingId.value !== null) {
@@ -110,9 +159,19 @@ const applyFilters = () => {
         {
             q: q.value.trim() || undefined,
             status: status.value === 'all' ? undefined : status.value,
+            billing_month: billingMonth.value || undefined,
+            paid_month: paidMonth.value || undefined,
         },
         { preserveState: true, replace: true },
     );
+};
+
+const clearFilters = () => {
+    q.value = '';
+    status.value = 'all';
+    billingMonth.value = '';
+    paidMonth.value = '';
+    router.get('/student-payments', {}, { preserveState: true, replace: true });
 };
 
 defineOptions({
@@ -175,19 +234,31 @@ defineOptions({
         </div>
 
         <form
-            class="mb-4 flex flex-col gap-3 rounded-xl border border-sidebar-border/70 bg-card p-4 sm:flex-row sm:items-end"
+            class="mb-4 grid gap-3 rounded-xl border border-sidebar-border/70 bg-card p-4 sm:grid-cols-2 lg:grid-cols-6 lg:items-end"
             @submit.prevent="applyFilters"
         >
-            <div class="grid flex-1 gap-2">
+            <div class="grid gap-1 sm:col-span-2">
                 <Label for="q">搜尋</Label>
                 <Input id="q" v-model="q" placeholder="學號、姓名或單據編號" />
             </div>
-            <div class="grid gap-2 sm:w-40">
+            <div class="grid gap-1">
+                <Label for="billing_month">帳期含此月</Label>
+                <Input
+                    id="billing_month"
+                    v-model="billingMonth"
+                    type="month"
+                />
+            </div>
+            <div class="grid gap-1">
+                <Label for="paid_month">收款月份</Label>
+                <Input id="paid_month" v-model="paidMonth" type="month" />
+            </div>
+            <div class="grid gap-1">
                 <Label for="status">狀態</Label>
                 <select
                     id="status"
                     v-model="status"
-                    class="h-9 rounded-md border px-3"
+                    class="h-9 rounded-md border bg-background px-3 text-sm"
                 >
                     <option value="all">全部</option>
                     <option value="unpaid">未繳</option>
@@ -195,7 +266,12 @@ defineOptions({
                     <option value="cancelled">已取消</option>
                 </select>
             </div>
-            <Button type="submit">篩選</Button>
+            <div class="flex flex-wrap gap-2">
+                <Button type="submit">篩選</Button>
+                <Button type="button" variant="outline" @click="clearFilters">
+                    清除
+                </Button>
+            </div>
         </form>
 
         <div class="mobile-card-list">
@@ -237,9 +313,10 @@ defineOptions({
                             v-if="row.status !== 'cancelled'"
                             variant="outline"
                             size="sm"
-                            as-child
+                            type="button"
+                            @click="openReceipt(row)"
                         >
-                            <Link :href="receiptHref(row)">收據輸入</Link>
+                            收據輸入
                         </Button>
                         <Button
                             variant="outline"
@@ -319,13 +396,14 @@ defineOptions({
                                 >
                                     編輯
                                 </Link>
-                                <Link
+                                <button
                                     v-if="row.status !== 'cancelled'"
-                                    :href="receiptHref(row)"
+                                    type="button"
                                     class="text-primary underline-offset-4 hover:underline"
+                                    @click="openReceipt(row)"
                                 >
                                     收據輸入
-                                </Link>
+                                </button>
                                 <button
                                     type="button"
                                     class="text-destructive underline-offset-4 hover:underline disabled:opacity-50"
@@ -350,5 +428,89 @@ defineOptions({
         </div>
 
         <ListPagination :links="rows.links" class="mt-4" />
+
+        <Dialog v-model:open="receiptOpen">
+            <DialogContent class="sm:max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>
+                        收據輸入｜{{ receiptRow?.student_name ?? '' }}
+                    </DialogTitle>
+                    <DialogDescription>
+                        已收款金額已鎖定，此處只能改收據號碼與收款日。
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div
+                    v-if="receiptRow"
+                    class="space-y-3 text-sm"
+                >
+                    <p>
+                        <span class="text-muted-foreground">學生</span>
+                        {{ receiptRow.student_code ?? '—' }}
+                        {{ receiptRow.student_name }}
+                        <span
+                            v-if="receiptRow.grade_name"
+                            class="text-muted-foreground"
+                        >
+                            （{{ receiptRow.grade_name }}）
+                        </span>
+                    </p>
+                    <p>
+                        <span class="text-muted-foreground">帳期</span>
+                        {{ receiptRow.period_label }}｜{{
+                            payCycleLabel(receiptRow.pay_cycle)
+                        }}
+                    </p>
+                    <p>
+                        <span class="text-muted-foreground">課程數</span>
+                        {{ receiptRow.course_count }} 門
+                    </p>
+                    <p class="text-base font-semibold tabular-nums">
+                        <span class="text-sm font-normal text-muted-foreground"
+                            >總金額（鎖定）</span
+                        >
+                        {{ formatMoney(receiptRow.expected_total) }}
+                    </p>
+                </div>
+
+                <form class="mt-2 grid gap-4" @submit.prevent="submitReceipt">
+                    <div class="grid gap-1.5">
+                        <Label for="receipt_no">收據號碼</Label>
+                        <Input
+                            id="receipt_no"
+                            v-model="receiptForm.receipt_no"
+                            maxlength="20"
+                            autocomplete="off"
+                        />
+                        <InputError :message="receiptForm.errors.receipt_no" />
+                    </div>
+                    <div class="grid gap-1.5">
+                        <Label for="paid_date">收款日</Label>
+                        <Input
+                            id="paid_date"
+                            v-model="receiptForm.paid_date"
+                            type="date"
+                        />
+                        <InputError :message="receiptForm.errors.paid_date" />
+                    </div>
+                    <InputError :message="receiptForm.errors.from" />
+                    <DialogFooter class="gap-2">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            @click="receiptOpen = false"
+                        >
+                            取消
+                        </Button>
+                        <Button
+                            type="submit"
+                            :disabled="receiptForm.processing"
+                        >
+                            儲存
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
     </div>
 </template>

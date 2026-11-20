@@ -2,10 +2,17 @@
 /* eslint-disable vue/no-mutating-props -- form 是父頁 Inertia useForm */
 import type { InertiaForm } from '@inertiajs/vue3';
 import { computed, ref } from 'vue';
-import { GripVertical, Plus, Table2, Trash2 } from 'lucide-vue-next';
+import { Eye, GripVertical, Plus, Table2, Trash2 } from 'lucide-vue-next';
 import FeeStandardPreview from '@/components/fee-standards/FeeStandardPreview.vue';
 import InputError from '@/components/InputError.vue';
 import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -25,6 +32,7 @@ const props = defineProps<{
     defaultFooter: string;
 }>();
 
+const previewOpen = ref(false);
 const previewItems = computed(() => mergeFeeStandardItems(props.form));
 
 const fieldError = (path: string): string | undefined =>
@@ -159,17 +167,25 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
 </script>
 
 <template>
-    <div
-        class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]"
-    >
-        <div class="space-y-5">
-            <section class="space-y-4 rounded-xl border p-4 sm:p-5">
-                <div class="border-b pb-3">
-                    <h2 class="text-sm font-semibold">基本資料</h2>
-                    <p class="mt-0.5 text-xs text-muted-foreground">
-                        依學年／年級建立收費標準單；勾選項目與表格分開設定。
-                    </p>
-                </div>
+    <div class="space-y-5">
+        <div class="flex flex-wrap items-center justify-end gap-2">
+            <Button
+                type="button"
+                variant="outline"
+                @click="previewOpen = true"
+            >
+                <Eye class="size-4" />
+                顯示預覽
+            </Button>
+        </div>
+
+        <section class="space-y-4 rounded-xl border p-4 sm:p-5">
+            <div class="border-b pb-3">
+                <h2 class="text-sm font-semibold">基本資料</h2>
+                <p class="mt-0.5 text-xs text-muted-foreground">
+                    依學年／年級建立收費標準單；勾選項目與表格分開設定。
+                </p>
+            </div>
 
                 <div class="grid gap-3 sm:grid-cols-2">
                     <div class="grid gap-1.5">
@@ -279,7 +295,7 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                     <div>
                         <h2 class="text-sm font-semibold">收費表格</h2>
                         <p class="mt-0.5 text-xs text-muted-foreground">
-                            印出黃表頭表格（可增刪欄列）。預覽／PDF
+                            印出黃表頭表格（可增刪欄列）。按「顯示預覽」或產出
                             排在勾選項目之上。
                         </p>
                     </div>
@@ -581,26 +597,27 @@ const removeTableColumn = (item: FeeStandardFormItem, colIndex: number) => {
                     </div>
                 </div>
             </section>
-        </div>
 
-        <aside
-            class="space-y-2 xl:sticky xl:top-20 xl:self-start xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto"
-        >
-            <div class="flex items-baseline justify-between gap-2 px-0.5">
-                <h2 class="text-sm font-semibold">預覽</h2>
-                <p class="text-xs text-muted-foreground">
-                    約略對齊 PDF；學生姓名為示意
-                </p>
-            </div>
-            <div class="rounded-xl border bg-muted/40 p-3 sm:p-4">
-                <FeeStandardPreview
-                    :title="form.title"
-                    :deadline-label="form.deadline_label"
-                    :footer-note="form.footer_note"
-                    :default-footer="defaultFooter"
-                    :items="previewItems"
-                />
-            </div>
-        </aside>
+        <Dialog v-model:open="previewOpen">
+            <DialogContent
+                class="max-h-[90vh] overflow-y-auto sm:max-w-3xl"
+            >
+                <DialogHeader>
+                    <DialogTitle>收費標準預覽</DialogTitle>
+                    <DialogDescription>
+                        約略對齊 PDF；學生姓名為示意
+                    </DialogDescription>
+                </DialogHeader>
+                <div class="rounded-xl border bg-muted/40 p-3 sm:p-4">
+                    <FeeStandardPreview
+                        :title="form.title"
+                        :deadline-label="form.deadline_label"
+                        :footer-note="form.footer_note"
+                        :default-footer="defaultFooter"
+                        :items="previewItems"
+                    />
+                </div>
+            </DialogContent>
+        </Dialog>
     </div>
 </template>

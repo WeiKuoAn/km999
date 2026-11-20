@@ -278,9 +278,10 @@ class StudentController extends Controller
     {
         $this->authorizeTeacherCanViewStudent($student);
 
+        // 帳務列已有學號／姓名快照，刪學生只會清空關聯，營收／訂金仍保留。
         $student->delete();
 
-        return to_route('students.index');
+        return to_route('students.index')->with('success', '已刪除學生（相關收款紀錄已保留）。');
     }
 
     public function payments(Student $student): Response

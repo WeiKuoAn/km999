@@ -42,25 +42,64 @@ class StudentPaymentController extends Controller
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:255'],
             'status' => ['nullable', 'in:all,unpaid,paid,cancelled'],
+            'billing_month' => ['nullable', 'string', 'regex:/^\d{4}-\d{2}$/'],
+            'paid_month' => ['nullable', 'string', 'regex:/^\d{4}-\d{2}$/'],
         ]);
 
         $q = trim((string) ($validated['q'] ?? ''));
         $status = (string) ($validated['status'] ?? 'all');
+        $billingMonth = trim((string) ($validated['billing_month'] ?? ''));
+        $paidMonth = trim((string) ($validated['paid_month'] ?? ''));
+
+        $billingYear = null;
+        $billingMonthNum = null;
+        $billingKey = null;
+        if ($billingMonth !== '' && preg_match('/^(\d{4})-(\d{2})$/', $billingMonth, $m)) {
+            $billingYear = (int) $m[1];
+            $billingMonthNum = (int) $m[2];
+            if ($billingMonthNum >= 1 && $billingMonthNum <= 12) {
+                $billingKey = $billingYear * 12 + $billingMonthNum;
+            } else {
+                $billingMonth = '';
+                $billingYear = null;
+                $billingMonthNum = null;
+            }
+        } else {
+            $billingMonth = '';
+        }
+
+        $paidYear = null;
+        $paidMonthNum = null;
+        if ($paidMonth !== '' && preg_match('/^(\d{4})-(\d{2})$/', $paidMonth, $m)) {
+            $paidYear = (int) $m[1];
+            $paidMonthNum = (int) $m[2];
+            if ($paidMonthNum < 1 || $paidMonthNum > 12) {
+                $paidMonth = '';
+                $paidYear = null;
+                $paidMonthNum = null;
+            }
+        } else {
+            $paidMonth = '';
+        }
 
         $batchDateSql = 'COALESCE(DATE(reconciliations.paid_date), DATE(reconciliations.created_at))';
         $payCycleSql = "COALESCE(reconciliations.pay_cycle, 'quarterly')";
-        $batchKeySql = "COALESCE(reconciliations.receipt_no, CONCAT('L:', reconciliations.student_id, ':', {$batchDateSql}, ':', {$payCycleSql}))";
+        $payerKeySql = "COALESCE(CAST(reconciliations.student_id AS CHAR), CONCAT('s:', COALESCE(reconciliations.student_code, ''), ':', COALESCE(reconciliations.student_name, '')))";
+        $batchKeySql = "COALESCE(reconciliations.receipt_no, CONCAT('L:', {$payerKeySql}, ':', {$batchDateSql}, ':', {$payCycleSql}))";
+        $studentCodeSql = 'COALESCE(students.student_code, reconciliations.student_code)';
+        $studentNameSql = "COALESCE(students.name, reconciliations.student_name, '—')";
+        $gradeNameSql = "COALESCE(grade_levels.name, reconciliations.grade_name)";
 
         $query = Reconciliation::query()
-            ->join('students', 'students.id', '=', 'reconciliations.student_id')
+            ->leftJoin('students', 'students.id', '=', 'reconciliations.student_id')
             ->leftJoin('grade_levels', 'grade_levels.id', '=', 'students.grade_level_id')
             ->leftJoin('users as settled_users', 'settled_users.id', '=', 'reconciliations.settled_by_user_id')
             ->selectRaw("
                 MAX(reconciliations.id) as id,
                 reconciliations.student_id,
-                students.student_code,
-                students.name as student_name,
-                grade_levels.name as grade_name,
+                {$studentCodeSql} as student_code,
+                {$studentNameSql} as student_name,
+                {$gradeNameSql} as grade_name,
                 {$payCycleSql} as pay_cycle,
                 {$batchDateSql} as batch_date,
                 MAX(reconciliations.receipt_no) as receipt_no,
@@ -80,9 +119,9 @@ class StudentPaymentController extends Controller
             ")
             ->groupBy([
                 'reconciliations.student_id',
-                'students.student_code',
-                'students.name',
-                'grade_levels.name',
+                DB::raw($studentCodeSql),
+                DB::raw($studentNameSql),
+                DB::raw($gradeNameSql),
                 DB::raw($payCycleSql),
                 DB::raw($batchDateSql),
                 DB::raw($batchKeySql),
@@ -94,8 +133,25 @@ class StudentPaymentController extends Controller
             $query->where(function ($builder) use ($q): void {
                 $builder->where('students.name', 'like', '%'.$q.'%')
                     ->orWhere('students.student_code', 'like', '%'.$q.'%')
+                    ->orWhere('reconciliations.student_name', 'like', '%'.$q.'%')
+                    ->orWhere('reconciliations.student_code', 'like', '%'.$q.'%')
                     ->orWhere('reconciliations.receipt_no', 'like', '%'.$q.'%');
             });
+        }
+
+        if ($paidYear !== null && $paidMonthNum !== null) {
+            $query->whereNotNull('reconciliations.paid_date')
+                ->whereYear('reconciliations.paid_date', $paidYear)
+                ->whereMonth('reconciliations.paid_date', $paidMonthNum);
+        }
+
+        if ($billingKey !== null) {
+            // 帳期區間涵蓋指定月份（例如季繳 7–9 會被「2026-08」找到）
+            $query->havingRaw(
+                'MIN(reconciliations.billing_year * 12 + reconciliations.billing_month) <= ?
+                 AND MAX(reconciliations.billing_year * 12 + reconciliations.billing_month) >= ?',
+                [$billingKey, $billingKey]
+            );
         }
 
         if ($status === 'paid') {
@@ -116,10 +172,24 @@ class StudentPaymentController extends Controller
         $summaryQuery = Reconciliation::query();
         $this->restrictReconciliationsForTeacher($summaryQuery);
         if ($q !== '') {
-            $summaryQuery->whereHas('student', function ($builder) use ($q): void {
-                $builder->where('name', 'like', '%'.$q.'%')
-                    ->orWhere('student_code', 'like', '%'.$q.'%');
+            $summaryQuery->where(function ($builder) use ($q): void {
+                $builder->where('student_name', 'like', '%'.$q.'%')
+                    ->orWhere('student_code', 'like', '%'.$q.'%')
+                    ->orWhere('receipt_no', 'like', '%'.$q.'%')
+                    ->orWhereHas('student', function ($studentQuery) use ($q): void {
+                        $studentQuery->where('name', 'like', '%'.$q.'%')
+                            ->orWhere('student_code', 'like', '%'.$q.'%');
+                    });
             });
+        }
+        if ($paidYear !== null && $paidMonthNum !== null) {
+            $summaryQuery->whereNotNull('paid_date')
+                ->whereYear('paid_date', $paidYear)
+                ->whereMonth('paid_date', $paidMonthNum);
+        }
+        if ($billingYear !== null && $billingMonthNum !== null) {
+            $summaryQuery->where('billing_year', $billingYear)
+                ->where('billing_month', $billingMonthNum);
         }
 
         $unpaidTotal = (int) (clone $summaryQuery)->where('status', 'unpaid')->sum('expected_amount');
@@ -140,7 +210,7 @@ class StudentPaymentController extends Controller
 
                 return [
                     'id' => (int) $row->id,
-                    'student_id' => (int) $row->student_id,
+                    'student_id' => $row->student_id !== null ? (int) $row->student_id : null,
                     'student_code' => $row->student_code,
                     'student_name' => $row->student_name ?? '—',
                     'grade_name' => $row->grade_name,
@@ -171,6 +241,8 @@ class StudentPaymentController extends Controller
             'filters' => [
                 'q' => $q,
                 'status' => $status,
+                'billing_month' => $billingMonth,
+                'paid_month' => $paidMonth,
             ],
         ]);
     }
@@ -1232,16 +1304,8 @@ class StudentPaymentController extends Controller
             return back()->withErrors(['from' => '更新失敗：金額異常變動，已中止。']);
         }
 
-        [$fromYear, $fromMonth] = array_map('intval', explode('-', $edit['from']));
-        [$toYear, $toMonth] = array_map('intval', explode('-', $edit['to']));
-
-        return to_route('student-payments.show', [
-            'student' => $student,
-            'from_year' => $fromYear,
-            'from_month' => $fromMonth,
-            'to_year' => $toYear,
-            'to_month' => $toMonth,
-        ])->with('success', '已更新收據／收款日（金額未變動）。');
+        // 列表漂浮視窗／原頁面皆用 back，方便留在原畫面
+        return back()->with('success', '已更新收據／收款日（金額未變動）。');
     }
 
     /** 刪除整期收款（含本期所收教材紀錄） */
@@ -1600,12 +1664,33 @@ class StudentPaymentController extends Controller
         }
 
         if ($useGrade9Package) {
-            $quote = Grade9AnnualPackage::quote(
-                $student,
-                $validated['course_ids'],
-                (string) $startDate,
-                $grade9Package,
-            );
+            // 上課帳期仍需至少勾一個月；應收金額固定依收費設定期別均攤，與勾選無關
+            $attendanceMonthKeys = [];
+            if ($courseMonths !== null) {
+                foreach ($courseMonths as $keys) {
+                    foreach ($keys as $key) {
+                        $attendanceMonthKeys[] = (string) $key;
+                    }
+                }
+            }
+            if (array_values(array_unique($attendanceMonthKeys)) === []) {
+                return back()->withErrors([
+                    'sessions' => '請至少勾選一個上課帳期月份。',
+                ]);
+            }
+
+            try {
+                $quote = Grade9AnnualPackage::quote(
+                    $student,
+                    $validated['course_ids'],
+                    (string) $startDate,
+                    $grade9Package,
+                );
+            } catch (\InvalidArgumentException $e) {
+                return back()->withErrors([
+                    'sessions' => $e->getMessage(),
+                ]);
+            }
         } else {
             $quote = EnrollmentPricing::quote(
                 $student,

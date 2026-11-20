@@ -625,7 +625,7 @@ defineOptions({
 
         <Dialog :open="editOpen" @update:open="(v) => !v && closeEdit()">
             <DialogContent
-                class="flex h-[min(94vh,920px)] w-[min(96vw,1180px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+                class="flex h-[min(94vh,920px)] w-[min(98vw,1280px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
             >
                 <DialogHeader class="border-b px-4 py-3 text-left">
                     <DialogTitle>
